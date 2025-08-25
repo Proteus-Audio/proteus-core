@@ -3,7 +3,6 @@ name = "proteus_audio"
 version = "0.3.1"
 edition = "2021"
 authors = ["Adam Thomas Howard <adamthomashoward@gmail.com>"]
-license = "PolyForm Small Business License 1.0.0"
 license-file = "LICENSE"
 description = "A command line utility and library for playing .prot audio files."
 readme = "README.md"
