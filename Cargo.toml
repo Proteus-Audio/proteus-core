@@ -1,9 +1,9 @@
 [package]
 name = "proteus_audio"
-version = "0.3.0"
+version = "0.3.1"
 edition = "2021"
 authors = ["Adam Thomas Howard <adamthomashoward@gmail.com>"]
-license = "Apache-2.0"
+license = "PolyForm Small Business License 1.0.0"
 description = "A command line utility and library for playing .prot audio files."
 readme = "README.md"
 homepage = "https://github.com/Proteus-Audio/proteus-cli"
