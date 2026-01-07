@@ -11,7 +11,9 @@ repository = "https://github.com/Proteus-Audio/proteus-cli"
 keywords = ["proteus", "audio", "matroska", "multimedia", "media"]
 categories = ["command-line-utilities", "multimedia", "multimedia::audio"]
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+[[bin]]
+name = "prot"
+path = "src/main.rs"
 
 [dependencies]
 clap = "4.4.7"
