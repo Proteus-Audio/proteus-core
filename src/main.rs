@@ -1,75 +1,56 @@
-use clap::{Arg, ArgMatches};
+use clap::Parser;
 use log::error;
 use proteus_audio::{info, player, prot};
+use rand::Rng;
 use serde_json::Number;
 use symphonia::core::errors::Result;
-use rand::Rng;
+
+#[derive(Parser, Debug)]
+#[command(author, version, about, long_about = None)]
+struct Cli {
+    /// Seek to the given time in seconds
+    #[arg(short, long, value_name = "TIME", conflicts_with_all = ["verify", "decode_only", "verify_only", "probe_only"])]
+    seek: Option<String>,
+
+    /// The playback gain
+    #[arg(short, long, default_value_t = 70.0, value_name = "GAIN")]
+    gain: f32,
+
+    /// Decode, but do not play the audio
+    #[arg(long, conflicts_with_all = ["probe_only", "verify_only", "verify"])]
+    decode_only: bool,
+
+    /// Only probe the input for metadata
+    #[arg(long, conflicts_with_all = ["decode_only", "verify_only"])]
+    probe_only: bool,
+
+    /// Verify the decoded audio is valid, but do not play the audio
+    #[arg(long, conflicts_with_all = ["verify"])]
+    verify_only: bool,
+
+    /// Verify the decoded audio is valid during playback
+    #[arg(short, long)]
+    verify: bool,
+
+    /// Do not display playback progress
+    #[arg(long)]
+    no_progress: bool,
+
+    /// Disable gapless decoding and playback
+    #[arg(long)]
+    no_gapless: bool,
+
+    /// Show debug output
+    #[arg(short, long)]
+    debug: bool,
+
+    /// The input file path, or - to use standard input
+    #[arg(required = true)]
+    input: String,
+}
 
 fn main() {
-    let args = clap::Command::new("Prot Play")
-        .version("1.0")
-        .author("Adam Howard <adam.thomas.howard@gmail.com>")
-        .about("Play Prot audio")
-        .arg(
-            Arg::new("seek")
-                .long("seek")
-                .short('s')
-                .value_name("TIME")
-                .help("Seek to the given time in seconds")
-                .conflicts_with_all(&["verify", "decode-only", "verify-only", "probe-only"]),
-        )
-        .arg(
-            Arg::new("GAIN")
-                .long("gain")
-                .short('g')
-                .value_name("GAIN")
-                .default_value("70")
-                // .min(0)
-                // .max(100)
-                .help("The playback gain"),
-        )
-        .arg(
-            Arg::new("decode-only")
-                .long("decode-only")
-                .help("Decode, but do not play the audio")
-                .conflicts_with_all(&["probe-only", "verify-only", "verify"]),
-        )
-        .arg(
-            Arg::new("probe-only")
-                .long("probe-only")
-                .help("Only probe the input for metadata")
-                .conflicts_with_all(&["decode-only", "verify-only"]),
-        )
-        .arg(
-            Arg::new("verify-only")
-                .long("verify-only")
-                .help("Verify the decoded audio is valid, but do not play the audio")
-                .conflicts_with_all(&["verify"]),
-        )
-        .arg(
-            Arg::new("verify")
-                .long("verify")
-                .short('v')
-                .help("Verify the decoded audio is valid during playback"),
-        )
-        .arg(
-            Arg::new("no-progress")
-                .long("no-progress")
-                .help("Do not display playback progress"),
-        )
-        .arg(
-            Arg::new("no-gapless")
-                .long("no-gapless")
-                .help("Disable gapless decoding and playback"),
-        )
-        .arg(Arg::new("debug").short('d').help("Show debug output"))
-        .arg(
-            Arg::new("INPUT")
-                .help("The input file path, or - to use standard input")
-                .required(true)
-                .index(1),
-        )
-        .get_matches();
+    let args = Cli::parse();
 
     // For any error, return an exit code -1. Otherwise return the exit code provided.
     let code = match run(&args) {
@@ -94,18 +75,18 @@ fn format_time(time: f64) -> String {
     format!("{:02}:{:02}:{:02}", hours, minutes, seconds)
 }
 
-fn run(args: &ArgMatches) -> Result<i32> {
-    let file_path = args.get_one::<String>("INPUT").unwrap().clone();
-    let gain = args.get_one::<String>("GAIN").unwrap().parse::<f32>().unwrap().clone();
+fn run(args: &Cli) -> Result<i32> {
+    let file_path = &args.input;
+    let gain = args.gain;
 
     // If file is not a .mka file, return an error
     if !(file_path.ends_with(".prot") || file_path.ends_with(".mka")) {
         panic!("File is not a .prot file");
     }
 
-    let mut player = player::Player::new(&file_path);
-    
-    let info = info::Info::new(file_path);
+    let mut player = player::Player::new(file_path);
+
+    let info = info::Info::new(file_path.clone());
     println!("Files: {:?}", info.file_paths);
     println!("Duration: {:?}", info.duration_map);
     println!("Channels: {:?}", info.channels);
@@ -143,7 +124,6 @@ fn run(args: &ArgMatches) -> Result<i32> {
     //     //     }
     //     // }
     //     loop_iteration += 1;
-
 
     //     std::thread::sleep(std::time::Duration::from_secs(2));
     // }

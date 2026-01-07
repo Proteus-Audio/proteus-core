@@ -16,7 +16,8 @@ name = "prot"
 path = "src/main.rs"
 
 [dependencies]
-clap = "4.4.7"
+clap = { version = "4.4.7", features = ["cargo", "derive"] }
+colored = "3.0.0"
 dasp_ring_buffer = "0.11.0"
 log = "0.4.20"
 matroska = "0.26.0"
