@@ -1,3 +1,4 @@
+use log::debug;
 use rustfft::{num_complex::Complex, FftPlanner};
 use std::io::BufReader;
 
@@ -33,7 +34,7 @@ pub fn load_impulse_response(file_path: &str) -> Vec<f32> {
     let mut samples: Vec<f32> = Vec::new();
 
     while let Some(sample) = source.next() {
-        println!("{:?}", sample);
+        debug!("Impulse response sample: {:?}", sample);
         samples.push(sample as f32);
     }
 
@@ -111,7 +112,7 @@ pub fn apply_reverb(samples: Vec<f32>, dry_wet: f32) -> Vec<f32> {
     let dry_amount = 1.0 - dry_wet;
     let wet_amount = dry_wet;
 
-    println!("Samples length: {:?}", samples.len());
+    debug!("Samples length: {:?}", samples.len());
     let left_samples = samples.iter().step_by(2).cloned().collect::<Vec<f32>>();
     let right_samples = samples
         .iter()
@@ -129,8 +130,8 @@ pub fn apply_reverb(samples: Vec<f32>, dry_wet: f32) -> Vec<f32> {
     let previous_tail_left = convolver_left.previous_tail;
     let previous_tail_right = convolver_right.previous_tail;
 
-    println!("Previous tail left: {:?}", previous_tail_left.len());
-    println!("Previous tail right: {:?}", previous_tail_right.len());
+    debug!("Previous tail left: {:?}", previous_tail_left.len());
+    debug!("Previous tail right: {:?}", previous_tail_right.len());
 
     // Mix dry and wet signals
     let mut processed = Vec::with_capacity(processed_left.len() * 2);
@@ -146,7 +147,7 @@ pub fn apply_reverb(samples: Vec<f32>, dry_wet: f32) -> Vec<f32> {
         processed.push(mixed_r);
     }
     
-    println!("Processed length: {:?}", processed.len());
+    debug!("Processed length: {:?}", processed.len());
     processed
 }
 

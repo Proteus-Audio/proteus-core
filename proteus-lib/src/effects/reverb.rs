@@ -1,5 +1,6 @@
 use std::time::Instant;
 
+use log::debug;
 use rodio::{
     buffer::SamplesBuffer,
     dynamic_mixer::{self, DynamicMixer},
@@ -55,11 +56,11 @@ impl Reverb {
         // convolver.fft_size = channel.len();
         // let mut convolver = Convolver::new(SPRING_IMPULSE_RESPONSE, FFT_SIZE);
 
-        println!("Convolver fft size: {:?}", convolver.fft_size);
-        println!("Channel length: {:?}", channel.len());
+        debug!("Convolver fft size: {:?}", convolver.fft_size);
+        debug!("Channel length: {:?}", channel.len());
 
         let time_to_create_convolver = Instant::now();
-        println!(
+        debug!(
             "Time taken to create convolver #{}: {:?}",
             index,
             time_to_create_convolver.duration_since(start)
@@ -75,7 +76,7 @@ impl Reverb {
         let processed = convolver.process(channel);
         // self.previous_tails[index] = convolver.previous_tail;
         let end = Instant::now();
-        println!(
+        debug!(
             "Time taken to process channel #{}: {:?}",
             index,
             end.duration_since(start)

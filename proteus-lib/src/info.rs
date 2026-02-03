@@ -1,4 +1,6 @@
-use std::{path::Path, fs::File, collections::HashMap};
+use std::{collections::HashMap, fs::File, path::Path};
+
+use log::debug;
 
 use symphonia::core::{
     audio::{Channels, Layout}, codecs::CodecParameters, formats::{FormatOptions, Track}, io::{
@@ -184,7 +186,7 @@ fn gather_track_info_from_file_paths(file_paths: Vec<String>) -> TrackInfo {
     let mut track_infos: Vec<TrackInfo> = Vec::new();
 
     for file_path in file_paths {
-        println!("File path: {:?}", file_path);
+        debug!("File path: {:?}", file_path);
         let track_info = gather_track_info(&file_path);
         track_infos.push(track_info);
     }
