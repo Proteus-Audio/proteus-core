@@ -62,42 +62,40 @@ impl Convolver {
 
   pub fn process(&mut self, input_buffer: &[f32]) -> Vec<f32> {
     let io_len = input_buffer.len();
+    let segment_size = self.fft_size / 2;
     // segment and convert to freq domain
     let input_segments = segment_buffer(input_buffer, self.fft_size, &self.fft_processor);
 
+    let mut output: Vec<f32> = Vec::with_capacity(input_segments.len() * segment_size);
+    let norm = self.fft_size as f32;
 
-    let mut output_segments: Vec<Vec<Complex<f32>>> = Vec::new();
-    // push front/ pop back
     for segment in input_segments {
       self.previous_frame_q.push_front(segment);
       self.previous_frame_q.pop_back();
-      // multiply
-      output_segments.push(self.convolve_frame());
-    }
 
-    // go back to time domain
-    let mut time_domain: Vec<f32> = Vec::new();
-    let norm = self.fft_size as f32;
-    for mut segment in output_segments {
-      self.ifft_processor.process(&mut segment);
-      for sample in segment {
+      let mut convolved = self.convolve_frame();
+      self.ifft_processor.process(&mut convolved);
+
+      let mut time_domain: Vec<f32> = Vec::with_capacity(self.fft_size);
+      for sample in convolved {
         time_domain.push(sample.re / norm);
       }
-    }
 
-    // overlap add
-    for (i, sample) in self.previous_tail.iter().enumerate() {
-      match time_domain.get_mut(i) {
-        Some(out_sample) => *out_sample += sample,
-        None => break
+      for i in 0..segment_size {
+        if let Some(sample) = time_domain.get_mut(i) {
+          *sample += self.previous_tail[i];
+        }
       }
+
+      self.previous_tail = time_domain[segment_size..self.fft_size].to_vec();
+      output.extend_from_slice(&time_domain[0..segment_size]);
     }
 
-    // everything outside of the buffer length is the tail for the next run
-    self.previous_tail = time_domain[io_len..time_domain.len()].to_vec();
+    if output.len() > io_len {
+      output.truncate(io_len);
+    }
 
-    // return a buffers worth of signal
-    return time_domain[0..io_len].to_vec();
+    output
   }
  
   // in freq domain

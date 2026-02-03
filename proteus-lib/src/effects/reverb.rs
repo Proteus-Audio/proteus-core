@@ -54,6 +54,10 @@ impl Reverb {
     }
 
     pub fn process(&mut self, input_buffer: &[f32]) -> Vec<f32> {
+        if self.dry_wet <= 0.0 {
+            return input_buffer.to_vec();
+        }
+
         let channels = self.split_channels(input_buffer);
         let mut processed = Vec::with_capacity(self.channels);
         for (i, channel) in channels.iter().enumerate() {

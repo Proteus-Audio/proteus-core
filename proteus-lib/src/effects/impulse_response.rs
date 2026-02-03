@@ -121,6 +121,25 @@ where
         channel_samples[index % channels].push(sample as f32);
     }
 
+    let mut max_abs = 0.0_f32;
+    for channel in &channel_samples {
+        for sample in channel {
+            let abs = sample.abs();
+            if abs > max_abs {
+                max_abs = abs;
+            }
+        }
+    }
+
+    if max_abs > 0.0 {
+        let scale = 1.0 / max_abs;
+        for channel in &mut channel_samples {
+            for sample in channel {
+                *sample *= scale;
+            }
+        }
+    }
+
     if channel_samples.iter().any(|channel| channel.is_empty()) {
         warn!("Impulse response includes empty channels; results may be silent.");
     }

@@ -241,7 +241,7 @@ impl PlayerEngine {
                         current_dry_wet = settings.dry_wet;
                     }
 
-                    let samples_buffer = if settings.enabled {
+                    let samples_buffer = if settings.enabled && settings.dry_wet > 0.0 {
                         reverb.process_mixer(mixer)
                     } else {
                         let sample_rate = mixer.sample_rate();
