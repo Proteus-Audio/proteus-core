@@ -72,6 +72,13 @@ fn main() {
                 .long("no-gapless")
                 .help("Disable gapless decoding and playback"),
         )
+        .arg(
+            Arg::new("quiet")
+                .long("quiet")
+                .short('q')
+                .action(clap::ArgAction::SetTrue)
+                .help("Suppress all console output"),
+        )
         .arg(Arg::new("debug").short('d').help("Show debug output"))
         .arg(
             Arg::new("INPUT")
@@ -122,6 +129,7 @@ fn run(args: &ArgMatches) -> Result<i32> {
         .parse::<f32>()
         .unwrap()
         .clone();
+    let quiet = args.get_flag("quiet");
 
     // If file is not a .mka file, return an error
     if !(file_path.ends_with(".prot") || file_path.ends_with(".mka")) {
@@ -134,7 +142,9 @@ fn run(args: &ArgMatches) -> Result<i32> {
 
     let test_data = test_data::TestData::new();
     let mut player = player::Player::new_from_file_paths(&test_data.wavs);
-    debug!("Test info: {:?}", player.info);
+    if !quiet {
+        debug!("Test info: {:?}", player.info);
+    }
 
     // let test_info = info::Info::new_from_file_paths(test_data.wavs);
     // println!("Duration: {}", format_time(info.get_duration(0).unwrap() * 1000.0));
@@ -145,23 +155,30 @@ fn run(args: &ArgMatches) -> Result<i32> {
 
     let mut loop_iteration = 0;
 
-    let reporting_function = |Report {
-                                  time,
-                                  duration,
-                                  playing,
-                                  ..
-                              }| {
-        let state = if playing { "Playing" } else { "Paused " };
-        let current = format_time(time * 1000.0);
-        let total = format_time(duration * 1000.0);
-        print!("\r{}  {} / {}", state, current, total);
-        let _ = io::stdout().flush();
-    };
+    if !quiet {
+        let reporting_function = |Report {
+                                      time,
+                                      duration,
+                                      playing,
+                                      ..
+                                  }| {
+            let state = if playing { "▶" } else { "⏸" };
+            let current = format_time(time * 1000.0);
+            let total = format_time(duration * 1000.0);
+            let percent = if duration > 0.0 {
+                (time / duration * 100.0).min(100.0)
+            } else {
+                0.0
+            };
+            print!("\r{}  {} / {}  ({:>5.1}%)", state, current, total, percent);
+            let _ = io::stdout().flush();
+        };
 
-    player.set_reporting(
-        Arc::new(Mutex::new(reporting_function)),
-        Duration::from_millis(100),
-    );
+        player.set_reporting(
+            Arc::new(Mutex::new(reporting_function)),
+            Duration::from_millis(100),
+        );
+    }
 
     // player.pause();
 
@@ -230,6 +247,8 @@ fn run(args: &ArgMatches) -> Result<i32> {
         // sleep(Duration::from_millis(100));
     }
 
-    println!();
+    if !quiet {
+        println!();
+    }
     Ok(0)
 }
