@@ -227,7 +227,7 @@ fn run(args: &ArgMatches) -> Result<i32> {
                     .margin(1)
                     .constraints([
                         Constraint::Length(5),
-                        Constraint::Length(3),
+                        Constraint::Length(4),
                         Constraint::Min(0),
                     ])
                     .split(f.size());
