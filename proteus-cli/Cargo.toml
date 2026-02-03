@@ -1,6 +1,6 @@
 [package]
 name = "proteus-cli"
-version = "0.3.1"
+version = "0.3.2"
 edition = "2021"
 authors = ["Adam Thomas Howard <adamthomashoward@gmail.com>"]
 license-file = "LICENSE"
@@ -13,9 +13,10 @@ categories = ["command-line-utilities", "multimedia", "multimedia::audio"]
 
 [dependencies]
 clap = "4.4.7"
-crossterm = "0.28.0"
+crossterm = "0.27.0"
 log = "0.4.20"
 rand = "0.8.5"
+ratatui = "0.26.3"
 symphonia = "0.5.3"
 proteus-lib = { path = "../proteus-lib" }
 colored = "3.1.1"

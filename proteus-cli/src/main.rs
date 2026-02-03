@@ -1,21 +1,24 @@
 //! # Prot Play
 //!
 //! A command-line audio player for the Prot audio format.
-use std::{
-    io::{self, Write},
-    sync::{Arc, Mutex},
-    thread::sleep,
-    time::Duration,
-};
+use std::{io, thread::sleep, time::Duration};
 
 use clap::{Arg, ArgMatches};
 use crossterm::{
+    cursor,
     event::{self, Event, KeyCode, KeyEventKind},
-    terminal,
+    execute,
+    terminal::{self, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use log::{debug, error};
-use proteus_lib::{player, reporter::Report, test_data};
-use rand::Rng;
+use proteus_lib::{player, test_data};
+use ratatui::{
+    backend::CrosstermBackend,
+    layout::{Constraint, Direction, Layout},
+    style::{Color, Modifier, Style},
+    widgets::{Block, Borders, Paragraph},
+    Terminal,
+};
 use symphonia::core::errors::Result;
 
 /// The main entry point of the application.
@@ -172,16 +175,26 @@ fn run(args: &ArgMatches) -> Result<i32> {
 
     player.set_volume(gain / 100.0);
 
-    let mut loop_iteration = 0;
+    let _raw_mode = RawModeGuard::enable().ok();
+    let mut terminal = if !quiet {
+        let mut stdout = io::stdout();
+        let _ = execute!(stdout, EnterAlternateScreen, cursor::Hide);
+        let backend = CrosstermBackend::new(stdout);
+        Terminal::new(backend).ok()
+    } else {
+        None
+    };
 
-    if !quiet {
-        let reporting_function = |Report {
-                                      time,
-                                      duration,
-                                      playing,
-                                      ..
-                                  }| {
-            let state = if playing { "▶" } else { "⏸" };
+    const SEEK_STEP_SECONDS: f64 = 5.0;
+
+    // player.pause();
+
+    while !player.is_finished() {
+        if let Some(term) = terminal.as_mut() {
+            let time = player.get_time();
+            let duration = player.get_duration();
+            let playing = player.is_playing();
+            let state = if playing { "▶ Playing" } else { "⏸ Paused" };
             let current = format_time(time * 1000.0);
             let total = format_time(duration * 1000.0);
             let percent = if duration > 0.0 {
@@ -189,26 +202,35 @@ fn run(args: &ArgMatches) -> Result<i32> {
             } else {
                 0.0
             };
-            print!("\r{}  {} / {}  ({:>5.1}%)", state, current, total, percent);
-            let _ = io::stdout().flush();
-        };
+            let status = format!("{}   {} / {}   ({:>5.1}%)", state, current, total, percent);
 
-        player.set_reporting(
-            Arc::new(Mutex::new(reporting_function)),
-            Duration::from_millis(100),
-        );
-    }
+            let _ = term.draw(|f| {
+                let chunks = Layout::default()
+                    .direction(Direction::Vertical)
+                    .margin(1)
+                    .constraints([
+                        Constraint::Length(5),
+                        Constraint::Length(3),
+                        Constraint::Min(0),
+                    ])
+                    .split(f.size());
 
-    let _raw_mode = RawModeGuard::enable().ok();
-    if !quiet {
-        println!("Controls: space=play/pause  s=shuffle  ←/→=seek 5s  q=quit");
-    }
+                let controls = Paragraph::new("space=play/pause  s=shuffle  ←/→=seek 5s  q=quit")
+                    .style(Style::default().fg(Color::Blue))
+                    .block(Block::default().borders(Borders::ALL).title("Controls"));
+                f.render_widget(controls, chunks[0]);
 
-    const SEEK_STEP_SECONDS: f64 = 5.0;
+                let status_widget = Paragraph::new(status)
+                    .style(
+                        Style::default()
+                            .fg(Color::Green)
+                            .add_modifier(Modifier::BOLD),
+                    )
+                    .block(Block::default().borders(Borders::ALL).title("Playback"));
+                f.render_widget(status_widget, chunks[1]);
+            });
+        }
 
-    // player.pause();
-
-    while !player.is_finished() {
         if event::poll(Duration::from_millis(100)).unwrap_or(false) {
             if let Ok(Event::Key(key)) = event::read() {
                 if key.kind != KeyEventKind::Press {
@@ -244,72 +266,14 @@ fn run(args: &ArgMatches) -> Result<i32> {
                 }
             }
         }
-        // player.shuffle();
-        // println!("Shuffling");
-        // match loop_iteration {
-        //     10 => player.shuffle(),
-        //     20 => player.shuffle(),
-        //     30 => player.shuffle(),
-        //     40 => player.shuffle(),
-        //     50 => player.shuffle(),
-        //     _ => {}
-        // }
-        // match loop_iteration {
-        //     10 => {
-        //         println!(
-        //             "Pausing playback at {}",
-        //             format_time(player.get_time() * 1000.0)
-        //         );
-        //         player.pause();
-        //     }
-        //     // 20 => {
-        //     //     println!("Resuming playback at {}", format_time(player.get_time() * 1000.0));
-        //     //     player.play();
-        //     // },
-        //     // 60 => {
-        //     //     println!("Pausing playback at {}", format_time(player.get_time() * 1000.0));
-        //     //     player.pause();
-        //     // },
-        //     20 => {
-        //         println!("Seeking to 10.0 seconds");
-        //         player.seek(10.0);
-        //     }
-        //     30 => {
-        //         println!("Seeking to 2.0 seconds");
-        //         player.seek(2.0);
-        //     }
-        //     50 => {
-        //         println!("Seeking to 6.0 seconds");
-        //         player.seek(6.0);
-        //         // Set volume to random number between 0.0 and 1.0
-        //         let volume = rand::thread_rng().gen_range(0.3..1.0);
-        //         println!("Setting volume to {}", volume);
-        //         player.set_volume(volume);
-        //         println!("Get volume: {}", player.get_volume());
-        //         player.play();
-        //         println!(
-        //             "Starting playback at {}",
-        //             format_time(player.get_time() * 1000.0)
-        //         );
-        //     }
-        //     _ => {}
-        // }
 
-        // loop_iteration += 1;
-
-        // println!(
-        //     "{} / {} ({}) - Timer: {}",
-        //     format_time(player.get_time() * 1000.0),
-        //     format_time(player.get_duration() * 1000.0),
-        //     player.get_time(),
-        //     timer.get_time().as_secs_f64()
-        // );
-        sleep(Duration::from_millis(100));
-        // sleep(Duration::from_millis(100));
+        sleep(Duration::from_millis(50));
     }
 
-    if !quiet {
-        println!();
+    if let Some(mut term) = terminal {
+        let _ = term.show_cursor();
+        let mut stdout = term.backend_mut();
+        let _ = execute!(stdout, LeaveAlternateScreen, cursor::Show);
     }
     Ok(0)
 }
