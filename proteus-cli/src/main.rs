@@ -2,6 +2,7 @@
 //!
 //! A command-line audio player for the Prot audio format.
 use std::{
+    io::{self, Write},
     sync::{Arc, Mutex},
     thread::sleep,
     time::Duration,
@@ -144,12 +145,17 @@ fn run(args: &ArgMatches) -> Result<i32> {
 
     let mut loop_iteration = 0;
 
-    let reporting_function = |Report { time, playing, .. }| {
-        println!(
-            "Time: {} ({})",
-            format_time(time * 1000.0),
-            if playing { "Playing" } else { "Paused" }
-        );
+    let reporting_function = |Report {
+                                  time,
+                                  duration,
+                                  playing,
+                                  ..
+                              }| {
+        let state = if playing { "Playing" } else { "Paused " };
+        let current = format_time(time * 1000.0);
+        let total = format_time(duration * 1000.0);
+        print!("\r{}  {} / {}", state, current, total);
+        let _ = io::stdout().flush();
     };
 
     player.set_reporting(
@@ -224,5 +230,6 @@ fn run(args: &ArgMatches) -> Result<i32> {
         // sleep(Duration::from_millis(100));
     }
 
+    println!();
     Ok(0)
 }

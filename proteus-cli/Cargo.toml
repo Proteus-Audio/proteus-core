@@ -17,3 +17,5 @@ log = "0.4.20"
 rand = "0.8.5"
 symphonia = "0.5.3"
 proteus-lib = { path = "../proteus-lib" }
+colored = "3.1.1"
+indicatif = "0.18.3"
