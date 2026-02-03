@@ -9,7 +9,7 @@ use std::{
 };
 
 use clap::{Arg, ArgMatches};
-use log::error;
+use log::{debug, error};
 use proteus_lib::{player, reporter::Report, test_data};
 use rand::Rng;
 use symphonia::core::errors::Result;
@@ -134,7 +134,7 @@ fn run(args: &ArgMatches) -> Result<i32> {
 
     let test_data = test_data::TestData::new();
     let mut player = player::Player::new_from_file_paths(&test_data.wavs);
-    println!("Test info: {:?}", player.info);
+    debug!("Test info: {:?}", player.info);
 
     // let test_info = info::Info::new_from_file_paths(test_data.wavs);
     // println!("Duration: {}", format_time(info.get_duration(0).unwrap() * 1000.0));
