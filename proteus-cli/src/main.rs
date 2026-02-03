@@ -9,6 +9,10 @@ use std::{
 };
 
 use clap::{Arg, ArgMatches};
+use crossterm::{
+    event::{self, Event, KeyCode, KeyEventKind},
+    terminal,
+};
 use log::{debug, error};
 use proteus_lib::{player, reporter::Report, test_data};
 use rand::Rng;
@@ -116,6 +120,21 @@ fn format_time(time: f64) -> String {
     format!("{:02}:{:02}:{:02}", hours, minutes, seconds)
 }
 
+struct RawModeGuard;
+
+impl RawModeGuard {
+    fn enable() -> io::Result<Self> {
+        terminal::enable_raw_mode()?;
+        Ok(Self)
+    }
+}
+
+impl Drop for RawModeGuard {
+    fn drop(&mut self) {
+        let _ = terminal::disable_raw_mode();
+    }
+}
+
 /// The main logic of the application.
 ///
 /// # Arguments
@@ -180,9 +199,51 @@ fn run(args: &ArgMatches) -> Result<i32> {
         );
     }
 
+    let _raw_mode = RawModeGuard::enable().ok();
+    if !quiet {
+        println!("Controls: space=play/pause  s=shuffle  ←/→=seek 5s  q=quit");
+    }
+
+    const SEEK_STEP_SECONDS: f64 = 5.0;
+
     // player.pause();
 
     while !player.is_finished() {
+        if event::poll(Duration::from_millis(100)).unwrap_or(false) {
+            if let Ok(Event::Key(key)) = event::read() {
+                if key.kind != KeyEventKind::Press {
+                    continue;
+                }
+                match key.code {
+                    KeyCode::Char('q') => {
+                        player.stop();
+                        break;
+                    }
+                    KeyCode::Char(' ') => {
+                        if player.is_playing() {
+                            player.pause();
+                        } else {
+                            player.resume();
+                        }
+                    }
+                    KeyCode::Char('s') | KeyCode::Char('S') => {
+                        player.shuffle();
+                    }
+                    KeyCode::Left => {
+                        let current = player.get_time();
+                        let target = (current - SEEK_STEP_SECONDS).max(0.0);
+                        player.seek(target);
+                    }
+                    KeyCode::Right => {
+                        let current = player.get_time();
+                        let duration = player.get_duration();
+                        let target = (current + SEEK_STEP_SECONDS).min(duration);
+                        player.seek(target);
+                    }
+                    _ => {}
+                }
+            }
+        }
         // player.shuffle();
         // println!("Shuffling");
         // match loop_iteration {
@@ -243,7 +304,7 @@ fn run(args: &ArgMatches) -> Result<i32> {
         //     player.get_time(),
         //     timer.get_time().as_secs_f64()
         // );
-        sleep(Duration::from_secs(1));
+        sleep(Duration::from_millis(100));
         // sleep(Duration::from_millis(100));
     }
 
