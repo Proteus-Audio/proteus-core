@@ -9,7 +9,10 @@ use crate::effects::effects::clone_samples_buffer;
 use crate::prot::{parse_impulse_response_string, ImpulseResponseSpec, Prot};
 use crate::reporter::{Report, Reporter};
 use crate::timer;
-use crate::{info::Info, player_engine::PlayerEngine};
+use crate::{
+    info::Info,
+    player_engine::{PlayerEngine, ReverbSettings},
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PlayerState {
@@ -38,6 +41,7 @@ pub struct Player {
     sink: Arc<Mutex<Sink>>,
     audition_source: Arc<Mutex<Option<SamplesBuffer<f32>>>>,
     reporter: Option<Arc<Mutex<Reporter>>>,
+    reverb_settings: Arc<Mutex<ReverbSettings>>,
 }
 
 impl Player {
@@ -86,6 +90,7 @@ impl Player {
             audition_source: Arc::new(Mutex::new(None)),
             prot,
             reporter: None,
+            reverb_settings: Arc::new(Mutex::new(ReverbSettings::new(0.000001))),
         };
 
         this.initialize_thread(None);
@@ -102,6 +107,20 @@ impl Player {
         if let Some(spec) = parse_impulse_response_string(value) {
             self.set_impulse_response_spec(spec);
         }
+    }
+
+    pub fn set_reverb_enabled(&self, enabled: bool) {
+        let mut settings = self.reverb_settings.lock().unwrap();
+        settings.enabled = enabled;
+    }
+
+    pub fn set_reverb_mix(&self, dry_wet: f32) {
+        let mut settings = self.reverb_settings.lock().unwrap();
+        settings.dry_wet = dry_wet.clamp(0.0, 1.0);
+    }
+
+    pub fn get_reverb_settings(&self) -> ReverbSettings {
+        *self.reverb_settings.lock().unwrap()
     }
 
     fn audition(&self, length: Duration) {
@@ -146,6 +165,7 @@ impl Player {
 
         let duration = self.duration.clone();
         let prot = self.prot.clone();
+        let reverb_settings = self.reverb_settings.clone();
 
         let audio_heard = self.audio_heard.clone();
         let volume = self.volume.clone();
@@ -174,7 +194,8 @@ impl Player {
                 Some(ts) => ts,
                 None => 0.0,
             };
-            let mut engine = PlayerEngine::new(prot, Some(abort.clone()), start_time);
+            let mut engine =
+                PlayerEngine::new(prot, Some(abort.clone()), start_time, reverb_settings);
             let (_stream, stream_handle) = OutputStream::try_default().unwrap();
             // let sink_mutex = Arc::new(Mutex::new(Sink::try_new(&stream_handle).unwrap()));
 

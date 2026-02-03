@@ -138,6 +138,10 @@ impl Reverb {
         mixed
     }
 
+    pub fn set_dry_wet(&mut self, dry_wet: f32) {
+        self.dry_wet = dry_wet.clamp(0.0, 1.0);
+    }
+
     pub fn clear_tail(&mut self) {
         for convolver in &mut self.convolvers {
             convolver.previous_tail.fill(0.0);

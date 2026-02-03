@@ -209,7 +209,17 @@ fn run(args: &ArgMatches) -> Result<i32> {
             } else {
                 0.0
             };
-            let status = format!("{}   {} / {}   ({:>5.1}%)", state, current, total, percent);
+            let reverb_settings = player.get_reverb_settings();
+            let reverb_state = if reverb_settings.enabled { "on" } else { "off" };
+            let status = format!(
+                "{}   {} / {}   ({:>5.1}%)\nReverb: {} ({:.2})",
+                state,
+                current,
+                total,
+                percent,
+                reverb_state,
+                reverb_settings.dry_wet
+            );
 
             let _ = term.draw(|f| {
                 let chunks = Layout::default()
@@ -222,7 +232,9 @@ fn run(args: &ArgMatches) -> Result<i32> {
                     ])
                     .split(f.size());
 
-                let controls = Paragraph::new("space=play/pause  s=shuffle  ←/→=seek 5s  q=quit")
+                let controls = Paragraph::new(
+                    "space=play/pause  s=shuffle  ←/→=seek 5s  r=reverb on/off  -/= mix  q=quit",
+                )
                     .style(Style::default().fg(Color::Blue))
                     .block(Block::default().borders(Borders::ALL).title("Controls"));
                 f.render_widget(controls, chunks[0]);
@@ -268,6 +280,20 @@ fn run(args: &ArgMatches) -> Result<i32> {
                         let duration = player.get_duration();
                         let target = (current + SEEK_STEP_SECONDS).min(duration);
                         player.seek(target);
+                    }
+                    KeyCode::Char('r') | KeyCode::Char('R') => {
+                        let settings = player.get_reverb_settings();
+                        player.set_reverb_enabled(!settings.enabled);
+                    }
+                    KeyCode::Char('-') => {
+                        let settings = player.get_reverb_settings();
+                        let next = (settings.dry_wet - 0.05).max(0.0);
+                        player.set_reverb_mix(next);
+                    }
+                    KeyCode::Char('=') | KeyCode::Char('+') => {
+                        let settings = player.get_reverb_settings();
+                        let next = (settings.dry_wet + 0.05).min(1.0);
+                        player.set_reverb_mix(next);
                     }
                     _ => {}
                 }

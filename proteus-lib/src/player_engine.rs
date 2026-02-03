@@ -32,6 +32,22 @@ pub struct PlayerEngine {
     buffer_map: Arc<Mutex<HashMap<u16, Bounded<Vec<f32>>>>>,
     effects_buffer: Arc<Mutex<Bounded<Vec<f32>>>>,
     prot: Arc<Mutex<Prot>>,
+    reverb_settings: Arc<Mutex<ReverbSettings>>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct ReverbSettings {
+    pub enabled: bool,
+    pub dry_wet: f32,
+}
+
+impl ReverbSettings {
+    pub fn new(dry_wet: f32) -> Self {
+        Self {
+            enabled: true,
+            dry_wet: dry_wet.clamp(0.0, 1.0),
+        }
+    }
 }
 
 impl PlayerEngine {
@@ -39,6 +55,7 @@ impl PlayerEngine {
         prot: Arc<Mutex<Prot>>,
         abort_option: Option<Arc<AtomicBool>>,
         start_time: f64,
+        reverb_settings: Arc<Mutex<ReverbSettings>>,
     ) -> Self {
         let buffer_map = init_buffer_map();
         let finished_tracks: Arc<Mutex<Vec<u16>>> = Arc::new(Mutex::new(Vec::new()));
@@ -60,6 +77,7 @@ impl PlayerEngine {
             effects_buffer,
             abort,
             prot,
+            reverb_settings,
         };
 
         this
@@ -91,6 +109,7 @@ impl PlayerEngine {
         let effects_buffer = self.effects_buffer.clone();
         let prot_locked = self.prot.clone();
         let start_time = self.start_time;
+        let reverb_settings = self.reverb_settings.clone();
 
         thread::spawn(move || {
             let prot = prot_locked.lock().unwrap();
@@ -130,6 +149,7 @@ impl PlayerEngine {
                 impulse_spec,
                 container_path.as_deref(),
             );
+            let mut current_dry_wet = 0.000001_f32;
 
             loop {
                 if abort.load(Ordering::SeqCst) {
@@ -166,7 +186,10 @@ impl PlayerEngine {
                 if all_buffers_full
                     || (effects_buffer.lock().unwrap().len() > 0 && hash_buffer.len() == 0)
                 {
-                    let (controller, mixer) = dynamic_mixer::mixer::<f32>(2, 44_100);
+                    let (controller, mixer) = dynamic_mixer::mixer::<f32>(
+                        audio_info.channels as u16,
+                        audio_info.sample_rate as u32,
+                    );
 
                     // Hash buffer plus effects buffer
                     let mut effects_buffer_unlocked = effects_buffer.lock().unwrap();
@@ -212,7 +235,21 @@ impl PlayerEngine {
 
                     drop(effects_buffer_unlocked);
 
-                    let samples_buffer = reverb.process_mixer(mixer);
+                    let settings = *reverb_settings.lock().unwrap();
+                    if (settings.dry_wet - current_dry_wet).abs() > f32::EPSILON {
+                        reverb.set_dry_wet(settings.dry_wet);
+                        current_dry_wet = settings.dry_wet;
+                    }
+
+                    let samples_buffer = if settings.enabled {
+                        reverb.process_mixer(mixer)
+                    } else {
+                        let sample_rate = mixer.sample_rate();
+                        let mixer_buffered = mixer.buffered();
+                        let vector_samples =
+                            mixer_buffered.clone().into_iter().collect::<Vec<f32>>();
+                        SamplesBuffer::new(mixer_buffered.channels(), sample_rate, vector_samples)
+                    };
 
                     // Samples in the samples_buffer
                     let length_in_seconds = length_of_smallest_buffer as f64
