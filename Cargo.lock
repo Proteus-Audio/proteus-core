@@ -766,10 +766,20 @@ dependencies = [
 ]
 
 [[package]]
-name = "proteus_audio"
+name = "proteus-cli"
 version = "0.3.1"
 dependencies = [
  "clap",
+ "log",
+ "proteus-lib",
+ "rand",
+ "symphonia",
+]
+
+[[package]]
+name = "proteus-lib"
+version = "0.3.1"
+dependencies = [
  "dasp_ring_buffer",
  "log",
  "matroska",

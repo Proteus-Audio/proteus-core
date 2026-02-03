@@ -9,7 +9,7 @@ use std::{
 
 use clap::{Arg, ArgMatches};
 use log::error;
-use proteus_audio::{player, reporter::Report, test_data};
+use proteus_lib::{player, reporter::Report, test_data};
 use rand::Rng;
 use symphonia::core::errors::Result;
 

@@ -1,0 +1,19 @@
+[package]
+name = "proteus-cli"
+version = "0.3.1"
+edition = "2021"
+authors = ["Adam Thomas Howard <adamthomashoward@gmail.com>"]
+license-file = "LICENSE"
+description = "A command line utility for playing .prot audio files."
+readme = "../README.md"
+homepage = "https://github.com/Proteus-Audio/proteus-cli"
+repository = "https://github.com/Proteus-Audio/proteus-cli"
+keywords = ["proteus", "audio", "matroska", "multimedia", "media"]
+categories = ["command-line-utilities", "multimedia", "multimedia::audio"]
+
+[dependencies]
+clap = "4.4.7"
+log = "0.4.20"
+rand = "0.8.5"
+symphonia = "0.5.3"
+proteus-lib = { path = "../proteus-lib" }

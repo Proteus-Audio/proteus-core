@@ -1,25 +1,3 @@
-[package]
-name = "proteus_audio"
-version = "0.3.1"
-edition = "2021"
-authors = ["Adam Thomas Howard <adamthomashoward@gmail.com>"]
-license-file = "LICENSE"
-description = "A command line utility and library for playing .prot audio files."
-readme = "README.md"
-homepage = "https://github.com/Proteus-Audio/proteus-cli"
-repository = "https://github.com/Proteus-Audio/proteus-cli"
-keywords = ["proteus", "audio", "matroska", "multimedia", "media"]
-categories = ["command-line-utilities", "multimedia", "multimedia::audio"]
-
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-
-[dependencies]
-clap = "4.4.7"
-dasp_ring_buffer = "0.11.0"
-log = "0.4.20"
-matroska = "0.26.0"
-rand = "0.8.5"
-rodio = "0.17.3"
-rustfft = "6.1.0"
-serde_json = "1.0.108"
-symphonia = "0.5.3"
+[workspace]
+members = ["proteus-lib", "proteus-cli"]
+resolver = "2"

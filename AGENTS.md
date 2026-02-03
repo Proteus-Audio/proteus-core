@@ -1,15 +1,17 @@
 # Repository Guidelines
 
 ## Project Structure & Module Organization
-- `src/` contains the Rust library and CLI entrypoint.
-- `src/main.rs` defines the CLI and playback workflow.
-- `src/lib.rs` exposes the library surface for `proteus_audio`.
-- `src/effects/` holds audio effect implementations (reverb, convolution, spring impulse response).
-- `Cargo.toml` and `Cargo.lock` define crate metadata and dependencies.
+- Workspace root `Cargo.toml` defines members.
+- `proteus-lib/` is the library crate.
+- `proteus-lib/src/lib.rs` exposes the `proteus_lib` API.
+- `proteus-lib/src/effects/` holds audio effect implementations (reverb, convolution, spring impulse response).
+- `proteus-cli/` is the CLI crate.
+- `proteus-cli/src/main.rs` defines the CLI and playback workflow.
+- `Cargo.lock` captures resolved dependencies for the workspace.
 
 ## Build, Test, and Development Commands
-- `cargo build` builds the library and CLI in debug mode.
-- `cargo run -- <path-to-file.prot>` runs the CLI against a `.prot` or `.mka` file.
+- `cargo build` builds all workspace members in debug mode.
+- `cargo run -p proteus-cli -- <path-to-file.prot>` runs the CLI against a `.prot` or `.mka` file.
 - `cargo check` performs fast type-checking without producing binaries.
 - `cargo test` runs tests (none are currently defined, so this is a no-op).
 
