@@ -104,8 +104,7 @@ impl PlayerEngine {
             // let sink_mutex_copy = sink_mutex.clone();
             let hash_buffer_copy = buffer_map.clone();
 
-            let mut reverb = Reverb::new(2, 0.000004);
-            // let mut reverb = Reverb::new(2, 0.00001);
+            let mut reverb = Reverb::new(2, 0.000001);
 
             loop {
                 if abort.load(Ordering::SeqCst) {
@@ -151,9 +150,6 @@ impl PlayerEngine {
                         combined_buffer.insert(*track_key, buffer.clone());
                     }
 
-                    // combined_buffer.append(&mut effects_buffer.lock().unwrap());
-                    // combined_buffer.insert(*track_key, combined_buffer);
-
                     let length_of_smallest_buffer = hash_buffer
                         .iter()
                         .map(|(_, buffer)| buffer.len())
@@ -191,24 +187,9 @@ impl PlayerEngine {
 
                     drop(effects_buffer_unlocked);
 
-                    // let buffer = mixer.buffered().reverb(Duration::from_millis(100), 0.5).buffered();
-
-                    // let samples_buffer =
-                    //     PlayerEngine::process_effects(mixer, effects_buffer.clone());
                     let samples_buffer = reverb.process_mixer(mixer);
 
-                    // while let Some(sample) = mixer.next() {
-                    //     // mixer.sample_rate();
-                    //     // mixer.channels();
-                    //     // Process each sample as needed
-                    //     // println!("Sample: {:?}", sample);
-                    // }
-
-                    // println!("Mixer size: {:?}", mixer.total_duration());
-                    // println!("Smallest buffer size: {:?}", length_of_smallest_buffer);
-
                     // Samples in the samples_buffer
-
                     let length_in_seconds = length_of_smallest_buffer as f64
                         / audio_info.sample_rate as f64
                         / audio_info.channels as f64;
@@ -266,9 +247,4 @@ impl PlayerEngine {
 
         true
     }
-
-    // pub fn get_length(&self) -> usize {
-    //     let prot = self.prot.lock().unwrap();
-    //     prot.get_length()
-    // }
 }

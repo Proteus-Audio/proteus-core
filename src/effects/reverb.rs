@@ -22,7 +22,12 @@ pub struct Reverb {
 
 impl Reverb {
     pub fn new(channels: usize, dry_wet: f32) -> Self {
-        Self { previous_tails: vec![vec![0.0; channels]], channels, dry_wet, convolvers: vec![Convolver::new(SPRING_IMPULSE_RESPONSE, FFT_SIZE); channels] }
+        Self {
+            previous_tails: vec![vec![0.0; channels]],
+            channels,
+            dry_wet,
+            convolvers: vec![Convolver::new(SPRING_IMPULSE_RESPONSE, FFT_SIZE); channels],
+        }
     }
 
     pub fn process(&mut self, input_buffer: &[f32]) -> Vec<f32> {
@@ -34,7 +39,6 @@ impl Reverb {
         }
         let mixed = self.mix_channels(&channels, &processed);
         mixed
-        // input_buffer.to_vec()
     }
 
     pub fn process_mixer(&mut self, mixer: DynamicMixer<f32>) -> SamplesBuffer<f32> {
@@ -53,10 +57,13 @@ impl Reverb {
 
         println!("Convolver fft size: {:?}", convolver.fft_size);
         println!("Channel length: {:?}", channel.len());
-        
 
         let time_to_create_convolver = Instant::now();
-        println!("Time taken to create convolver #{}: {:?}", index, time_to_create_convolver.duration_since(start));
+        println!(
+            "Time taken to create convolver #{}: {:?}",
+            index,
+            time_to_create_convolver.duration_since(start)
+        );
         // println!("Channel length: {:?}", channel.len());
         // println!("Previous tail length: {:?}", self.previous_tails.len());
         // convolver.previous_tail = if self.previous_tails.len() > index {
@@ -68,14 +75,25 @@ impl Reverb {
         let processed = convolver.process(channel);
         // self.previous_tails[index] = convolver.previous_tail;
         let end = Instant::now();
-        println!("Time taken to process channel #{}: {:?}", index, end.duration_since(start));
+        println!(
+            "Time taken to process channel #{}: {:?}",
+            index,
+            end.duration_since(start)
+        );
         processed
     }
 
     fn split_channels(&self, input_buffer: &[f32]) -> Vec<Vec<f32>> {
         let mut unzipped = Vec::with_capacity(self.channels);
         for i in 0..self.channels {
-            unzipped.push(input_buffer.iter().skip(i).step_by(self.channels).cloned().collect::<Vec<f32>>());
+            unzipped.push(
+                input_buffer
+                    .iter()
+                    .skip(i)
+                    .step_by(self.channels)
+                    .cloned()
+                    .collect::<Vec<f32>>(),
+            );
         }
         unzipped
     }
@@ -96,7 +114,6 @@ impl Reverb {
 
         mixed
     }
-
 
     pub fn clear_tail(&mut self) {
         for tail in &mut self.previous_tails {
@@ -119,7 +136,7 @@ impl Reverb {
 //         .step_by(2)
 //         .cloned()
 //         .collect::<Vec<f32>>();
-    
+
 //     let mut convolver_left = Convolver::new(SPRING_IMPULSE_RESPONSE, left_samples.len());
 //     let mut convolver_right = Convolver::new(SPRING_IMPULSE_RESPONSE, right_samples.len());
 
@@ -135,17 +152,17 @@ impl Reverb {
 //     // Mix dry and wet signals
 //     let mut processed = Vec::with_capacity(processed_left.len() * 2);
 //     for ((dry_l, dry_r), (wet_l, wet_r)) in left_samples.iter().zip(right_samples.iter())
-//         .zip(processed_left.iter().zip(processed_right.iter())) 
+//         .zip(processed_left.iter().zip(processed_right.iter()))
 //     {
 //         // Mix left channel
 //         let mixed_l = (dry_l * dry_amount) + (wet_l * wet_amount);
 //         // Mix right channel
 //         let mixed_r = (dry_r * dry_amount) + (wet_r * wet_amount);
-        
+
 //         processed.push(mixed_l);
 //         processed.push(mixed_r);
 //     }
-    
+
 //     println!("Processed length: {:?}", processed.len());
 //     processed
 // }

@@ -143,6 +143,7 @@ impl Player {
         let channels = 1.0 * self.info.channels as f64;
 
         audio_heard.store(false, Ordering::Relaxed);
+
         // clear audition source
         let mut audition_source = audition_source_mutex.lock().unwrap();
         *audition_source = None;
@@ -240,7 +241,7 @@ impl Player {
                 }
                 drop(sink);
 
-                return true;
+                true
             };
 
             // ===================== //
@@ -466,11 +467,8 @@ impl Player {
             PlayerState::Paused => {
                 self.audition(Duration::from_millis(100));
             }
-            _ => {
-
-            }
+            _ => {}
         }
-
     }
 
     pub fn refresh_tracks(&mut self) {
