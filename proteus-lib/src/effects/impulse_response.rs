@@ -1,0 +1,132 @@
+use std::fmt;
+use std::fs::File;
+use std::io::{BufReader, Cursor, Read, Seek};
+use std::path::Path;
+
+use log::warn;
+use matroska::Matroska;
+use rodio::{Decoder, Source};
+
+#[derive(Debug, Clone)]
+pub struct ImpulseResponse {
+    pub sample_rate: u32,
+    pub channels: Vec<Vec<f32>>,
+}
+
+impl ImpulseResponse {
+    pub fn channel_count(&self) -> usize {
+        self.channels.len()
+    }
+
+    pub fn channel_for_output(&self, index: usize) -> &[f32] {
+        if self.channels.is_empty() {
+            return &[];
+        }
+
+        if self.channels.len() == 1 {
+            return &self.channels[0];
+        }
+
+        let channel_index = index % self.channels.len();
+        &self.channels[channel_index]
+    }
+}
+
+#[derive(Debug)]
+pub enum ImpulseResponseError {
+    Io(std::io::Error),
+    Matroska(matroska::Error),
+    Decode(rodio::decoder::DecoderError),
+    AttachmentNotFound(String),
+    InvalidChannels,
+}
+
+impl fmt::Display for ImpulseResponseError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Io(err) => write!(f, "failed to read impulse response: {}", err),
+            Self::Matroska(err) => write!(f, "failed to read prot container: {}", err),
+            Self::Decode(err) => write!(f, "failed to decode impulse response: {}", err),
+            Self::AttachmentNotFound(name) => {
+                write!(f, "impulse response attachment not found: {}", name)
+            }
+            Self::InvalidChannels => write!(f, "impulse response has invalid channel count"),
+        }
+    }
+}
+
+impl std::error::Error for ImpulseResponseError {}
+
+impl From<std::io::Error> for ImpulseResponseError {
+    fn from(err: std::io::Error) -> Self {
+        Self::Io(err)
+    }
+}
+
+impl From<rodio::decoder::DecoderError> for ImpulseResponseError {
+    fn from(err: rodio::decoder::DecoderError) -> Self {
+        Self::Decode(err)
+    }
+}
+
+impl From<matroska::Error> for ImpulseResponseError {
+    fn from(err: matroska::Error) -> Self {
+        Self::Matroska(err)
+    }
+}
+
+pub fn load_impulse_response_from_file(
+    path: impl AsRef<Path>,
+) -> Result<ImpulseResponse, ImpulseResponseError> {
+    let file = File::open(path)?;
+    decode_impulse_response(BufReader::new(file))
+}
+
+pub fn load_impulse_response_from_bytes(
+    bytes: &[u8],
+) -> Result<ImpulseResponse, ImpulseResponseError> {
+    decode_impulse_response(BufReader::new(Cursor::new(bytes.to_vec())))
+}
+
+pub fn load_impulse_response_from_prot_attachment(
+    prot_path: impl AsRef<Path>,
+    attachment_name: &str,
+) -> Result<ImpulseResponse, ImpulseResponseError> {
+    let file = File::open(prot_path)?;
+    let mka: Matroska = Matroska::open(file)?;
+
+    let attachment = mka
+        .attachments
+        .iter()
+        .find(|attachment| attachment.name == attachment_name)
+        .ok_or_else(|| ImpulseResponseError::AttachmentNotFound(attachment_name.to_string()))?;
+
+    load_impulse_response_from_bytes(&attachment.data)
+}
+
+fn decode_impulse_response<R>(reader: R) -> Result<ImpulseResponse, ImpulseResponseError>
+where
+    R: Read + Seek + Send + Sync + 'static,
+{
+    let source = Decoder::new(reader)?;
+    let channels = source.channels() as usize;
+    if channels == 0 {
+        return Err(ImpulseResponseError::InvalidChannels);
+    }
+
+    let sample_rate = source.sample_rate();
+    let mut channel_samples = vec![Vec::new(); channels];
+
+    for (index, sample) in source.enumerate() {
+        channel_samples[index % channels].push(sample as f32);
+    }
+
+    if channel_samples.iter().any(|channel| channel.is_empty()) {
+        warn!("Impulse response includes empty channels; results may be silent.");
+    }
+
+    Ok(ImpulseResponse {
+        sample_rate,
+        channels: channel_samples,
+    })
+}

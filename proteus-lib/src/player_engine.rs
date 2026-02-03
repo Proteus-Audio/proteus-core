@@ -4,12 +4,23 @@ use rodio::{
     dynamic_mixer::{self},
     Source,
 };
+use log::warn;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
 use std::{collections::HashMap, sync::mpsc::Receiver, thread};
+use std::path::{Path, PathBuf};
 
-use crate::{buffer::*, effects::reverb::Reverb, prot::Prot};
+use crate::{
+    buffer::*,
+    effects::{
+        impulse_response::{
+            load_impulse_response_from_file, load_impulse_response_from_prot_attachment,
+        },
+        reverb::Reverb,
+    },
+    prot::{ImpulseResponseSpec, Prot},
+};
 // use crate::effects::*;
 use crate::track::*;
 
@@ -104,7 +115,21 @@ impl PlayerEngine {
             // let sink_mutex_copy = sink_mutex.clone();
             let hash_buffer_copy = buffer_map.clone();
 
-            let mut reverb = Reverb::new(2, 0.000001);
+            let (impulse_spec, container_path, output_channels) = {
+                let prot = prot_locked.lock().unwrap();
+                (
+                    prot.get_impulse_response_spec(),
+                    prot.get_container_path(),
+                    prot.info.channels as usize,
+                )
+            };
+
+            let mut reverb = build_reverb_with_impulse_response(
+                output_channels,
+                0.000001,
+                impulse_spec,
+                container_path.as_deref(),
+            );
 
             loop {
                 if abort.load(Ordering::SeqCst) {
@@ -247,4 +272,84 @@ impl PlayerEngine {
 
         true
     }
+}
+
+fn build_reverb_with_impulse_response(
+    channels: usize,
+    dry_wet: f32,
+    impulse_spec: Option<ImpulseResponseSpec>,
+    container_path: Option<&str>,
+) -> Reverb {
+    let impulse_spec = match impulse_spec {
+        Some(spec) => spec,
+        None => return Reverb::new(channels, dry_wet),
+    };
+
+    let result = match impulse_spec {
+        ImpulseResponseSpec::Attachment(name) => container_path
+            .ok_or_else(|| "missing container path for attachment".to_string())
+            .and_then(|path| {
+                load_impulse_response_from_prot_attachment(path, &name)
+                    .map_err(|err| err.to_string())
+            }),
+        ImpulseResponseSpec::FilePath(path) => {
+            let resolved_path = resolve_impulse_response_path(container_path, &path);
+            if resolved_path.exists() {
+                load_impulse_response_from_file(&resolved_path).map_err(|err| err.to_string())
+            } else {
+                match container_path {
+                    Some(container_path) => {
+                        let fallback_name = Path::new(&path)
+                            .file_name()
+                            .and_then(|name| name.to_str())
+                            .map(|name| name.to_string());
+                        if let Some(fallback_name) = fallback_name {
+                            load_impulse_response_from_prot_attachment(
+                                container_path,
+                                &fallback_name,
+                            )
+                            .map_err(|err| err.to_string())
+                        } else {
+                            Err(format!(
+                                "impulse response path not found: {}",
+                                resolved_path.display()
+                            ))
+                        }
+                    }
+                    None => Err(format!(
+                        "impulse response path not found: {}",
+                        resolved_path.display()
+                    )),
+                }
+            }
+        }
+    };
+
+    match result {
+        Ok(impulse_response) => {
+            Reverb::new_with_impulse_response(channels, dry_wet, &impulse_response)
+        }
+        Err(err) => {
+            warn!(
+                "Failed to load impulse response ({}); falling back to default reverb.",
+                err
+            );
+            Reverb::new(channels, dry_wet)
+        }
+    }
+}
+
+fn resolve_impulse_response_path(container_path: Option<&str>, path: &str) -> PathBuf {
+    let path = Path::new(path);
+    if path.is_absolute() {
+        return path.to_path_buf();
+    }
+
+    if let Some(container_path) = container_path {
+        if let Some(parent) = Path::new(container_path).parent() {
+            return parent.join(path);
+        }
+    }
+
+    path.to_path_buf()
 }

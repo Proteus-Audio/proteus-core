@@ -8,6 +8,7 @@ use rodio::{
 };
 
 use crate::effects::convolution::Convolver;
+use crate::effects::impulse_response::ImpulseResponse;
 use crate::effects::spring_impulse_response::SPRING_IMPULSE_RESPONSE;
 
 const FFT_SIZE: usize = 24576;
@@ -15,7 +16,6 @@ const FFT_SIZE: usize = 24576;
 // const FFT_SIZE: usize = 1024;
 
 pub struct Reverb {
-    previous_tails: Vec<Vec<f32>>,
     channels: usize,
     dry_wet: f32,
     convolvers: Vec<Convolver>,
@@ -23,11 +23,33 @@ pub struct Reverb {
 
 impl Reverb {
     pub fn new(channels: usize, dry_wet: f32) -> Self {
+        let mut convolvers = Vec::with_capacity(channels);
+        for _ in 0..channels {
+            convolvers.push(Convolver::new(SPRING_IMPULSE_RESPONSE, FFT_SIZE));
+        }
+
         Self {
-            previous_tails: vec![vec![0.0; channels]],
             channels,
             dry_wet,
-            convolvers: vec![Convolver::new(SPRING_IMPULSE_RESPONSE, FFT_SIZE); channels],
+            convolvers,
+        }
+    }
+
+    pub fn new_with_impulse_response(
+        channels: usize,
+        dry_wet: f32,
+        impulse_response: &ImpulseResponse,
+    ) -> Self {
+        let mut convolvers = Vec::with_capacity(channels);
+        for channel_index in 0..channels {
+            let ir_channel = impulse_response.channel_for_output(channel_index);
+            convolvers.push(Convolver::new(ir_channel, FFT_SIZE));
+        }
+
+        Self {
+            channels,
+            dry_wet,
+            convolvers,
         }
     }
 
@@ -117,8 +139,8 @@ impl Reverb {
     }
 
     pub fn clear_tail(&mut self) {
-        for tail in &mut self.previous_tails {
-            tail.fill(0.0);
+        for convolver in &mut self.convolvers {
+            convolver.previous_tail.fill(0.0);
         }
     }
 }

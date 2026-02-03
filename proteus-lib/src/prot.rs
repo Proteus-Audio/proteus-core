@@ -13,6 +13,13 @@ pub struct Prot {
     track_ids: Option<Vec<u32>>,
     track_paths: Option<Vec<String>>,
     duration: f64,
+    impulse_response_spec: Option<ImpulseResponseSpec>,
+}
+
+#[derive(Debug, Clone)]
+pub enum ImpulseResponseSpec {
+    Attachment(String),
+    FilePath(String),
 }
 
 impl Prot {
@@ -27,6 +34,7 @@ impl Prot {
             track_ids: None,
             track_paths: None,
             duration: 0.0,
+            impulse_response_spec: None,
         };
 
         this.refresh_tracks();
@@ -56,6 +64,7 @@ impl Prot {
             track_ids: None,
             track_paths: None,
             duration: 0.0,
+            impulse_response_spec: None,
         };
 
         this.refresh_tracks();
@@ -70,6 +79,7 @@ impl Prot {
 
     pub fn refresh_tracks(&mut self) {
         let mut longest_duration = 0.0;
+        self.impulse_response_spec = None;
 
         if let Some(file_paths) = &self.file_paths {
             // Choose random file path from each file_paths array
@@ -116,6 +126,8 @@ impl Prot {
                 // read json data from attachment.data to object
                 let json_data: serde_json::Value =
                     serde_json::from_slice(&attachment.data).unwrap();
+
+                self.impulse_response_spec = parse_impulse_response_spec(&json_data);
 
                 let encoder_version = json_data["encoder_version"].as_f64();
 
@@ -209,6 +221,18 @@ impl Prot {
         // first_audio_settings
     }
 
+    pub fn get_impulse_response_spec(&self) -> Option<ImpulseResponseSpec> {
+        self.impulse_response_spec.clone()
+    }
+
+    pub fn get_container_path(&self) -> Option<String> {
+        self.file_path.clone()
+    }
+
+    pub fn set_impulse_response_spec(&mut self, spec: ImpulseResponseSpec) {
+        self.impulse_response_spec = Some(spec);
+    }
+
     pub fn get_keys(&self) -> Vec<u32> {
         // This should just be a range from 0 to the length of the track_paths or track_ids array
         if let Some(track_paths) = &self.track_paths {
@@ -281,4 +305,65 @@ impl Prot {
             None => Vec::new(),
         }
     }
+}
+
+fn parse_impulse_response_spec(json_data: &serde_json::Value) -> Option<ImpulseResponseSpec> {
+    let play_settings = json_data.get("play_settings").unwrap_or(json_data);
+
+    let mut candidates = Vec::new();
+    candidates.push(play_settings.get("impulse_response"));
+    candidates.push(play_settings.get("impulse_response_attachment"));
+    candidates.push(play_settings.get("impulse_response_path"));
+    candidates.push(
+        play_settings
+            .get("reverb")
+            .and_then(|reverb| reverb.get("impulse_response")),
+    );
+    candidates.push(
+        play_settings
+            .get("reverb")
+            .and_then(|reverb| reverb.get("impulse_response_attachment")),
+    );
+    candidates.push(
+        play_settings
+            .get("reverb")
+            .and_then(|reverb| reverb.get("impulse_response_path")),
+    );
+
+    for candidate in candidates.into_iter().flatten() {
+        if let Some(spec) = parse_impulse_response_value(candidate) {
+            return Some(spec);
+        }
+    }
+
+    None
+}
+
+fn parse_impulse_response_value(value: &serde_json::Value) -> Option<ImpulseResponseSpec> {
+    if let Some(text) = value.as_str() {
+        return parse_impulse_response_string(text);
+    }
+
+    let obj = value.as_object()?;
+    if let Some(attachment) = obj.get("attachment").and_then(|val| val.as_str()) {
+        return Some(ImpulseResponseSpec::Attachment(attachment.to_string()));
+    }
+
+    if let Some(path) = obj.get("path").and_then(|val| val.as_str()) {
+        return Some(ImpulseResponseSpec::FilePath(path.to_string()));
+    }
+
+    None
+}
+
+pub fn parse_impulse_response_string(value: &str) -> Option<ImpulseResponseSpec> {
+    if let Some(attachment) = value.strip_prefix("attachment:") {
+        return Some(ImpulseResponseSpec::Attachment(attachment.trim().to_string()));
+    }
+
+    if let Some(path) = value.strip_prefix("file:") {
+        return Some(ImpulseResponseSpec::FilePath(path.trim().to_string()));
+    }
+
+    Some(ImpulseResponseSpec::FilePath(value.trim().to_string()))
 }

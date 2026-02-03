@@ -10,8 +10,8 @@ use crossterm::{
     execute,
     terminal::{self, EnterAlternateScreen, LeaveAlternateScreen},
 };
-use log::{debug, error};
-use proteus_lib::{player, test_data};
+use log::error;
+use proteus_lib::player;
 use ratatui::{
     backend::CrosstermBackend,
     layout::{Constraint, Direction, Layout},
@@ -44,6 +44,14 @@ fn main() {
                 // .min(0)
                 // .max(100)
                 .help("The playback gain"),
+        )
+        .arg(
+            Arg::new("impulse-response")
+                .long("ir")
+                .value_name("IMPULSE")
+                .help(
+                    "Impulse response path or attachment (e.g., file:ir.wav or attachment:ir.wav)",
+                ),
         )
         .arg(
             Arg::new("decode-only")
@@ -162,10 +170,9 @@ fn run(args: &ArgMatches) -> Result<i32> {
 
     // let info = info::Info::new(file_path);
 
-    let test_data = test_data::TestData::new();
-    let mut player = player::Player::new_from_file_paths(&test_data.wavs);
-    if !quiet {
-        debug!("Test info: {:?}", player.info);
+    let mut player = player::Player::new(&file_path);
+    if let Some(impulse_response) = args.get_one::<String>("impulse-response") {
+        player.set_impulse_response_from_string(impulse_response);
     }
 
     // let test_info = info::Info::new_from_file_paths(test_data.wavs);

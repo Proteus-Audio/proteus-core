@@ -77,10 +77,11 @@ impl Convolver {
 
     // go back to time domain
     let mut time_domain: Vec<f32> = Vec::new();
+    let norm = self.fft_size as f32;
     for mut segment in output_segments {
       self.ifft_processor.process(&mut segment);
       for sample in segment {
-        time_domain.push(sample.re);
+        time_domain.push(sample.re / norm);
       }
     }
 
@@ -136,7 +137,7 @@ pub fn mult_frames(f1: &[Complex<f32>], f2: &[Complex<f32>]) -> Vec<Complex<f32>
   for (sample1, sample2) in f1.iter().zip(f2) {
     out.push(Complex {
      re: (sample1.re * sample2.re) - (sample1.im * sample2.im),
-     im: (sample1.im * sample2.re) - (sample1.re * sample2.im)
+     im: (sample1.im * sample2.re) + (sample1.re * sample2.im)
     });
   }
   out

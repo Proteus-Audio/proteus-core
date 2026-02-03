@@ -6,7 +6,7 @@ use std::thread;
 use std::time::Duration;
 
 use crate::effects::effects::clone_samples_buffer;
-use crate::prot::Prot;
+use crate::prot::{parse_impulse_response_string, ImpulseResponseSpec, Prot};
 use crate::reporter::{Report, Reporter};
 use crate::timer;
 use crate::{info::Info, player_engine::PlayerEngine};
@@ -91,6 +91,17 @@ impl Player {
         this.initialize_thread(None);
 
         this
+    }
+
+    pub fn set_impulse_response_spec(&mut self, spec: ImpulseResponseSpec) {
+        let mut prot = self.prot.lock().unwrap();
+        prot.set_impulse_response_spec(spec);
+    }
+
+    pub fn set_impulse_response_from_string(&mut self, value: &str) {
+        if let Some(spec) = parse_impulse_response_string(value) {
+            self.set_impulse_response_spec(spec);
+        }
     }
 
     fn audition(&self, length: Duration) {
