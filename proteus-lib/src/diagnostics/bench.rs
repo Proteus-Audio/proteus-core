@@ -18,6 +18,7 @@ pub struct DspBenchResult {
     pub max_ms: f64,
     pub audio_time_ms: f64,
     pub rt_factor: f64,
+    pub ir_segments: usize,
 }
 
 pub fn bench_convolver(config: DspBenchConfig) -> DspBenchResult {
@@ -54,6 +55,7 @@ pub fn bench_convolver(config: DspBenchConfig) -> DspBenchResult {
     } else {
         0.0
     };
+    let ir_segments = (ir_len + (config.fft_size / 2) - 1) / (config.fft_size / 2);
 
     DspBenchResult {
         avg_ms,
@@ -61,5 +63,18 @@ pub fn bench_convolver(config: DspBenchConfig) -> DspBenchResult {
         max_ms,
         audio_time_ms,
         rt_factor,
+        ir_segments,
     }
+}
+
+pub fn bench_convolver_sweep(
+    base: DspBenchConfig,
+    fft_sizes: &[usize],
+) -> Vec<(usize, DspBenchResult)> {
+    let mut results = Vec::new();
+    for &fft_size in fft_sizes {
+        let config = DspBenchConfig { fft_size, ..base };
+        results.push((fft_size, bench_convolver(config)));
+    }
+    results
 }
