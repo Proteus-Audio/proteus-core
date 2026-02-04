@@ -14,6 +14,7 @@ pub struct Prot {
     track_paths: Option<Vec<String>>,
     duration: f64,
     impulse_response_spec: Option<ImpulseResponseSpec>,
+    impulse_response_tail_db: Option<f32>,
 }
 
 #[derive(Debug, Clone)]
@@ -35,6 +36,7 @@ impl Prot {
             track_paths: None,
             duration: 0.0,
             impulse_response_spec: None,
+            impulse_response_tail_db: None,
         };
 
         this.refresh_tracks();
@@ -65,6 +67,7 @@ impl Prot {
             track_paths: None,
             duration: 0.0,
             impulse_response_spec: None,
+            impulse_response_tail_db: None,
         };
 
         this.refresh_tracks();
@@ -80,6 +83,7 @@ impl Prot {
     pub fn refresh_tracks(&mut self) {
         let mut longest_duration = 0.0;
         self.impulse_response_spec = None;
+        self.impulse_response_tail_db = None;
 
         if let Some(file_paths) = &self.file_paths {
             // Choose random file path from each file_paths array
@@ -128,6 +132,7 @@ impl Prot {
                     serde_json::from_slice(&attachment.data).unwrap();
 
                 self.impulse_response_spec = parse_impulse_response_spec(&json_data);
+                self.impulse_response_tail_db = parse_impulse_response_tail_db(&json_data);
 
                 let encoder_version = json_data["encoder_version"].as_f64();
 
@@ -225,12 +230,20 @@ impl Prot {
         self.impulse_response_spec.clone()
     }
 
+    pub fn get_impulse_response_tail_db(&self) -> Option<f32> {
+        self.impulse_response_tail_db
+    }
+
     pub fn get_container_path(&self) -> Option<String> {
         self.file_path.clone()
     }
 
     pub fn set_impulse_response_spec(&mut self, spec: ImpulseResponseSpec) {
         self.impulse_response_spec = Some(spec);
+    }
+
+    pub fn set_impulse_response_tail_db(&mut self, tail_db: f32) {
+        self.impulse_response_tail_db = Some(tail_db);
     }
 
     pub fn get_keys(&self) -> Vec<u32> {
@@ -333,6 +346,37 @@ fn parse_impulse_response_spec(json_data: &serde_json::Value) -> Option<ImpulseR
     for candidate in candidates.into_iter().flatten() {
         if let Some(spec) = parse_impulse_response_value(candidate) {
             return Some(spec);
+        }
+    }
+
+    None
+}
+
+fn parse_impulse_response_tail_db(json_data: &serde_json::Value) -> Option<f32> {
+    let play_settings = json_data.get("play_settings").unwrap_or(json_data);
+
+    let mut candidates = Vec::new();
+    candidates.push(play_settings.get("impulse_response_tail_db"));
+    candidates.push(play_settings.get("impulse_response_tail"));
+    candidates.push(
+        play_settings
+            .get("reverb")
+            .and_then(|reverb| reverb.get("impulse_response_tail_db")),
+    );
+    candidates.push(
+        play_settings
+            .get("reverb")
+            .and_then(|reverb| reverb.get("impulse_response_tail")),
+    );
+
+    for candidate in candidates.into_iter().flatten() {
+        if let Some(value) = candidate.as_f64() {
+            return Some(value as f32);
+        }
+        if let Some(text) = candidate.as_str() {
+            if let Ok(value) = text.parse::<f32>() {
+                return Some(value);
+            }
         }
     }
 

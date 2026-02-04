@@ -15,7 +15,8 @@ use crate::{
     audio::buffer::*,
     container::prot::{ImpulseResponseSpec, Prot},
     dsp::impulse_response::{
-        load_impulse_response_from_file, load_impulse_response_from_prot_attachment,
+        load_impulse_response_from_file_with_tail,
+        load_impulse_response_from_prot_attachment_with_tail,
     },
     dsp::reverb::Reverb,
 };
@@ -148,12 +149,13 @@ impl PlayerEngine {
             // let sink_mutex_copy = sink_mutex.clone();
             let hash_buffer_copy = buffer_map.clone();
 
-            let (impulse_spec, container_path, output_channels) = {
+            let (impulse_spec, container_path, output_channels, tail_db) = {
                 let prot = prot_locked.lock().unwrap();
                 (
                     prot.get_impulse_response_spec(),
                     prot.get_container_path(),
                     prot.info.channels as usize,
+                    prot.get_impulse_response_tail_db().unwrap_or(-60.0),
                 )
             };
 
@@ -162,6 +164,7 @@ impl PlayerEngine {
                 0.000001,
                 impulse_spec,
                 container_path.as_deref(),
+                tail_db,
             );
             let (reverb_sender, reverb_receiver) =
                 spawn_reverb_worker(reverb, reverb_settings.clone(), reverb_metrics.clone());
@@ -338,6 +341,7 @@ fn build_reverb_with_impulse_response(
     dry_wet: f32,
     impulse_spec: Option<ImpulseResponseSpec>,
     container_path: Option<&str>,
+    tail_db: f32,
 ) -> Reverb {
     let impulse_spec = match impulse_spec {
         Some(spec) => spec,
@@ -348,13 +352,14 @@ fn build_reverb_with_impulse_response(
         ImpulseResponseSpec::Attachment(name) => container_path
             .ok_or_else(|| "missing container path for attachment".to_string())
             .and_then(|path| {
-                load_impulse_response_from_prot_attachment(path, &name)
+                load_impulse_response_from_prot_attachment_with_tail(path, &name, Some(tail_db))
                     .map_err(|err| err.to_string())
             }),
         ImpulseResponseSpec::FilePath(path) => {
             let resolved_path = resolve_impulse_response_path(container_path, &path);
             if resolved_path.exists() {
-                load_impulse_response_from_file(&resolved_path).map_err(|err| err.to_string())
+                load_impulse_response_from_file_with_tail(&resolved_path, Some(tail_db))
+                    .map_err(|err| err.to_string())
             } else {
                 match container_path {
                     Some(container_path) => {
@@ -363,9 +368,10 @@ fn build_reverb_with_impulse_response(
                             .and_then(|name| name.to_str())
                             .map(|name| name.to_string());
                         if let Some(fallback_name) = fallback_name {
-                            load_impulse_response_from_prot_attachment(
+                            load_impulse_response_from_prot_attachment_with_tail(
                                 container_path,
                                 &fallback_name,
+                                Some(tail_db),
                             )
                             .map_err(|err| err.to_string())
                         } else {

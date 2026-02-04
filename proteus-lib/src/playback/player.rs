@@ -111,6 +111,11 @@ impl Player {
         }
     }
 
+    pub fn set_impulse_response_tail_db(&mut self, tail_db: f32) {
+        let mut prot = self.prot.lock().unwrap();
+        prot.set_impulse_response_tail_db(tail_db);
+    }
+
     pub fn set_reverb_enabled(&self, enabled: bool) {
         let mut settings = self.reverb_settings.lock().unwrap();
         settings.enabled = enabled;

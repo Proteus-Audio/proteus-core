@@ -78,19 +78,41 @@ impl From<matroska::Error> for ImpulseResponseError {
 pub fn load_impulse_response_from_file(
     path: impl AsRef<Path>,
 ) -> Result<ImpulseResponse, ImpulseResponseError> {
+    load_impulse_response_from_file_with_tail(path, Some(-60.0))
+}
+
+pub fn load_impulse_response_from_file_with_tail(
+    path: impl AsRef<Path>,
+    tail_db: Option<f32>,
+) -> Result<ImpulseResponse, ImpulseResponseError> {
     let file = File::open(path)?;
-    decode_impulse_response(BufReader::new(file))
+    decode_impulse_response(BufReader::new(file), tail_db)
 }
 
 pub fn load_impulse_response_from_bytes(
     bytes: &[u8],
 ) -> Result<ImpulseResponse, ImpulseResponseError> {
-    decode_impulse_response(BufReader::new(Cursor::new(bytes.to_vec())))
+    load_impulse_response_from_bytes_with_tail(bytes, Some(-60.0))
+}
+
+pub fn load_impulse_response_from_bytes_with_tail(
+    bytes: &[u8],
+    tail_db: Option<f32>,
+) -> Result<ImpulseResponse, ImpulseResponseError> {
+    decode_impulse_response(BufReader::new(Cursor::new(bytes.to_vec())), tail_db)
 }
 
 pub fn load_impulse_response_from_prot_attachment(
     prot_path: impl AsRef<Path>,
     attachment_name: &str,
+) -> Result<ImpulseResponse, ImpulseResponseError> {
+    load_impulse_response_from_prot_attachment_with_tail(prot_path, attachment_name, Some(-60.0))
+}
+
+pub fn load_impulse_response_from_prot_attachment_with_tail(
+    prot_path: impl AsRef<Path>,
+    attachment_name: &str,
+    tail_db: Option<f32>,
 ) -> Result<ImpulseResponse, ImpulseResponseError> {
     let file = File::open(prot_path)?;
     let mka: Matroska = Matroska::open(file)?;
@@ -101,10 +123,13 @@ pub fn load_impulse_response_from_prot_attachment(
         .find(|attachment| attachment.name == attachment_name)
         .ok_or_else(|| ImpulseResponseError::AttachmentNotFound(attachment_name.to_string()))?;
 
-    load_impulse_response_from_bytes(&attachment.data)
+    load_impulse_response_from_bytes_with_tail(&attachment.data, tail_db)
 }
 
-fn decode_impulse_response<R>(reader: R) -> Result<ImpulseResponse, ImpulseResponseError>
+fn decode_impulse_response<R>(
+    reader: R,
+    tail_db: Option<f32>,
+) -> Result<ImpulseResponse, ImpulseResponseError>
 where
     R: Read + Seek + Send + Sync + 'static,
 {
@@ -140,6 +165,12 @@ where
         }
     }
 
+    if let Some(tail_db) = tail_db {
+        if tail_db.is_finite() {
+            trim_impulse_response_tail(&mut channel_samples, tail_db);
+        }
+    }
+
     if channel_samples.iter().any(|channel| channel.is_empty()) {
         warn!("Impulse response includes empty channels; results may be silent.");
     }
@@ -148,4 +179,40 @@ where
         sample_rate,
         channels: channel_samples,
     })
+}
+
+fn trim_impulse_response_tail(channels: &mut [Vec<f32>], tail_db: f32) {
+    if channels.is_empty() {
+        return;
+    }
+
+    let threshold = 10.0_f32.powf(tail_db / 20.0).abs();
+    if threshold <= 0.0 {
+        return;
+    }
+
+    let mut last_index = 0usize;
+    for (channel_index, channel) in channels.iter().enumerate() {
+        if channel.is_empty() {
+            continue;
+        }
+        let mut channel_last = None;
+        for (index, sample) in channel.iter().enumerate() {
+            if sample.abs() >= threshold {
+                channel_last = Some(index);
+            }
+        }
+        if let Some(channel_last) = channel_last {
+            if channel_index == 0 || channel_last > last_index {
+                last_index = channel_last;
+            }
+        }
+    }
+
+    let keep_len = (last_index + 1).max(1);
+    for channel in channels.iter_mut() {
+        if channel.len() > keep_len {
+            channel.truncate(keep_len);
+        }
+    }
 }
