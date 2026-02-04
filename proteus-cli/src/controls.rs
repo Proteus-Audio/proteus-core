@@ -14,14 +14,30 @@ pub struct StatusArgs {
     pub playing: bool,
     pub reverb_state: bool,
     pub reverb_mix: f32,
+    #[cfg(feature = "debug")]
     pub dsp_time_ms: f64,
+    #[cfg(feature = "debug")]
     pub audio_time_ms: f64,
+    #[cfg(feature = "debug")]
     pub rt_factor: f64,
+    #[cfg(feature = "debug")]
     pub avg_dsp_ms: f64,
+    #[cfg(feature = "debug")]
     pub avg_audio_ms: f64,
+    #[cfg(feature = "debug")]
     pub avg_rt_factor: f64,
+    #[cfg(feature = "debug")]
     pub min_rt_factor: f64,
+    #[cfg(feature = "debug")]
     pub max_rt_factor: f64,
+    #[cfg(feature = "debug")]
+    pub buffer_fill: f64,
+    #[cfg(feature = "debug")]
+    pub avg_buffer_fill: f64,
+    #[cfg(feature = "debug")]
+    pub min_buffer_fill: f64,
+    #[cfg(feature = "debug")]
+    pub max_buffer_fill: f64,
 }
 
 pub fn status_text(args: StatusArgs) -> StatusSnapshot {
@@ -35,8 +51,10 @@ pub fn status_text(args: StatusArgs) -> StatusSnapshot {
         0.0
     };
     let reverb_state = if args.reverb_state { "on" } else { "off" };
+
+    #[cfg(feature = "debug")]
     let text = format!(
-        "{}   {} / {}   ({:>5.1}%)\nReverb: {} | mix: {:.2}\nDSP: {:.2}ms / {:.2}ms ({:.2}x)\nAVG: {:.2}ms / {:.2}ms ({:.2}x)  MIN/MAX: {:.2}/{:.2}x",
+        "{}   {} / {}   ({:>5.1}%)\nReverb: {} | mix: {:.2}\nDSP: {:.2}ms / {:.2}ms ({:.2}x)\nAVG: {:.2}ms / {:.2}ms ({:.2}x)  MIN/MAX: {:.2}/{:.2}x\nBUF: {:.2} (avg {:.2} min {:.2} max {:.2})",
         state,
         current,
         total,
@@ -50,7 +68,17 @@ pub fn status_text(args: StatusArgs) -> StatusSnapshot {
         args.avg_audio_ms,
         args.avg_rt_factor,
         args.min_rt_factor,
-        args.max_rt_factor
+        args.max_rt_factor,
+        args.buffer_fill,
+        args.avg_buffer_fill,
+        args.min_buffer_fill,
+        args.max_buffer_fill
+    );
+
+    #[cfg(not(feature = "debug"))]
+    let text = format!(
+        "{}   {} / {}   ({:>5.1}%)\nReverb: {} | mix: {:.2}",
+        state, current, total, percent, reverb_state, args.reverb_mix
     );
 
     StatusSnapshot { text }

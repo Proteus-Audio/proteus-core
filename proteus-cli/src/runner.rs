@@ -2,8 +2,7 @@ use std::{io, thread::sleep, time::Duration};
 
 use clap::ArgMatches;
 use crossterm::{
-    cursor,
-    execute,
+    cursor, execute,
     terminal::{self, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use log::error;
@@ -43,6 +42,13 @@ pub fn run(args: &ArgMatches) -> Result<i32> {
         player.set_impulse_response_from_string(impulse_response);
     }
 
+    let reverb_mix = args
+        .get_one::<String>("reverb-mix")
+        .unwrap()
+        .parse::<f32>()
+        .unwrap();
+    player.set_reverb_mix(reverb_mix);
+
     // Start playback once configuration is applied.
     player.play();
     player.set_volume(gain / 100.0);
@@ -64,6 +70,7 @@ pub fn run(args: &ArgMatches) -> Result<i32> {
             let duration = player.get_duration();
             let playing = player.is_playing();
             let reverb_settings = player.get_reverb_settings();
+            #[cfg(feature = "debug")]
             let reverb_metrics = player.get_reverb_metrics();
             let status = controls::status_text(controls::StatusArgs {
                 time,
@@ -71,14 +78,30 @@ pub fn run(args: &ArgMatches) -> Result<i32> {
                 playing,
                 reverb_state: reverb_settings.enabled,
                 reverb_mix: reverb_settings.dry_wet,
+                #[cfg(feature = "debug")]
                 dsp_time_ms: reverb_metrics.dsp_time_ms,
+                #[cfg(feature = "debug")]
                 audio_time_ms: reverb_metrics.audio_time_ms,
+                #[cfg(feature = "debug")]
                 rt_factor: reverb_metrics.rt_factor,
+                #[cfg(feature = "debug")]
                 avg_dsp_ms: reverb_metrics.avg_dsp_ms,
+                #[cfg(feature = "debug")]
                 avg_audio_ms: reverb_metrics.avg_audio_ms,
+                #[cfg(feature = "debug")]
                 avg_rt_factor: reverb_metrics.avg_rt_factor,
+                #[cfg(feature = "debug")]
                 min_rt_factor: reverb_metrics.min_rt_factor,
+                #[cfg(feature = "debug")]
                 max_rt_factor: reverb_metrics.max_rt_factor,
+                #[cfg(feature = "debug")]
+                buffer_fill: reverb_metrics.buffer_fill,
+                #[cfg(feature = "debug")]
+                avg_buffer_fill: reverb_metrics.avg_buffer_fill,
+                #[cfg(feature = "debug")]
+                min_buffer_fill: reverb_metrics.min_buffer_fill,
+                #[cfg(feature = "debug")]
+                max_buffer_fill: reverb_metrics.max_buffer_fill,
             });
             ui::draw_status(term, &status);
         }
@@ -93,7 +116,7 @@ pub fn run(args: &ArgMatches) -> Result<i32> {
     // Restore the terminal state before exiting.
     if let Some(mut term) = terminal {
         let _ = term.show_cursor();
-        let mut stdout = term.backend_mut();
+        let stdout = term.backend_mut();
         let _ = execute!(stdout, LeaveAlternateScreen, cursor::Show);
     }
 

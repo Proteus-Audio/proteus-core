@@ -31,6 +31,13 @@ pub fn build_cli() -> Command {
                 ),
         )
         .arg(
+            Arg::new("reverb-mix")
+                .long("reverb-mix")
+                .value_name("MIX")
+                .default_value("0.0")
+                .help("The reverb wet/dry mix (0.0-1.0)"),
+        )
+        .arg(
             Arg::new("bench-dsp")
                 .long("bench-dsp")
                 .action(ArgAction::SetTrue)

@@ -1,5 +1,7 @@
 use dasp_ring_buffer::Bounded;
-use log::{info, warn};
+#[cfg(feature = "debug")]
+use log::info;
+use log::warn;
 use rodio::{
     buffer::SamplesBuffer,
     dynamic_mixer::{self},
@@ -8,7 +10,9 @@ use rodio::{
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Duration;
+#[cfg(feature = "debug")]
+use std::time::Instant;
 use std::{collections::HashMap, sync::mpsc::Receiver, thread};
 
 use crate::{
@@ -74,6 +78,10 @@ pub struct ReverbMetrics {
     pub avg_rt_factor: f64,
     pub min_rt_factor: f64,
     pub max_rt_factor: f64,
+    pub buffer_fill: f64,
+    pub avg_buffer_fill: f64,
+    pub min_buffer_fill: f64,
+    pub max_buffer_fill: f64,
 }
 
 impl PlayerEngine {
@@ -149,6 +157,15 @@ impl PlayerEngine {
         let reverb_metrics = self.reverb_metrics.clone();
 
         thread::spawn(move || {
+            #[cfg(feature = "debug")]
+            let mut avg_buffer_fill = 0.0_f64;
+            #[cfg(feature = "debug")]
+            let mut min_buffer_fill = f64::INFINITY;
+            #[cfg(feature = "debug")]
+            let mut max_buffer_fill = 0.0_f64;
+            #[cfg(feature = "debug")]
+            let alpha_buf = 0.1_f64;
+
             let prot = prot_locked.lock().unwrap();
             let enumerated_list = prot.enumerated_list();
             drop(prot);
@@ -323,6 +340,41 @@ impl PlayerEngine {
                         / audio_info.sample_rate as f64
                         / audio_info.channels as f64;
 
+                    #[cfg(feature = "debug")]
+                    {
+                        if started {
+                            let total_samples = length_of_smallest_buffer as f64;
+                            let capacity_samples = hash_buffer
+                                .iter()
+                                .map(|(_, buffer)| buffer.max_len())
+                                .min()
+                                .unwrap_or(0) as f64;
+                            let fill = if capacity_samples > 0.0 {
+                                total_samples / capacity_samples
+                            } else {
+                                0.0
+                            };
+
+                            avg_buffer_fill = if avg_buffer_fill == 0.0 {
+                                fill
+                            } else {
+                                (avg_buffer_fill * (1.0 - alpha_buf)) + (fill * alpha_buf)
+                            };
+                            min_buffer_fill = min_buffer_fill.min(fill);
+                            max_buffer_fill = max_buffer_fill.max(fill);
+
+                            let mut metrics = reverb_metrics.lock().unwrap();
+                            metrics.buffer_fill = fill;
+                            metrics.avg_buffer_fill = avg_buffer_fill;
+                            metrics.min_buffer_fill = if min_buffer_fill.is_finite() {
+                                min_buffer_fill
+                            } else {
+                                0.0
+                            };
+                            metrics.max_buffer_fill = max_buffer_fill;
+                        }
+                    }
+
                     sender.send((samples_buffer, length_in_seconds)).unwrap();
                 }
 
@@ -484,14 +536,24 @@ fn spawn_reverb_worker(
     let (result_sender, result_receiver) = mpsc::sync_channel::<ReverbResult>(1);
 
     thread::spawn(move || {
-        let mut current_dry_wet = 0.000001_f32;
-        let mut last_log = Instant::now();
-        let mut avg_dsp_ms = 0.0_f64;
-        let mut avg_audio_ms = 0.0_f64;
-        let mut avg_rt_factor = 0.0_f64;
-        let mut min_rt_factor = f64::INFINITY;
-        let mut max_rt_factor = 0.0_f64;
-        let alpha = 0.1_f64;
+            let mut current_dry_wet = 0.000001_f32;
+            #[cfg(feature = "debug")]
+            let mut last_log = Instant::now();
+            #[cfg(feature = "debug")]
+            let mut avg_dsp_ms = 0.0_f64;
+            #[cfg(feature = "debug")]
+            let mut avg_audio_ms = 0.0_f64;
+            #[cfg(feature = "debug")]
+            let mut avg_rt_factor = 0.0_f64;
+            #[cfg(feature = "debug")]
+            let mut min_rt_factor = f64::INFINITY;
+            #[cfg(feature = "debug")]
+            let mut max_rt_factor = 0.0_f64;
+            #[cfg(feature = "debug")]
+            let alpha = 0.1_f64;
+
+            #[cfg(not(feature = "debug"))]
+            let _ = &reverb_metrics;
 
         while let Ok(job) = job_receiver.recv() {
             let settings = *reverb_settings.lock().unwrap();
@@ -500,6 +562,7 @@ fn spawn_reverb_worker(
                 current_dry_wet = settings.dry_wet;
             }
 
+            #[cfg(feature = "debug")]
             let audio_time_ms = if job.channels > 0 && job.sample_rate > 0 {
                 let frames = job.samples.len() as f64 / job.channels as f64;
                 (frames / job.sample_rate as f64) * 1000.0
@@ -507,45 +570,49 @@ fn spawn_reverb_worker(
                 0.0
             };
 
+            #[cfg(feature = "debug")]
             let dsp_start = Instant::now();
             let samples = if settings.enabled && settings.dry_wet > 0.0 {
                 reverb.process(&job.samples)
             } else {
                 job.samples
             };
+            #[cfg(feature = "debug")]
             let dsp_time_ms = dsp_start.elapsed().as_secs_f64() * 1000.0;
+            #[cfg(feature = "debug")]
             let rt_factor = if audio_time_ms > 0.0 {
                 dsp_time_ms / audio_time_ms
             } else {
                 0.0
             };
 
-            avg_dsp_ms = if avg_dsp_ms == 0.0 {
-                dsp_time_ms
-            } else {
-                (avg_dsp_ms * (1.0 - alpha)) + (dsp_time_ms * alpha)
-            };
-            avg_audio_ms = if avg_audio_ms == 0.0 {
-                audio_time_ms
-            } else {
-                (avg_audio_ms * (1.0 - alpha)) + (audio_time_ms * alpha)
-            };
-            avg_rt_factor = if avg_rt_factor == 0.0 {
-                rt_factor
-            } else {
-                (avg_rt_factor * (1.0 - alpha)) + (rt_factor * alpha)
-            };
-
-            if rt_factor > 0.0 {
-                if rt_factor < min_rt_factor {
-                    min_rt_factor = rt_factor;
-                }
-                if rt_factor > max_rt_factor {
-                    max_rt_factor = rt_factor;
-                }
-            }
-
+            #[cfg(feature = "debug")]
             {
+                avg_dsp_ms = if avg_dsp_ms == 0.0 {
+                    dsp_time_ms
+                } else {
+                    (avg_dsp_ms * (1.0 - alpha)) + (dsp_time_ms * alpha)
+                };
+                avg_audio_ms = if avg_audio_ms == 0.0 {
+                    audio_time_ms
+                } else {
+                    (avg_audio_ms * (1.0 - alpha)) + (audio_time_ms * alpha)
+                };
+                avg_rt_factor = if avg_rt_factor == 0.0 {
+                    rt_factor
+                } else {
+                    (avg_rt_factor * (1.0 - alpha)) + (rt_factor * alpha)
+                };
+
+                if rt_factor > 0.0 {
+                    if rt_factor < min_rt_factor {
+                        min_rt_factor = rt_factor;
+                    }
+                    if rt_factor > max_rt_factor {
+                        max_rt_factor = rt_factor;
+                    }
+                }
+
                 let mut metrics = reverb_metrics.lock().unwrap();
                 metrics.dsp_time_ms = dsp_time_ms;
                 metrics.audio_time_ms = audio_time_ms;
@@ -561,6 +628,7 @@ fn spawn_reverb_worker(
                 metrics.max_rt_factor = max_rt_factor;
             }
 
+            #[cfg(feature = "debug")]
             if last_log.elapsed().as_secs_f64() >= 1.0 {
                 info!(
                     "DSP packet: {:.2}ms / {:.2}ms ({:.2}x realtime) avg {:.2}x (min {:.2}x max {:.2}x)",

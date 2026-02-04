@@ -106,7 +106,7 @@ fn run_sweep_bench(_args: &ArgMatches) -> Result<Option<i32>> {
             iterations,
         };
 
-        let results = proteus_lib::diagnostics::bench::bench_convolver_sweep(&base, &fft_sizes);
+        let results = proteus_lib::diagnostics::bench::bench_convolver_sweep(base, &fft_sizes);
         println!(
             "DSP sweep (input={}s ir={}s iters={})",
             input_seconds, ir_seconds, iterations

@@ -24,4 +24,5 @@ indicatif = "0.18.3"
 
 [features]
 bench = ["proteus-lib/bench"]
+debug = ["proteus-lib/debug"]
 real-fft = ["proteus-lib/real-fft"]

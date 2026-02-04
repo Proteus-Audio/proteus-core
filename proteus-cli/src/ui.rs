@@ -14,14 +14,21 @@ pub fn draw_status(
 ) {
     // Render the controls + status panels.
     let _ = terminal.draw(|f| {
+        let status_height = {
+            #[cfg(feature = "debug")]
+            {
+                7
+            }
+            #[cfg(not(feature = "debug"))]
+            {
+                4
+            }
+        };
+
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .margin(1)
-            .constraints([
-                Constraint::Length(5),
-                Constraint::Length(6),
-                Constraint::Min(0),
-            ])
+            .constraints([Constraint::Length(5), Constraint::Length(status_height), Constraint::Min(0)])
             .split(f.size());
 
         let controls = Paragraph::new(
