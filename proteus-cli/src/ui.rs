@@ -1,0 +1,42 @@
+use ratatui::{
+    backend::CrosstermBackend,
+    layout::{Constraint, Direction, Layout},
+    style::{Color, Modifier, Style},
+    widgets::{Block, Borders, Paragraph},
+    Terminal,
+};
+
+use crate::controls::StatusSnapshot;
+
+pub fn draw_status(
+    terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>,
+    status: &StatusSnapshot,
+) {
+    let _ = terminal.draw(|f| {
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .margin(1)
+            .constraints([
+                Constraint::Length(5),
+                Constraint::Length(6),
+                Constraint::Min(0),
+            ])
+            .split(f.size());
+
+        let controls = Paragraph::new(
+            "space=play/pause  s=shuffle  ←/→=seek 5s  r=reverb on/off  -/= mix  q=quit",
+        )
+        .style(Style::default().fg(Color::Blue))
+        .block(Block::default().borders(Borders::ALL).title("Controls"));
+        f.render_widget(controls, chunks[0]);
+
+        let status_widget = Paragraph::new(status.text.as_str())
+            .style(
+                Style::default()
+                    .fg(Color::Green)
+                    .add_modifier(Modifier::BOLD),
+            )
+            .block(Block::default().borders(Borders::ALL).title("Playback"));
+        f.render_widget(status_widget, chunks[1]);
+    });
+}
