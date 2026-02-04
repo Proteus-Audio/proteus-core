@@ -102,6 +102,22 @@ pub fn run(args: &ArgMatches) -> Result<i32> {
                 min_buffer_fill: reverb_metrics.min_buffer_fill,
                 #[cfg(feature = "debug")]
                 max_buffer_fill: reverb_metrics.max_buffer_fill,
+                #[cfg(feature = "debug")]
+                chain_time_ms: reverb_metrics.chain_time_ms,
+                #[cfg(feature = "debug")]
+                avg_chain_time_ms: reverb_metrics.avg_chain_time_ms,
+                #[cfg(feature = "debug")]
+                min_chain_time_ms: reverb_metrics.min_chain_time_ms,
+                #[cfg(feature = "debug")]
+                max_chain_time_ms: reverb_metrics.max_chain_time_ms,
+                #[cfg(feature = "debug")]
+                out_interval_ms: reverb_metrics.out_interval_ms,
+                #[cfg(feature = "debug")]
+                avg_out_interval_ms: reverb_metrics.avg_out_interval_ms,
+                #[cfg(feature = "debug")]
+                min_out_interval_ms: reverb_metrics.min_out_interval_ms,
+                #[cfg(feature = "debug")]
+                max_out_interval_ms: reverb_metrics.max_out_interval_ms,
             });
             ui::draw_status(term, &status);
         }

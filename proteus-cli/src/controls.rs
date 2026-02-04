@@ -38,6 +38,22 @@ pub struct StatusArgs {
     pub min_buffer_fill: f64,
     #[cfg(feature = "debug")]
     pub max_buffer_fill: f64,
+    #[cfg(feature = "debug")]
+    pub chain_time_ms: f64,
+    #[cfg(feature = "debug")]
+    pub avg_chain_time_ms: f64,
+    #[cfg(feature = "debug")]
+    pub min_chain_time_ms: f64,
+    #[cfg(feature = "debug")]
+    pub max_chain_time_ms: f64,
+    #[cfg(feature = "debug")]
+    pub out_interval_ms: f64,
+    #[cfg(feature = "debug")]
+    pub avg_out_interval_ms: f64,
+    #[cfg(feature = "debug")]
+    pub min_out_interval_ms: f64,
+    #[cfg(feature = "debug")]
+    pub max_out_interval_ms: f64,
 }
 
 pub fn status_text(args: StatusArgs) -> StatusSnapshot {
@@ -54,7 +70,7 @@ pub fn status_text(args: StatusArgs) -> StatusSnapshot {
 
     #[cfg(feature = "debug")]
     let text = format!(
-        "{}   {} / {}   ({:>5.1}%)\nReverb: {} | mix: {:.2}\nDSP: {:.2}ms / {:.2}ms ({:.2}x)\nAVG: {:.2}ms / {:.2}ms ({:.2}x)  MIN/MAX: {:.2}/{:.2}x\nBUF: {:.2} (avg {:.2} min {:.2} max {:.2})",
+        "{}   {} / {}   ({:>5.1}%)\nReverb: {} | mix: {:.2}\nDSP: {:.2}ms / {:.2}ms ({:.2}x)\nAVG: {:.2}ms / {:.2}ms ({:.2}x)  MIN/MAX: {:.2}/{:.2}x\nCHAIN: {:.2}ms (avg {:.2} min {:.2} max {:.2})\nOUT: {:.2}ms (avg {:.2} min {:.2} max {:.2})\nBUF: {:.2} (avg {:.2} min {:.2} max {:.2})",
         state,
         current,
         total,
@@ -69,6 +85,14 @@ pub fn status_text(args: StatusArgs) -> StatusSnapshot {
         args.avg_rt_factor,
         args.min_rt_factor,
         args.max_rt_factor,
+        args.chain_time_ms,
+        args.avg_chain_time_ms,
+        args.min_chain_time_ms,
+        args.max_chain_time_ms,
+        args.out_interval_ms,
+        args.avg_out_interval_ms,
+        args.min_out_interval_ms,
+        args.max_out_interval_ms,
         args.buffer_fill,
         args.avg_buffer_fill,
         args.min_buffer_fill,

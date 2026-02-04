@@ -17,7 +17,7 @@ pub fn draw_status(
         let status_height = {
             #[cfg(feature = "debug")]
             {
-                7
+                9
             }
             #[cfg(not(feature = "debug"))]
             {

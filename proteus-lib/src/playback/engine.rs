@@ -82,6 +82,14 @@ pub struct ReverbMetrics {
     pub avg_buffer_fill: f64,
     pub min_buffer_fill: f64,
     pub max_buffer_fill: f64,
+    pub chain_time_ms: f64,
+    pub avg_chain_time_ms: f64,
+    pub min_chain_time_ms: f64,
+    pub max_chain_time_ms: f64,
+    pub out_interval_ms: f64,
+    pub avg_out_interval_ms: f64,
+    pub min_out_interval_ms: f64,
+    pub max_out_interval_ms: f64,
 }
 
 impl PlayerEngine {
@@ -165,6 +173,22 @@ impl PlayerEngine {
             let mut max_buffer_fill = 0.0_f64;
             #[cfg(feature = "debug")]
             let alpha_buf = 0.1_f64;
+            #[cfg(feature = "debug")]
+            let mut last_send = Instant::now();
+            #[cfg(feature = "debug")]
+            let mut avg_chain_time_ms = 0.0_f64;
+            #[cfg(feature = "debug")]
+            let mut min_chain_time_ms = f64::INFINITY;
+            #[cfg(feature = "debug")]
+            let mut max_chain_time_ms = 0.0_f64;
+            #[cfg(feature = "debug")]
+            let mut avg_out_interval_ms = 0.0_f64;
+            #[cfg(feature = "debug")]
+            let mut min_out_interval_ms = f64::INFINITY;
+            #[cfg(feature = "debug")]
+            let mut max_out_interval_ms = 0.0_f64;
+            #[cfg(feature = "debug")]
+            let alpha_chain = 0.1_f64;
 
             let prot = prot_locked.lock().unwrap();
             let enumerated_list = prot.enumerated_list();
@@ -263,6 +287,9 @@ impl PlayerEngine {
                 if all_buffers_full
                     || (effects_buffer.lock().unwrap().len() > 0 && hash_buffer.len() == 0)
                 {
+                    #[cfg(feature = "debug")]
+                    let chain_start = Instant::now();
+
                     let (controller, mixer) = dynamic_mixer::mixer::<f32>(
                         audio_info.channels as u16,
                         audio_info.sample_rate as u32,
@@ -375,7 +402,53 @@ impl PlayerEngine {
                         }
                     }
 
+                    #[cfg(feature = "debug")]
+                    {
+                        let chain_time_ms = chain_start.elapsed().as_secs_f64() * 1000.0;
+                        let out_interval_ms = last_send.elapsed().as_secs_f64() * 1000.0;
+
+                        avg_chain_time_ms = if avg_chain_time_ms == 0.0 {
+                            chain_time_ms
+                        } else {
+                            (avg_chain_time_ms * (1.0 - alpha_chain))
+                                + (chain_time_ms * alpha_chain)
+                        };
+                        min_chain_time_ms = min_chain_time_ms.min(chain_time_ms);
+                        max_chain_time_ms = max_chain_time_ms.max(chain_time_ms);
+
+                        avg_out_interval_ms = if avg_out_interval_ms == 0.0 {
+                            out_interval_ms
+                        } else {
+                            (avg_out_interval_ms * (1.0 - alpha_chain))
+                                + (out_interval_ms * alpha_chain)
+                        };
+                        min_out_interval_ms = min_out_interval_ms.min(out_interval_ms);
+                        max_out_interval_ms = max_out_interval_ms.max(out_interval_ms);
+
+                        let mut metrics = reverb_metrics.lock().unwrap();
+                        metrics.chain_time_ms = chain_time_ms;
+                        metrics.avg_chain_time_ms = avg_chain_time_ms;
+                        metrics.min_chain_time_ms = if min_chain_time_ms.is_finite() {
+                            min_chain_time_ms
+                        } else {
+                            0.0
+                        };
+                        metrics.max_chain_time_ms = max_chain_time_ms;
+                        metrics.out_interval_ms = out_interval_ms;
+                        metrics.avg_out_interval_ms = avg_out_interval_ms;
+                        metrics.min_out_interval_ms = if min_out_interval_ms.is_finite() {
+                            min_out_interval_ms
+                        } else {
+                            0.0
+                        };
+                        metrics.max_out_interval_ms = max_out_interval_ms;
+                    }
+
                     sender.send((samples_buffer, length_in_seconds)).unwrap();
+                    #[cfg(feature = "debug")]
+                    {
+                        last_send = Instant::now();
+                    }
                 }
 
                 drop(hash_buffer);
