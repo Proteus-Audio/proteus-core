@@ -10,8 +10,8 @@ use symphonia::core::errors::Error;
 use symphonia::core::formats::{SeekMode, SeekTo};
 use symphonia::core::units::Time;
 
-use crate::buffer::buffer_remaining_space;
-use crate::tools::open_file;
+use crate::audio::buffer::buffer_remaining_space;
+use crate::tools::tools::open_file;
 
 pub struct TrackArgs {
     pub file_path: String,

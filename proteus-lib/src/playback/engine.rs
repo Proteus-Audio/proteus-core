@@ -12,14 +12,12 @@ use std::time::Duration;
 use std::{collections::HashMap, sync::mpsc::Receiver, thread};
 
 use crate::{
-    buffer::*,
-    effects::{
-        impulse_response::{
-            load_impulse_response_from_file, load_impulse_response_from_prot_attachment,
-        },
-        reverb::Reverb,
+    audio::buffer::*,
+    container::prot::{ImpulseResponseSpec, Prot},
+    dsp::impulse_response::{
+        load_impulse_response_from_file, load_impulse_response_from_prot_attachment,
     },
-    prot::{ImpulseResponseSpec, Prot},
+    dsp::reverb::Reverb,
 };
 // use crate::effects::*;
 use crate::track::*;

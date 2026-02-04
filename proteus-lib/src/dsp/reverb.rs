@@ -7,9 +7,9 @@ use rodio::{
     Source,
 };
 
-use crate::effects::convolution::Convolver;
-use crate::effects::impulse_response::ImpulseResponse;
-use crate::effects::spring_impulse_response::SPRING_IMPULSE_RESPONSE;
+use crate::dsp::convolution::Convolver;
+use crate::dsp::impulse_response::ImpulseResponse;
+use crate::dsp::spring_impulse_response::SPRING_IMPULSE_RESPONSE;
 
 const FFT_SIZE: usize = 24576;
 

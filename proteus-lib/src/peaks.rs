@@ -5,7 +5,7 @@ use log::warn;
 use symphonia::core::audio::{AudioBufferRef, Signal, Channels};
 use symphonia::core::errors::Error;
 
-use crate::tools::*;
+use crate::tools::tools::*;
 
 fn convert_signed_24bit_to_f32(sample: i32) -> f32 {
     // Assuming the 24-bit sample is the least significant bits of a 32-bit integer

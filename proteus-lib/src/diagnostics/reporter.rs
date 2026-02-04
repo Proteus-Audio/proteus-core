@@ -3,7 +3,7 @@ use std::{
     time::Duration,
 };
 
-use crate::player::Player;
+use crate::playback::player::Player;
 
 #[derive(Clone, PartialEq)]
 pub struct Report {

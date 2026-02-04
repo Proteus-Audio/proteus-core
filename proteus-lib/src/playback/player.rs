@@ -5,13 +5,13 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
-use crate::effects::effects::clone_samples_buffer;
-use crate::prot::{parse_impulse_response_string, ImpulseResponseSpec, Prot};
-use crate::reporter::{Report, Reporter};
-use crate::timer;
+use crate::audio::samples::clone_samples_buffer;
+use crate::container::prot::{parse_impulse_response_string, ImpulseResponseSpec, Prot};
+use crate::diagnostics::reporter::{Report, Reporter};
+use crate::tools::timer;
 use crate::{
-    info::Info,
-    player_engine::{PlayerEngine, ReverbSettings},
+    container::info::Info,
+    playback::engine::{PlayerEngine, ReverbSettings},
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

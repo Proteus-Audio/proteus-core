@@ -2,7 +2,7 @@ use matroska::{Audio, Matroska, Settings};
 use rand::Rng;
 use symphonia::core::audio::Channels;
 
-use crate::info::*;
+use crate::container::info::*;
 
 #[derive(Debug, Clone)]
 pub struct Prot {

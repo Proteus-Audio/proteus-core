@@ -11,7 +11,7 @@ use crossterm::{
     terminal::{self, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use log::error;
-use proteus_lib::player;
+use proteus_lib::playback::player;
 use ratatui::{
     backend::CrosstermBackend,
     layout::{Constraint, Direction, Layout},
