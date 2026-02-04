@@ -1,6 +1,7 @@
 use clap::{Arg, ArgAction, Command};
 
 pub fn build_cli() -> Command {
+    // Build the CLI definition in one place to keep main.rs slim.
     Command::new("Prot Play")
         .version("1.0")
         .author("Adam Howard <adam.thomas.howard@gmail.com>")

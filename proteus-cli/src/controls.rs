@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use crossterm::event::{self, Event, KeyCode, KeyEventKind};
 
-use crate::player;
+use proteus_lib::playback::player;
 
 pub struct StatusSnapshot {
     pub text: String,
@@ -25,6 +25,7 @@ pub struct StatusArgs {
 }
 
 pub fn status_text(args: StatusArgs) -> StatusSnapshot {
+    // Create a multi-line status string for the UI panel.
     let state = if args.playing { "▶ Playing" } else { "⏸ Paused" };
     let current = format_time(args.time * 1000.0);
     let total = format_time(args.duration * 1000.0);
@@ -56,6 +57,7 @@ pub fn status_text(args: StatusArgs) -> StatusSnapshot {
 }
 
 pub fn handle_key_event(player: &mut player::Player) -> bool {
+    // Handle one input event. Returns false when the user requests exit.
     if event::poll(Duration::from_millis(100)).unwrap_or(false) {
         if let Ok(Event::Key(key)) = event::read() {
             if key.kind != KeyEventKind::Press {
@@ -110,6 +112,7 @@ pub fn handle_key_event(player: &mut player::Player) -> bool {
 }
 
 fn format_time(time: f64) -> String {
+    // Format milliseconds into HH:MM:SS.
     let seconds = (time / 1000.0).ceil() as u32;
     let minutes = seconds / 60;
     let seconds = seconds % 60;

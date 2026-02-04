@@ -12,6 +12,7 @@ pub fn draw_status(
     terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>,
     status: &StatusSnapshot,
 ) {
+    // Render the controls + status panels.
     let _ = terminal.draw(|f| {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
