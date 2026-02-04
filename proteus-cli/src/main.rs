@@ -54,6 +54,40 @@ fn main() {
                 ),
         )
         .arg(
+            Arg::new("bench-dsp")
+                .long("bench-dsp")
+                .action(clap::ArgAction::SetTrue)
+                .help("Run a synthetic DSP benchmark and exit"),
+        )
+        .arg(
+            Arg::new("bench-fft-size")
+                .long("bench-fft-size")
+                .value_name("SIZE")
+                .default_value("24576")
+                .help("FFT size for DSP benchmark"),
+        )
+        .arg(
+            Arg::new("bench-input-seconds")
+                .long("bench-input-seconds")
+                .value_name("SECONDS")
+                .default_value("1.0")
+                .help("Input length in seconds for DSP benchmark"),
+        )
+        .arg(
+            Arg::new("bench-ir-seconds")
+                .long("bench-ir-seconds")
+                .value_name("SECONDS")
+                .default_value("2.0")
+                .help("Impulse response length in seconds for DSP benchmark"),
+        )
+        .arg(
+            Arg::new("bench-iterations")
+                .long("bench-iterations")
+                .value_name("COUNT")
+                .default_value("5")
+                .help("Number of iterations for DSP benchmark"),
+        )
+        .arg(
             Arg::new("decode-only")
                 .long("decode-only")
                 .help("Decode, but do not play the audio")
@@ -98,7 +132,7 @@ fn main() {
         .arg(
             Arg::new("INPUT")
                 .help("The input file path, or - to use standard input")
-                .required(true)
+                .required_unless_present("bench-dsp")
                 .index(1),
         )
         .get_matches();
@@ -152,6 +186,54 @@ impl Drop for RawModeGuard {
 ///
 /// * `args` - The command-line arguments.
 fn run(args: &ArgMatches) -> Result<i32> {
+    if args.get_flag("bench-dsp") {
+        let fft_size = args
+            .get_one::<String>("bench-fft-size")
+            .unwrap()
+            .parse::<usize>()
+            .unwrap();
+        let input_seconds = args
+            .get_one::<String>("bench-input-seconds")
+            .unwrap()
+            .parse::<f32>()
+            .unwrap();
+        let ir_seconds = args
+            .get_one::<String>("bench-ir-seconds")
+            .unwrap()
+            .parse::<f32>()
+            .unwrap();
+        let iterations = args
+            .get_one::<String>("bench-iterations")
+            .unwrap()
+            .parse::<usize>()
+            .unwrap();
+
+        let result = proteus_lib::diagnostics::bench::bench_convolver(
+            proteus_lib::diagnostics::bench::DspBenchConfig {
+                sample_rate: 44_100,
+                input_seconds,
+                ir_seconds,
+                fft_size,
+                iterations,
+            },
+        );
+
+        println!(
+            "DSP bench (fft={} input={}s ir={}s iters={}): avg {:.2}ms (min {:.2}ms max {:.2}ms), audio {:.2}ms, rt {:.2}x",
+            fft_size,
+            input_seconds,
+            ir_seconds,
+            iterations,
+            result.avg_ms,
+            result.min_ms,
+            result.max_ms,
+            result.audio_time_ms,
+            result.rt_factor
+        );
+
+        return Ok(0);
+    }
+
     let file_path = args.get_one::<String>("INPUT").unwrap().clone();
     let gain = args
         .get_one::<String>("GAIN")

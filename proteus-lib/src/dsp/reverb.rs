@@ -11,7 +11,9 @@ use crate::dsp::convolution::Convolver;
 use crate::dsp::impulse_response::ImpulseResponse;
 use crate::dsp::spring_impulse_response::SPRING_IMPULSE_RESPONSE;
 
+//   1. Power‑of‑two FFT size (e.g., 8192 or 16384).
 const FFT_SIZE: usize = 24576;
+// const FFT_SIZE: usize = 24576;
 
 pub struct Reverb {
     channels: usize,
