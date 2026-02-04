@@ -11,7 +11,7 @@ use crate::diagnostics::reporter::{Report, Reporter};
 use crate::tools::timer;
 use crate::{
     container::info::Info,
-    playback::engine::{PlayerEngine, ReverbMetrics, ReverbSettings},
+    playback::engine::{PlaybackBufferSettings, PlayerEngine, ReverbMetrics, ReverbSettings},
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -41,6 +41,7 @@ pub struct Player {
     sink: Arc<Mutex<Sink>>,
     audition_source: Arc<Mutex<Option<SamplesBuffer<f32>>>>,
     reporter: Option<Arc<Mutex<Reporter>>>,
+    buffer_settings: Arc<Mutex<PlaybackBufferSettings>>,
     reverb_settings: Arc<Mutex<ReverbSettings>>,
     reverb_metrics: Arc<Mutex<ReverbMetrics>>,
 }
@@ -91,6 +92,7 @@ impl Player {
             audition_source: Arc::new(Mutex::new(None)),
             prot,
             reporter: None,
+            buffer_settings: Arc::new(Mutex::new(PlaybackBufferSettings::new(20.0))),
             reverb_settings: Arc::new(Mutex::new(ReverbSettings::new(0.000001))),
             reverb_metrics: Arc::new(Mutex::new(ReverbMetrics::default())),
         };
@@ -132,6 +134,11 @@ impl Player {
 
     pub fn get_reverb_metrics(&self) -> ReverbMetrics {
         *self.reverb_metrics.lock().unwrap()
+    }
+
+    pub fn set_start_buffer_ms(&self, start_buffer_ms: f32) {
+        let mut settings = self.buffer_settings.lock().unwrap();
+        settings.start_buffer_ms = start_buffer_ms.max(0.0);
     }
 
     fn audition(&self, length: Duration) {
@@ -176,6 +183,7 @@ impl Player {
 
         let duration = self.duration.clone();
         let prot = self.prot.clone();
+        let buffer_settings = self.buffer_settings.clone();
         let reverb_settings = self.reverb_settings.clone();
         let reverb_metrics = self.reverb_metrics.clone();
 
@@ -210,6 +218,7 @@ impl Player {
                 prot,
                 Some(abort.clone()),
                 start_time,
+                buffer_settings,
                 reverb_settings,
                 reverb_metrics,
             );

@@ -31,6 +31,7 @@ pub struct PlayerEngine {
     buffer_map: Arc<Mutex<HashMap<u16, Bounded<Vec<f32>>>>>,
     effects_buffer: Arc<Mutex<Bounded<Vec<f32>>>>,
     prot: Arc<Mutex<Prot>>,
+    buffer_settings: Arc<Mutex<PlaybackBufferSettings>>,
     reverb_settings: Arc<Mutex<ReverbSettings>>,
     reverb_metrics: Arc<Mutex<ReverbMetrics>>,
 }
@@ -46,6 +47,19 @@ impl ReverbSettings {
         Self {
             enabled: true,
             dry_wet: dry_wet.clamp(0.0, 1.0),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct PlaybackBufferSettings {
+    pub start_buffer_ms: f32,
+}
+
+impl PlaybackBufferSettings {
+    pub fn new(start_buffer_ms: f32) -> Self {
+        Self {
+            start_buffer_ms: start_buffer_ms.max(0.0),
         }
     }
 }
@@ -67,6 +81,7 @@ impl PlayerEngine {
         prot: Arc<Mutex<Prot>>,
         abort_option: Option<Arc<AtomicBool>>,
         start_time: f64,
+        buffer_settings: Arc<Mutex<PlaybackBufferSettings>>,
         reverb_settings: Arc<Mutex<ReverbSettings>>,
         reverb_metrics: Arc<Mutex<ReverbMetrics>>,
     ) -> Self {
@@ -79,7 +94,12 @@ impl PlayerEngine {
         };
 
         let prot_unlocked = prot.lock().unwrap();
-        let buffer_size = prot_unlocked.info.sample_rate as usize * 10; // Ten seconds of audio at the sample rate
+        let start_buffer_ms = buffer_settings.lock().unwrap().start_buffer_ms;
+        let channels = prot_unlocked.info.channels as usize;
+        let start_samples = ((prot_unlocked.info.sample_rate as f32 * start_buffer_ms) / 1000.0)
+            as usize
+            * channels;
+        let buffer_size = (prot_unlocked.info.sample_rate as usize * 10).max(start_samples * 2);
         let effects_buffer = Arc::new(Mutex::new(Bounded::from(vec![0.0; buffer_size])));
         drop(prot_unlocked);
 
@@ -90,6 +110,7 @@ impl PlayerEngine {
             effects_buffer,
             abort,
             prot,
+            buffer_settings,
             reverb_settings,
             reverb_metrics,
         };
@@ -123,6 +144,7 @@ impl PlayerEngine {
         let effects_buffer = self.effects_buffer.clone();
         let prot_locked = self.prot.clone();
         let start_time = self.start_time;
+        let buffer_settings = self.buffer_settings.clone();
         let reverb_settings = self.reverb_settings.clone();
         let reverb_metrics = self.reverb_metrics.clone();
 
@@ -169,6 +191,12 @@ impl PlayerEngine {
             let (reverb_sender, reverb_receiver) =
                 spawn_reverb_worker(reverb, reverb_settings.clone(), reverb_metrics.clone());
 
+            let start_buffer_ms = buffer_settings.lock().unwrap().start_buffer_ms;
+            let start_samples = ((audio_info.sample_rate as f32 * start_buffer_ms) / 1000.0)
+                as usize
+                * audio_info.channels as usize;
+            let mut started = start_samples == 0;
+
             loop {
                 if abort.load(Ordering::SeqCst) {
                     break;
@@ -199,6 +227,20 @@ impl PlayerEngine {
                 // If hash_buffer contains no tracks, exit the loop
                 if hash_buffer.len() == 0 && effects_buffer.lock().unwrap().len() == 0 {
                     break;
+                }
+
+                if !started {
+                    let finished = finished_tracks.lock().unwrap();
+                    let ready = hash_buffer.iter().all(|(track_key, buffer)| {
+                        finished.contains(track_key) || buffer.len() >= start_samples
+                    });
+                    if ready {
+                        started = true;
+                    } else {
+                        drop(hash_buffer);
+                        thread::sleep(Duration::from_millis(10));
+                        continue;
+                    }
                 }
 
                 if all_buffers_full
@@ -304,8 +346,12 @@ impl PlayerEngine {
 
         let prot = self.prot.lock().unwrap();
         let sample_rate = prot.info.sample_rate;
+        let channels = prot.info.channels as usize;
+        let start_buffer_ms = self.buffer_settings.lock().unwrap().start_buffer_ms;
         drop(prot);
-        let buffer_size = sample_rate as usize * 1; // Ten seconds of audio at the sample rate
+        let start_samples =
+            ((sample_rate as f32 * start_buffer_ms) / 1000.0) as usize * channels;
+        let buffer_size = (sample_rate as usize * 1).max(start_samples * 2);
 
         for key in keys {
             let ring_buffer = Bounded::from(vec![0.0; buffer_size]);

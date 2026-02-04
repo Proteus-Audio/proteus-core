@@ -6,7 +6,7 @@ use std::{io, thread::sleep, time::Duration};
 use clap::{Arg, ArgMatches};
 use crossterm::{
     cursor,
-    event::{self, Event, KeyCode, KeyEventKind},
+    event::{self, Event, KeyCode, KeyEventKind, KeyModifiers},
     execute,
     terminal::{self, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -92,6 +92,13 @@ fn main() {
                 .value_name("COUNT")
                 .default_value("5")
                 .help("Number of iterations for DSP benchmark"),
+        )
+        .arg(
+            Arg::new("start-buffer-ms")
+                .long("start-buffer-ms")
+                .value_name("MS")
+                .default_value("20")
+                .help("Amount of audio (ms) to buffer before starting playback"),
         )
         .arg(
             Arg::new("decode-only")
@@ -322,6 +329,12 @@ fn run(args: &ArgMatches) -> Result<i32> {
     // let info = info::Info::new(file_path);
 
     let mut player = player::Player::new(&file_path);
+    let start_buffer_ms = args
+        .get_one::<String>("start-buffer-ms")
+        .unwrap()
+        .parse::<f32>()
+        .unwrap();
+    player.set_start_buffer_ms(start_buffer_ms);
     if let Some(impulse_response) = args.get_one::<String>("impulse-response") {
         player.set_impulse_response_from_string(impulse_response);
     }
@@ -416,6 +429,10 @@ fn run(args: &ArgMatches) -> Result<i32> {
                     continue;
                 }
                 match key.code {
+                    KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                        player.stop();
+                        break;
+                    }
                     KeyCode::Char('q') => {
                         player.stop();
                         break;
@@ -465,7 +482,7 @@ fn run(args: &ArgMatches) -> Result<i32> {
 
     if let Some(mut term) = terminal {
         let _ = term.show_cursor();
-        let mut stdout = term.backend_mut();
+        let stdout = term.backend_mut();
         let _ = execute!(stdout, LeaveAlternateScreen, cursor::Show);
     }
     Ok(0)
