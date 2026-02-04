@@ -213,7 +213,7 @@ fn run(args: &ArgMatches) -> Result<i32> {
             let reverb_metrics = player.get_reverb_metrics();
             let reverb_state = if reverb_settings.enabled { "on" } else { "off" };
             let status = format!(
-                "{}   {} / {}   ({:>5.1}%)\nReverb: {} | mix: {:.2}\nDSP: {:.2}ms / {:.2}ms ({:.2}x)",
+                "{}   {} / {}   ({:>5.1}%)\nReverb: {} | mix: {:.2}\nDSP: {:.2}ms / {:.2}ms ({:.2}x)\nAVG: {:.2}ms / {:.2}ms ({:.2}x)  MIN/MAX: {:.2}/{:.2}x",
                 state,
                 current,
                 total,
@@ -222,7 +222,12 @@ fn run(args: &ArgMatches) -> Result<i32> {
                 reverb_settings.dry_wet,
                 reverb_metrics.dsp_time_ms,
                 reverb_metrics.audio_time_ms,
-                reverb_metrics.rt_factor
+                reverb_metrics.rt_factor,
+                reverb_metrics.avg_dsp_ms,
+                reverb_metrics.avg_audio_ms,
+                reverb_metrics.avg_rt_factor,
+                reverb_metrics.min_rt_factor,
+                reverb_metrics.max_rt_factor
             );
 
             let _ = term.draw(|f| {
@@ -230,8 +235,8 @@ fn run(args: &ArgMatches) -> Result<i32> {
                     .direction(Direction::Vertical)
                     .margin(1)
                     .constraints([
-                        Constraint::Length(5),
-                        Constraint::Length(5),
+                        Constraint::Length(6),
+                        Constraint::Length(6),
                         Constraint::Min(0),
                     ])
                     .split(f.size());
@@ -239,8 +244,8 @@ fn run(args: &ArgMatches) -> Result<i32> {
                 let controls = Paragraph::new(
                     "space=play/pause  s=shuffle  ←/→=seek 5s  r=reverb on/off  -/= mix  q=quit",
                 )
-                    .style(Style::default().fg(Color::Blue))
-                    .block(Block::default().borders(Borders::ALL).title("Controls"));
+                .style(Style::default().fg(Color::Blue))
+                .block(Block::default().borders(Borders::ALL).title("Controls"));
                 f.render_widget(controls, chunks[0]);
 
                 let status_widget = Paragraph::new(status)

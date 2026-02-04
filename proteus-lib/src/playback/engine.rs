@@ -54,6 +54,11 @@ pub struct ReverbMetrics {
     pub dsp_time_ms: f64,
     pub audio_time_ms: f64,
     pub rt_factor: f64,
+    pub avg_dsp_ms: f64,
+    pub avg_audio_ms: f64,
+    pub avg_rt_factor: f64,
+    pub min_rt_factor: f64,
+    pub max_rt_factor: f64,
 }
 
 impl PlayerEngine {
@@ -429,6 +434,12 @@ fn spawn_reverb_worker(
     thread::spawn(move || {
         let mut current_dry_wet = 0.000001_f32;
         let mut last_log = Instant::now();
+        let mut avg_dsp_ms = 0.0_f64;
+        let mut avg_audio_ms = 0.0_f64;
+        let mut avg_rt_factor = 0.0_f64;
+        let mut min_rt_factor = f64::INFINITY;
+        let mut max_rt_factor = 0.0_f64;
+        let alpha = 0.1_f64;
 
         while let Ok(job) = job_receiver.recv() {
             let settings = *reverb_settings.lock().unwrap();
@@ -457,17 +468,60 @@ fn spawn_reverb_worker(
                 0.0
             };
 
+            avg_dsp_ms = if avg_dsp_ms == 0.0 {
+                dsp_time_ms
+            } else {
+                (avg_dsp_ms * (1.0 - alpha)) + (dsp_time_ms * alpha)
+            };
+            avg_audio_ms = if avg_audio_ms == 0.0 {
+                audio_time_ms
+            } else {
+                (avg_audio_ms * (1.0 - alpha)) + (audio_time_ms * alpha)
+            };
+            avg_rt_factor = if avg_rt_factor == 0.0 {
+                rt_factor
+            } else {
+                (avg_rt_factor * (1.0 - alpha)) + (rt_factor * alpha)
+            };
+
+            if rt_factor > 0.0 {
+                if rt_factor < min_rt_factor {
+                    min_rt_factor = rt_factor;
+                }
+                if rt_factor > max_rt_factor {
+                    max_rt_factor = rt_factor;
+                }
+            }
+
             {
                 let mut metrics = reverb_metrics.lock().unwrap();
                 metrics.dsp_time_ms = dsp_time_ms;
                 metrics.audio_time_ms = audio_time_ms;
                 metrics.rt_factor = rt_factor;
+                metrics.avg_dsp_ms = avg_dsp_ms;
+                metrics.avg_audio_ms = avg_audio_ms;
+                metrics.avg_rt_factor = avg_rt_factor;
+                metrics.min_rt_factor = if min_rt_factor.is_finite() {
+                    min_rt_factor
+                } else {
+                    0.0
+                };
+                metrics.max_rt_factor = max_rt_factor;
             }
 
             if last_log.elapsed().as_secs_f64() >= 1.0 {
                 info!(
-                    "DSP packet: {:.2}ms / {:.2}ms ({:.2}x realtime)",
-                    dsp_time_ms, audio_time_ms, rt_factor
+                    "DSP packet: {:.2}ms / {:.2}ms ({:.2}x realtime) avg {:.2}x (min {:.2}x max {:.2}x)",
+                    dsp_time_ms,
+                    audio_time_ms,
+                    rt_factor,
+                    avg_rt_factor,
+                    if min_rt_factor.is_finite() {
+                        min_rt_factor
+                    } else {
+                        0.0
+                    },
+                    max_rt_factor
                 );
                 last_log = Instant::now();
             }
