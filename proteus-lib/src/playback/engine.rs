@@ -1,5 +1,5 @@
 use dasp_ring_buffer::Bounded;
-use log::warn;
+use log::{info, warn};
 use rodio::{
     buffer::SamplesBuffer,
     dynamic_mixer::{self},
@@ -8,7 +8,7 @@ use rodio::{
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use std::{collections::HashMap, sync::mpsc::Receiver, thread};
 
 use crate::{
@@ -31,6 +31,7 @@ pub struct PlayerEngine {
     effects_buffer: Arc<Mutex<Bounded<Vec<f32>>>>,
     prot: Arc<Mutex<Prot>>,
     reverb_settings: Arc<Mutex<ReverbSettings>>,
+    reverb_metrics: Arc<Mutex<ReverbMetrics>>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -48,12 +49,20 @@ impl ReverbSettings {
     }
 }
 
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ReverbMetrics {
+    pub dsp_time_ms: f64,
+    pub audio_time_ms: f64,
+    pub rt_factor: f64,
+}
+
 impl PlayerEngine {
     pub fn new(
         prot: Arc<Mutex<Prot>>,
         abort_option: Option<Arc<AtomicBool>>,
         start_time: f64,
         reverb_settings: Arc<Mutex<ReverbSettings>>,
+        reverb_metrics: Arc<Mutex<ReverbMetrics>>,
     ) -> Self {
         let buffer_map = init_buffer_map();
         let finished_tracks: Arc<Mutex<Vec<u16>>> = Arc::new(Mutex::new(Vec::new()));
@@ -76,6 +85,7 @@ impl PlayerEngine {
             abort,
             prot,
             reverb_settings,
+            reverb_metrics,
         };
 
         this
@@ -108,6 +118,7 @@ impl PlayerEngine {
         let prot_locked = self.prot.clone();
         let start_time = self.start_time;
         let reverb_settings = self.reverb_settings.clone();
+        let reverb_metrics = self.reverb_metrics.clone();
 
         thread::spawn(move || {
             let prot = prot_locked.lock().unwrap();
@@ -148,7 +159,7 @@ impl PlayerEngine {
                 container_path.as_deref(),
             );
             let (reverb_sender, reverb_receiver) =
-                spawn_reverb_worker(reverb, reverb_settings.clone());
+                spawn_reverb_worker(reverb, reverb_settings.clone(), reverb_metrics.clone());
 
             loop {
                 if abort.load(Ordering::SeqCst) {
@@ -247,7 +258,13 @@ impl PlayerEngine {
                     let vector_samples = mixer_buffered.clone().into_iter().collect::<Vec<f32>>();
                     let input_channels = mixer_buffered.channels();
 
-                    let samples = process_reverb(&reverb_sender, &reverb_receiver, vector_samples);
+                    let samples = process_reverb(
+                        &reverb_sender,
+                        &reverb_receiver,
+                        vector_samples,
+                        input_channels,
+                        sample_rate,
+                    );
 
                     let samples_buffer = SamplesBuffer::new(input_channels, sample_rate, samples);
 
@@ -393,6 +410,8 @@ fn resolve_impulse_response_path(container_path: Option<&str>, path: &str) -> Pa
 
 struct ReverbJob {
     samples: Vec<f32>,
+    channels: u16,
+    sample_rate: u32,
 }
 
 struct ReverbResult {
@@ -402,12 +421,14 @@ struct ReverbResult {
 fn spawn_reverb_worker(
     mut reverb: Reverb,
     reverb_settings: Arc<Mutex<ReverbSettings>>,
+    reverb_metrics: Arc<Mutex<ReverbMetrics>>,
 ) -> (mpsc::SyncSender<ReverbJob>, mpsc::Receiver<ReverbResult>) {
     let (job_sender, job_receiver) = mpsc::sync_channel::<ReverbJob>(1);
     let (result_sender, result_receiver) = mpsc::sync_channel::<ReverbResult>(1);
 
     thread::spawn(move || {
         let mut current_dry_wet = 0.000001_f32;
+        let mut last_log = Instant::now();
 
         while let Ok(job) = job_receiver.recv() {
             let settings = *reverb_settings.lock().unwrap();
@@ -416,11 +437,40 @@ fn spawn_reverb_worker(
                 current_dry_wet = settings.dry_wet;
             }
 
+            let audio_time_ms = if job.channels > 0 && job.sample_rate > 0 {
+                let frames = job.samples.len() as f64 / job.channels as f64;
+                (frames / job.sample_rate as f64) * 1000.0
+            } else {
+                0.0
+            };
+
+            let dsp_start = Instant::now();
             let samples = if settings.enabled && settings.dry_wet > 0.0 {
                 reverb.process(&job.samples)
             } else {
                 job.samples
             };
+            let dsp_time_ms = dsp_start.elapsed().as_secs_f64() * 1000.0;
+            let rt_factor = if audio_time_ms > 0.0 {
+                dsp_time_ms / audio_time_ms
+            } else {
+                0.0
+            };
+
+            {
+                let mut metrics = reverb_metrics.lock().unwrap();
+                metrics.dsp_time_ms = dsp_time_ms;
+                metrics.audio_time_ms = audio_time_ms;
+                metrics.rt_factor = rt_factor;
+            }
+
+            if last_log.elapsed().as_secs_f64() >= 1.0 {
+                info!(
+                    "DSP packet: {:.2}ms / {:.2}ms ({:.2}x realtime)",
+                    dsp_time_ms, audio_time_ms, rt_factor
+                );
+                last_log = Instant::now();
+            }
 
             if result_sender.send(ReverbResult { samples }).is_err() {
                 break;
@@ -435,8 +485,17 @@ fn process_reverb(
     sender: &mpsc::SyncSender<ReverbJob>,
     receiver: &mpsc::Receiver<ReverbResult>,
     samples: Vec<f32>,
+    channels: u16,
+    sample_rate: u32,
 ) -> Vec<f32> {
-    if sender.send(ReverbJob { samples }).is_err() {
+    if sender
+        .send(ReverbJob {
+            samples,
+            channels,
+            sample_rate,
+        })
+        .is_err()
+    {
         return Vec::new();
     }
 

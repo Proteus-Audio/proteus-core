@@ -210,15 +210,19 @@ fn run(args: &ArgMatches) -> Result<i32> {
                 0.0
             };
             let reverb_settings = player.get_reverb_settings();
+            let reverb_metrics = player.get_reverb_metrics();
             let reverb_state = if reverb_settings.enabled { "on" } else { "off" };
             let status = format!(
-                "{}   {} / {}   ({:>5.1}%)\nReverb: {} ({:.2})",
+                "{}   {} / {}   ({:>5.1}%)\nReverb: {} | mix: {:.2}\nDSP: {:.2}ms / {:.2}ms ({:.2}x)",
                 state,
                 current,
                 total,
                 percent,
                 reverb_state,
-                reverb_settings.dry_wet
+                reverb_settings.dry_wet,
+                reverb_metrics.dsp_time_ms,
+                reverb_metrics.audio_time_ms,
+                reverb_metrics.rt_factor
             );
 
             let _ = term.draw(|f| {
@@ -227,7 +231,7 @@ fn run(args: &ArgMatches) -> Result<i32> {
                     .margin(1)
                     .constraints([
                         Constraint::Length(5),
-                        Constraint::Length(4),
+                        Constraint::Length(5),
                         Constraint::Min(0),
                     ])
                     .split(f.size());
