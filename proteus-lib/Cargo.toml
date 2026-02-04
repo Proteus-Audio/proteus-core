@@ -22,5 +22,9 @@ matroska = "0.26.0"
 rand = "0.8.5"
 rodio = "0.17.3"
 rustfft = "6.1.0"
+realfft = { version = "3.3.0", optional = true }
 serde_json = "1.0.108"
 symphonia = "0.5.3"
+
+[features]
+real-fft = ["realfft"]
