@@ -12,8 +12,6 @@ use crate::effects::impulse_response::ImpulseResponse;
 use crate::effects::spring_impulse_response::SPRING_IMPULSE_RESPONSE;
 
 const FFT_SIZE: usize = 24576;
-// const FFT_SIZE: usize = 4096;
-// const FFT_SIZE: usize = 1024;
 
 pub struct Reverb {
     channels: usize,

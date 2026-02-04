@@ -1,15 +1,15 @@
 use dasp_ring_buffer::Bounded;
+use log::warn;
 use rodio::{
     buffer::SamplesBuffer,
     dynamic_mixer::{self},
     Source,
 };
-use log::warn;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
 use std::{collections::HashMap, sync::mpsc::Receiver, thread};
-use std::path::{Path, PathBuf};
 
 use crate::{
     buffer::*,
@@ -143,13 +143,14 @@ impl PlayerEngine {
                 )
             };
 
-            let mut reverb = build_reverb_with_impulse_response(
+            let reverb = build_reverb_with_impulse_response(
                 output_channels,
                 0.000001,
                 impulse_spec,
                 container_path.as_deref(),
             );
-            let mut current_dry_wet = 0.000001_f32;
+            let (reverb_sender, reverb_receiver) =
+                spawn_reverb_worker(reverb, reverb_settings.clone());
 
             loop {
                 if abort.load(Ordering::SeqCst) {
@@ -209,7 +210,11 @@ impl PlayerEngine {
                             samples.push(buffer.pop().unwrap());
                         }
 
-                        let source = SamplesBuffer::new(2, audio_info.sample_rate as u32, samples);
+                        let source = SamplesBuffer::new(
+                            audio_info.channels as u16,
+                            audio_info.sample_rate as u32,
+                            samples,
+                        );
 
                         controller.add(source.convert_samples().amplify(0.2));
                     }
@@ -228,28 +233,25 @@ impl PlayerEngine {
                             samples.push(effects_buffer_unlocked.pop().unwrap());
                         }
 
-                        let source = SamplesBuffer::new(2, audio_info.sample_rate as u32, samples);
+                        let source = SamplesBuffer::new(
+                            audio_info.channels as u16,
+                            audio_info.sample_rate as u32,
+                            samples,
+                        );
 
                         controller.add(source.convert_samples().amplify(0.2));
                     }
 
                     drop(effects_buffer_unlocked);
 
-                    let settings = *reverb_settings.lock().unwrap();
-                    if (settings.dry_wet - current_dry_wet).abs() > f32::EPSILON {
-                        reverb.set_dry_wet(settings.dry_wet);
-                        current_dry_wet = settings.dry_wet;
-                    }
+                    let sample_rate = mixer.sample_rate();
+                    let mixer_buffered = mixer.buffered();
+                    let vector_samples = mixer_buffered.clone().into_iter().collect::<Vec<f32>>();
+                    let input_channels = mixer_buffered.channels();
 
-                    let samples_buffer = if settings.enabled && settings.dry_wet > 0.0 {
-                        reverb.process_mixer(mixer)
-                    } else {
-                        let sample_rate = mixer.sample_rate();
-                        let mixer_buffered = mixer.buffered();
-                        let vector_samples =
-                            mixer_buffered.clone().into_iter().collect::<Vec<f32>>();
-                        SamplesBuffer::new(mixer_buffered.channels(), sample_rate, vector_samples)
-                    };
+                    let samples = process_reverb(&reverb_sender, &reverb_receiver, vector_samples);
+
+                    let samples_buffer = SamplesBuffer::new(input_channels, sample_rate, samples);
 
                     // Samples in the samples_buffer
                     let length_in_seconds = length_of_smallest_buffer as f64
@@ -389,4 +391,59 @@ fn resolve_impulse_response_path(container_path: Option<&str>, path: &str) -> Pa
     }
 
     path.to_path_buf()
+}
+
+struct ReverbJob {
+    samples: Vec<f32>,
+}
+
+struct ReverbResult {
+    samples: Vec<f32>,
+}
+
+fn spawn_reverb_worker(
+    mut reverb: Reverb,
+    reverb_settings: Arc<Mutex<ReverbSettings>>,
+) -> (mpsc::SyncSender<ReverbJob>, mpsc::Receiver<ReverbResult>) {
+    let (job_sender, job_receiver) = mpsc::sync_channel::<ReverbJob>(1);
+    let (result_sender, result_receiver) = mpsc::sync_channel::<ReverbResult>(1);
+
+    thread::spawn(move || {
+        let mut current_dry_wet = 0.000001_f32;
+
+        while let Ok(job) = job_receiver.recv() {
+            let settings = *reverb_settings.lock().unwrap();
+            if (settings.dry_wet - current_dry_wet).abs() > f32::EPSILON {
+                reverb.set_dry_wet(settings.dry_wet);
+                current_dry_wet = settings.dry_wet;
+            }
+
+            let samples = if settings.enabled && settings.dry_wet > 0.0 {
+                reverb.process(&job.samples)
+            } else {
+                job.samples
+            };
+
+            if result_sender.send(ReverbResult { samples }).is_err() {
+                break;
+            }
+        }
+    });
+
+    (job_sender, result_receiver)
+}
+
+fn process_reverb(
+    sender: &mpsc::SyncSender<ReverbJob>,
+    receiver: &mpsc::Receiver<ReverbResult>,
+    samples: Vec<f32>,
+) -> Vec<f32> {
+    if sender.send(ReverbJob { samples }).is_err() {
+        return Vec::new();
+    }
+
+    match receiver.recv() {
+        Ok(result) => result.samples,
+        Err(_) => Vec::new(),
+    }
 }
