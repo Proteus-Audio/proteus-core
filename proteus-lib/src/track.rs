@@ -19,6 +19,7 @@ pub struct TrackArgs {
     pub track_id: Option<u32>,
     pub track_key: u16,
     pub buffer_map: Arc<Mutex<HashMap<u16, Bounded<Vec<f32>>>>>,
+    pub buffer_notify: Option<Arc<std::sync::Condvar>>,
     pub finished_tracks: Arc<Mutex<Vec<u16>>>,
     pub start_time: f64,
     pub channels: u8,
@@ -96,6 +97,7 @@ pub fn buffer_track(args: TrackArgs, abort: Arc<AtomicBool>) -> Arc<Mutex<bool>>
         track_id,
         track_key,
         buffer_map,
+        buffer_notify,
         finished_tracks,
         start_time,
         channels,
@@ -191,7 +193,12 @@ pub fn buffer_track(args: TrackArgs, abort: Arc<AtomicBool>) -> Arc<Mutex<bool>>
                         continue;
                     }
 
-                    add_samples_to_buffer_map(&mut buffer_map.clone(), track_key, stereo_samples);
+                    add_samples_to_buffer_map(
+                        &mut buffer_map.clone(),
+                        track_key,
+                        stereo_samples,
+                        buffer_notify.as_ref(),
+                    );
                 }
                 Err(Error::DecodeError(err)) => {
                     // Decode errors are not fatal. Print the error message and try to decode the next
@@ -209,6 +216,9 @@ pub fn buffer_track(args: TrackArgs, abort: Arc<AtomicBool>) -> Arc<Mutex<bool>>
 
         // Mark the track as finished
         mark_track_as_finished(&mut finished_tracks.clone(), track_key);
+        if let Some(notify) = buffer_notify.as_ref() {
+            notify.notify_all();
+        }
     });
 
     return playing;
@@ -218,6 +228,7 @@ pub struct ContainerTrackArgs {
     pub file_path: String,
     pub track_entries: Vec<(u16, u32)>,
     pub buffer_map: Arc<Mutex<HashMap<u16, Bounded<Vec<f32>>>>>,
+    pub buffer_notify: Option<Arc<std::sync::Condvar>>,
     pub finished_tracks: Arc<Mutex<Vec<u16>>>,
     pub start_time: f64,
     pub channels: u8,
@@ -228,6 +239,7 @@ pub fn buffer_container_tracks(args: ContainerTrackArgs, abort: Arc<AtomicBool>)
         file_path,
         track_entries,
         buffer_map,
+        buffer_notify,
         finished_tracks,
         start_time,
         channels,
@@ -384,6 +396,7 @@ pub fn buffer_container_tracks(args: ContainerTrackArgs, abort: Arc<AtomicBool>)
                             &mut buffer_map.clone(),
                             *track_key,
                             stereo_samples.clone(),
+                            buffer_notify.as_ref(),
                         );
                     }
                 }
@@ -401,6 +414,9 @@ pub fn buffer_container_tracks(args: ContainerTrackArgs, abort: Arc<AtomicBool>)
         for (track_key, track_id) in &valid_entries {
             if !finished_track_ids.contains(track_id) {
                 mark_track_as_finished(&mut finished_tracks.clone(), *track_key);
+                if let Some(notify) = buffer_notify.as_ref() {
+                    notify.notify_all();
+                }
             }
         }
     });
@@ -412,6 +428,7 @@ fn add_samples_to_buffer_map(
     buffer_map: &mut Arc<Mutex<HashMap<u16, Bounded<Vec<f32>>>>>,
     track_key: u16,
     samples: Vec<f32>,
+    notify: Option<&Arc<std::sync::Condvar>>,
 ) {
     while buffer_remaining_space(buffer_map, track_key) < samples.len() {
         thread::sleep(Duration::from_millis(100));
@@ -424,12 +441,16 @@ fn add_samples_to_buffer_map(
     }
 
     drop(hash_buffer);
+    if let Some(notify) = notify {
+        notify.notify_one();
+    }
 }
 
 fn add_samples_to_buffer_map_nonblocking(
     buffer_map: &mut Arc<Mutex<HashMap<u16, Bounded<Vec<f32>>>>>,
     track_key: u16,
     samples: Vec<f32>,
+    notify: Option<&Arc<std::sync::Condvar>>,
 ) {
     let remaining = buffer_remaining_space(buffer_map, track_key);
     if remaining == 0 {
@@ -444,6 +465,9 @@ fn add_samples_to_buffer_map_nonblocking(
         }
     }
     drop(hash_buffer);
+    if let Some(notify) = notify {
+        notify.notify_one();
+    }
 }
 
 fn mark_track_as_finished(finished_tracks: &mut Arc<Mutex<Vec<u16>>>, track_key: u16) {

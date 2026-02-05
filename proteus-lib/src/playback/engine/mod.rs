@@ -2,7 +2,7 @@ use dasp_ring_buffer::Bounded;
 use rodio::buffer::SamplesBuffer;
 use std::collections::HashMap;
 use std::sync::atomic::AtomicBool;
-use std::sync::{mpsc::Receiver, Arc, Mutex};
+use std::sync::{mpsc::Receiver, Arc, Condvar, Mutex};
 
 use crate::audio::buffer::init_buffer_map;
 use crate::container::prot::Prot;
@@ -21,6 +21,7 @@ pub struct PlayerEngine {
     start_time: f64,
     abort: Arc<AtomicBool>,
     buffer_map: Arc<Mutex<HashMap<u16, Bounded<Vec<f32>>>>>,
+    buffer_notify: Arc<Condvar>,
     effects_buffer: Arc<Mutex<Bounded<Vec<f32>>>>,
     prot: Arc<Mutex<Prot>>,
     buffer_settings: Arc<Mutex<PlaybackBufferSettings>>,
@@ -38,6 +39,7 @@ impl PlayerEngine {
         reverb_metrics: Arc<Mutex<ReverbMetrics>>,
     ) -> Self {
         let buffer_map = init_buffer_map();
+        let buffer_notify = Arc::new(Condvar::new());
         let finished_tracks: Arc<Mutex<Vec<u16>>> = Arc::new(Mutex::new(Vec::new()));
         let abort = if abort_option.is_some() {
             abort_option.unwrap()
@@ -59,6 +61,7 @@ impl PlayerEngine {
             finished_tracks,
             start_time,
             buffer_map,
+            buffer_notify,
             effects_buffer,
             abort,
             prot,
@@ -88,6 +91,7 @@ impl PlayerEngine {
         spawn_mix_thread(MixThreadArgs {
             audio_info,
             buffer_map: self.buffer_map.clone(),
+            buffer_notify: self.buffer_notify.clone(),
             effects_buffer: self.effects_buffer.clone(),
             finished_tracks: self.finished_tracks.clone(),
             prot: self.prot.clone(),

@@ -21,6 +21,7 @@ use super::state::{PlaybackBufferSettings, ReverbMetrics, ReverbSettings};
 pub struct MixThreadArgs {
     pub audio_info: crate::container::info::Info,
     pub buffer_map: Arc<Mutex<HashMap<u16, Bounded<Vec<f32>>>>>,
+    pub buffer_notify: Arc<std::sync::Condvar>,
     pub effects_buffer: Arc<Mutex<Bounded<Vec<f32>>>>,
     pub finished_tracks: Arc<Mutex<Vec<u16>>>,
     pub prot: Arc<Mutex<Prot>>,
@@ -37,6 +38,7 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer<f3
     let MixThreadArgs {
         audio_info,
         buffer_map,
+        buffer_notify,
         effects_buffer,
         finished_tracks,
         prot,
@@ -90,6 +92,7 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer<f3
                     file_path,
                     track_entries,
                     buffer_map: buffer_map.clone(),
+                    buffer_notify: Some(buffer_notify.clone()),
                     finished_tracks: finished_tracks.clone(),
                     start_time,
                     channels: audio_info.channels as u8,
@@ -104,6 +107,7 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer<f3
                         track_id,
                         track_key: key,
                         buffer_map: buffer_map.clone(),
+                        buffer_notify: Some(buffer_notify.clone()),
                         finished_tracks: finished_tracks.clone(),
                         start_time,
                         channels: audio_info.channels as u8,
@@ -169,25 +173,26 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer<f3
                 break;
             }
 
-            if !started {
-                let finished = finished_tracks.lock().unwrap();
-                let ready = hash_buffer.iter().all(|(track_key, buffer)| {
-                    finished.contains(track_key) || buffer.len() >= start_samples
-                });
-                if ready {
-                    started = true;
-                } else {
-                    drop(hash_buffer);
-                    thread::sleep(Duration::from_millis(10));
-                    continue;
+                if !started {
+                    let finished = finished_tracks.lock().unwrap();
+                    let ready = hash_buffer.iter().all(|(track_key, buffer)| {
+                        finished.contains(track_key) || buffer.len() >= start_samples
+                    });
+                    if ready {
+                        started = true;
+                    } else {
+                        let (guard, _) = buffer_notify
+                            .wait_timeout(hash_buffer, Duration::from_millis(20))
+                            .unwrap();
+                        drop(guard);
+                        continue;
+                    }
                 }
-            }
 
-            if all_buffers_full
-                || (effects_buffer.lock().unwrap().len() > 0 && hash_buffer.len() == 0)
-            {
-                #[cfg(feature = "debug")]
-                let chain_start = Instant::now();
+                let effects_len = effects_buffer.lock().unwrap().len();
+                if all_buffers_full || (effects_len > 0 && hash_buffer.len() == 0) {
+                    #[cfg(feature = "debug")]
+                    let chain_start = Instant::now();
 
                 let (controller, mixer) = dynamic_mixer::mixer::<f32>(
                     audio_info.channels as u16,
@@ -347,9 +352,14 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer<f3
                 }
             }
 
-            drop(hash_buffer);
-
-            thread::sleep(Duration::from_millis(100));
+            if !all_buffers_full && effects_len == 0 {
+                let (guard, _) = buffer_notify
+                    .wait_timeout(hash_buffer, Duration::from_millis(20))
+                    .unwrap();
+                drop(guard);
+            } else {
+                drop(hash_buffer);
+            }
         }
     });
 
