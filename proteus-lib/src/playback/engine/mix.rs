@@ -168,6 +168,16 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer<f3
         let mut max_rt_factor = 0.0_f64;
         #[cfg(feature = "debug")]
         let alpha = 0.1_f64;
+        #[cfg(feature = "debug")]
+        let mut reverb_underflow_events: u64 = 0;
+        #[cfg(feature = "debug")]
+        let mut reverb_underflow_samples: u64 = 0;
+        #[cfg(feature = "debug")]
+        let mut reverb_pad_events: u64 = 0;
+        #[cfg(feature = "debug")]
+        let mut reverb_pad_samples: u64 = 0;
+        #[cfg(feature = "debug")]
+        let mut reverb_partial_drain_events: u64 = 0;
 
         let start_buffer_ms = buffer_settings.lock().unwrap().start_buffer_ms;
         let start_samples = ((audio_info.sample_rate as f32 * start_buffer_ms) / 1000.0) as usize
@@ -355,6 +365,11 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer<f3
                     {
                         reverb_out_rms = 0.0;
                         reverb_out_peak = 0.0;
+                        reverb_underflow_events = 0;
+                        reverb_underflow_samples = 0;
+                        reverb_pad_events = 0;
+                        reverb_pad_samples = 0;
+                        reverb_partial_drain_events = 0;
                     }
                     current_dry_wet = f32::NAN;
                     last_reverb_reset = current_reset;
@@ -388,6 +403,11 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer<f3
                             } else {
                                 reverb_input_buf.len()
                             };
+                            #[cfg(feature = "debug")]
+                            if take < batch_samples {
+                                reverb_partial_drain_events =
+                                    reverb_partial_drain_events.saturating_add(1);
+                            }
                             let block: Vec<f32> = reverb_input_buf.drain(0..take).collect();
                             reverb.process_into(&block, &mut reverb_block_out);
                             #[cfg(feature = "debug")]
@@ -418,7 +438,19 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer<f3
                         }
                         if reverb_output_buf.len() < current_chunk {
                             let mut out = reverb_output_buf.clone();
-                            out.extend(std::iter::repeat(0.0).take(current_chunk - out.len()));
+                            #[cfg(feature = "debug")]
+                            {
+                                let pad = current_chunk - out.len();
+                                if pad > 0 {
+                                    reverb_underflow_events =
+                                        reverb_underflow_events.saturating_add(1);
+                                    reverb_underflow_samples =
+                                        reverb_underflow_samples.saturating_add(pad as u64);
+                                    reverb_pad_events = reverb_pad_events.saturating_add(1);
+                                    reverb_pad_samples =
+                                        reverb_pad_samples.saturating_add(pad as u64);
+                                }
+                            }
                             reverb_output_buf.clear();
                             out
                         } else {
@@ -562,6 +594,7 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer<f3
 
                     let chain_time_ms = chain_start.elapsed().as_secs_f64() * 1000.0;
                     let out_interval_ms = last_send.elapsed().as_secs_f64() * 1000.0;
+                    let append_gap_ms = out_interval_ms;
 
                     avg_chain_time_ms = if avg_chain_time_ms == 0.0 {
                         chain_time_ms
@@ -581,6 +614,19 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer<f3
                     max_out_interval_ms = max_out_interval_ms.max(out_interval_ms);
 
                     let mut metrics = reverb_metrics.lock().unwrap();
+                    metrics.append_gap_ms = append_gap_ms;
+                    metrics.avg_append_gap_ms = if metrics.avg_append_gap_ms == 0.0 {
+                        append_gap_ms
+                    } else {
+                        (metrics.avg_append_gap_ms * (1.0 - alpha_chain))
+                            + (append_gap_ms * alpha_chain)
+                    };
+                    metrics.min_append_gap_ms = if metrics.min_append_gap_ms == 0.0 {
+                        append_gap_ms
+                    } else {
+                        metrics.min_append_gap_ms.min(append_gap_ms)
+                    };
+                    metrics.max_append_gap_ms = metrics.max_append_gap_ms.max(append_gap_ms);
                     metrics.chain_time_ms = chain_time_ms;
                     metrics.avg_chain_time_ms = avg_chain_time_ms;
                     metrics.min_chain_time_ms = if min_chain_time_ms.is_finite() {
@@ -607,6 +653,12 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer<f3
                     metrics.reverb_in_len = reverb_input_buf.len();
                     metrics.reverb_out_len = reverb_output_buf.len();
                     metrics.reverb_reset_gen = current_reset;
+                    metrics.reverb_block_samples = reverb_block_samples;
+                    metrics.reverb_underflow_events = reverb_underflow_events;
+                    metrics.reverb_underflow_samples = reverb_underflow_samples;
+                    metrics.reverb_pad_events = reverb_pad_events;
+                    metrics.reverb_pad_samples = reverb_pad_samples;
+                    metrics.reverb_partial_drain_events = reverb_partial_drain_events;
                 }
 
                 sender.send((samples_buffer, length_in_seconds)).unwrap();

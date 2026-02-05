@@ -84,7 +84,7 @@ pub fn run(args: &ArgMatches, log_buffer: Arc<Mutex<VecDeque<String>>>) -> Resul
             #[cfg(feature = "debug")]
             let buffering_done = player.debug_buffering_done();
             #[cfg(feature = "debug")]
-            let (sink_paused, sink_empty, sink_len) = player.debug_sink_state();
+            let (_sink_paused, _sink_empty, sink_len) = player.debug_sink_state();
             let log_lines = logging::snapshot(&log_buffer);
             let status = controls::status_text(controls::StatusArgs {
                 time,
@@ -160,6 +160,26 @@ pub fn run(args: &ArgMatches, log_buffer: Arc<Mutex<VecDeque<String>>>) -> Resul
                 reverb_out_len: reverb_metrics.reverb_out_len,
                 #[cfg(feature = "debug")]
                 reverb_reset_gen: reverb_metrics.reverb_reset_gen,
+                #[cfg(feature = "debug")]
+                reverb_block_samples: reverb_metrics.reverb_block_samples,
+                #[cfg(feature = "debug")]
+                reverb_underflow_events: reverb_metrics.reverb_underflow_events,
+                #[cfg(feature = "debug")]
+                reverb_underflow_samples: reverb_metrics.reverb_underflow_samples,
+                #[cfg(feature = "debug")]
+                reverb_pad_events: reverb_metrics.reverb_pad_events,
+                #[cfg(feature = "debug")]
+                reverb_pad_samples: reverb_metrics.reverb_pad_samples,
+                #[cfg(feature = "debug")]
+                reverb_partial_drain_events: reverb_metrics.reverb_partial_drain_events,
+                #[cfg(feature = "debug")]
+                append_gap_ms: reverb_metrics.append_gap_ms,
+                #[cfg(feature = "debug")]
+                avg_append_gap_ms: reverb_metrics.avg_append_gap_ms,
+                #[cfg(feature = "debug")]
+                min_append_gap_ms: reverb_metrics.min_append_gap_ms,
+                #[cfg(feature = "debug")]
+                max_append_gap_ms: reverb_metrics.max_append_gap_ms,
                 #[cfg(feature = "debug")]
                 thread_exists,
                 #[cfg(feature = "debug")]
