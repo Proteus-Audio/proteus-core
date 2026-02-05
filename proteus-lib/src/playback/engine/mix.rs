@@ -50,6 +50,7 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer<f3
     } = args;
 
     thread::spawn(move || {
+        const MIN_MIX_MS: f32 = 10.0;
         #[cfg(feature = "debug")]
         let mut avg_buffer_fill = 0.0_f64;
         #[cfg(feature = "debug")]
@@ -146,6 +147,8 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer<f3
         let start_buffer_ms = buffer_settings.lock().unwrap().start_buffer_ms;
         let start_samples = ((audio_info.sample_rate as f32 * start_buffer_ms) / 1000.0) as usize
             * audio_info.channels as usize;
+        let min_mix_samples = ((audio_info.sample_rate as f32 * MIN_MIX_MS) / 1000.0) as usize
+            * audio_info.channels as usize;
         let mut started = start_samples == 0;
 
         loop {
@@ -206,7 +209,25 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer<f3
 
                 let effects_len = effects_buffer.lock().unwrap().len();
             let mut did_work = false;
-            if all_buffers_full || (effects_len > 0 && hash_buffer.len() == 0) {
+            let min_len = if hash_buffer.is_empty() {
+                0
+            } else {
+                hash_buffer
+                    .iter()
+                    .map(|(_, buffer)| buffer.len())
+                    .min()
+                    .unwrap_or(0)
+            };
+            let all_tracks_finished = {
+                let finished = finished_tracks.lock().unwrap();
+                hash_buffer.iter().all(|(track_key, _)| finished.contains(track_key))
+            };
+            let should_mix_tracks = (!hash_buffer.is_empty()
+                && (min_len >= min_mix_samples || (all_tracks_finished && min_len > 0)));
+            let should_mix_effects = hash_buffer.is_empty()
+                && (effects_len >= min_mix_samples || (all_tracks_finished && effects_len > 0));
+
+            if should_mix_tracks || should_mix_effects {
                 #[cfg(feature = "debug")]
                 let chain_start = Instant::now();
 
@@ -221,28 +242,27 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer<f3
                     combined_buffer.insert(*track_key, buffer.clone());
                 }
 
-                let length_of_smallest_buffer = hash_buffer
-                    .iter()
-                    .map(|(_, buffer)| buffer.len())
-                    .min()
-                    .unwrap();
-                for (_, buffer) in hash_buffer.iter_mut() {
-                    let mut samples: Vec<f32> = Vec::new();
-                    for _ in 0..length_of_smallest_buffer {
-                        samples.push(buffer.pop().unwrap());
+                let length_of_smallest_buffer = if hash_buffer.is_empty() { 0 } else { min_len };
+                if !hash_buffer.is_empty() {
+                    for (_, buffer) in hash_buffer.iter_mut() {
+                        let mut samples: Vec<f32> = Vec::new();
+                        for _ in 0..length_of_smallest_buffer {
+                            samples.push(buffer.pop().unwrap());
+                        }
+
+                        let source = SamplesBuffer::new(
+                            audio_info.channels as u16,
+                            audio_info.sample_rate as u32,
+                            samples,
+                        );
+
+                        controller.add(source.convert_samples().amplify(0.2));
                     }
-
-                    let source = SamplesBuffer::new(
-                        audio_info.channels as u16,
-                        audio_info.sample_rate as u32,
-                        samples,
-                    );
-
-                    controller.add(source.convert_samples().amplify(0.2));
                 }
 
-                let num_effects_samples = if effects_buffer_unlocked.len() < length_of_smallest_buffer
-                {
+                let num_effects_samples = if hash_buffer.is_empty() {
+                    effects_buffer_unlocked.len()
+                } else if effects_buffer_unlocked.len() < length_of_smallest_buffer {
                     effects_buffer_unlocked.len()
                 } else {
                     length_of_smallest_buffer
@@ -280,14 +300,19 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer<f3
 
                 let samples_buffer = SamplesBuffer::new(input_channels, sample_rate, samples);
 
-                let length_in_seconds = length_of_smallest_buffer as f64
+                let base_len = if length_of_smallest_buffer > 0 {
+                    length_of_smallest_buffer
+                } else {
+                    num_effects_samples
+                };
+                let length_in_seconds = base_len as f64
                     / audio_info.sample_rate as f64
                     / audio_info.channels as f64;
 
                 #[cfg(feature = "debug")]
                 {
-                    if started {
-                        let total_samples = length_of_smallest_buffer as f64;
+                    if started && !hash_buffer.is_empty() {
+                        let total_samples = base_len as f64;
                         let capacity_samples = hash_buffer
                             .iter()
                             .map(|(_, buffer)| buffer.max_len())
