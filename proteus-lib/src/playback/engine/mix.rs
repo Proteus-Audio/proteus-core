@@ -20,6 +20,7 @@ pub struct MixThreadArgs {
     pub buffer_map: Arc<Mutex<HashMap<u16, TrackBuffer>>>,
     pub buffer_notify: Arc<std::sync::Condvar>,
     pub effects_buffer: Arc<Mutex<Bounded<Vec<f32>>>>,
+    pub track_weights: Arc<Mutex<HashMap<u16, f32>>>,
     pub finished_tracks: Arc<Mutex<Vec<u16>>>,
     pub prot: Arc<Mutex<Prot>>,
     pub abort: Arc<AtomicBool>,
@@ -37,6 +38,7 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer<f3
         buffer_map,
         buffer_notify,
         effects_buffer,
+        track_weights,
         finished_tracks,
         prot,
         abort,
@@ -95,6 +97,7 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer<f3
                     track_entries,
                     buffer_map: buffer_map.clone(),
                     buffer_notify: Some(buffer_notify.clone()),
+                    track_weights: Some(track_weights.clone()),
                     finished_tracks: finished_tracks.clone(),
                     start_time,
                     channels: audio_info.channels as u8,
@@ -110,6 +113,7 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer<f3
                         track_key: key,
                         buffer_map: buffer_map.clone(),
                         buffer_notify: Some(buffer_notify.clone()),
+                        track_weights: None,
                         finished_tracks: finished_tracks.clone(),
                         start_time,
                         channels: audio_info.channels as u8,
@@ -173,6 +177,10 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer<f3
             let buffer_snapshot: Vec<(u16, TrackBuffer)> = {
                 let map = hash_buffer_copy.lock().unwrap();
                 map.iter().map(|(k, v)| (*k, v.clone())).collect()
+            };
+            let weights_snapshot: HashMap<u16, f32> = {
+                let weights = track_weights.lock().unwrap();
+                weights.clone()
             };
             let mut removable_tracks: Vec<u16> = Vec::new();
             #[cfg(feature = "debug")]
@@ -302,10 +310,11 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer<f3
                 mix_buffer.fill(0.0);
 
                 if !buffer_snapshot.is_empty() {
-                    for (_, buffer) in buffer_snapshot.iter() {
+                    for (track_key, buffer) in buffer_snapshot.iter() {
+                        let weight = weights_snapshot.get(track_key).copied().unwrap_or(1.0);
                         let mut buffer = buffer.lock().unwrap();
                         for sample in mix_buffer.iter_mut().take(current_chunk) {
-                            *sample += buffer.pop().unwrap();
+                            *sample += buffer.pop().unwrap() * weight;
                         }
                     }
                 }

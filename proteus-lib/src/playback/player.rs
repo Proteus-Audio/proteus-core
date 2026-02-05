@@ -1,6 +1,6 @@
 use rodio::buffer::SamplesBuffer;
 use rodio::{OutputStream, Sink};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -36,6 +36,7 @@ pub struct Player {
     state: Arc<Mutex<PlayerState>>,
     abort: Arc<AtomicBool>,
     playback_thread_exists: Arc<AtomicBool>,
+    playback_id: Arc<AtomicU64>,
     duration: Arc<Mutex<f64>>,
     prot: Arc<Mutex<Prot>>,
     audio_heard: Arc<AtomicBool>,
@@ -87,6 +88,7 @@ impl Player {
             abort: Arc::new(AtomicBool::new(false)),
             ts: Arc::new(Mutex::new(0.0)),
             playback_thread_exists: Arc::new(AtomicBool::new(true)),
+            playback_id: Arc::new(AtomicU64::new(0)),
             duration: Arc::new(Mutex::new(0.0)),
             audio_heard: Arc::new(AtomicBool::new(false)),
             volume: Arc::new(Mutex::new(0.8)),
@@ -185,11 +187,13 @@ impl Player {
         // ===== Set play options ===== //
         self.abort.store(false, Ordering::SeqCst);
         self.playback_thread_exists.store(true, Ordering::SeqCst);
+        let playback_id = self.playback_id.fetch_add(1, Ordering::SeqCst) + 1;
 
         // ===== Clone variables ===== //
         let play_state = self.state.clone();
         let abort = self.abort.clone();
         let playback_thread_exists = self.playback_thread_exists.clone();
+        let playback_id_atomic = self.playback_id.clone();
         let time_passed = self.ts.clone();
 
         let duration = self.duration.clone();
@@ -362,6 +366,9 @@ impl Player {
             // Update sink for each chunk received from engine
             // ===================== //
             let update_sink = |(mixer, length_in_seconds): (SamplesBuffer<f32>, f64)| {
+                if playback_id_atomic.load(Ordering::SeqCst) != playback_id {
+                    return;
+                }
                 audio_heard.store(true, Ordering::Relaxed);
 
                 let mut audition_source = audition_source_mutex.lock().unwrap();
@@ -461,6 +468,10 @@ impl Player {
             .lock()
             .unwrap()
             .clone_from(&PlayerState::Stopping);
+        {
+            let sink = self.sink.lock().unwrap();
+            sink.stop();
+        }
         self.abort.store(true, Ordering::SeqCst);
 
         while !self.thread_finished() {

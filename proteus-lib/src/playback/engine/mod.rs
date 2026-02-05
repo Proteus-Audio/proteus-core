@@ -23,6 +23,7 @@ pub struct PlayerEngine {
     buffer_map: Arc<Mutex<HashMap<u16, TrackBuffer>>>,
     buffer_notify: Arc<Condvar>,
     effects_buffer: Arc<Mutex<Bounded<Vec<f32>>>>,
+    track_weights: Arc<Mutex<HashMap<u16, f32>>>,
     prot: Arc<Mutex<Prot>>,
     buffer_settings: Arc<Mutex<PlaybackBufferSettings>>,
     reverb_settings: Arc<Mutex<ReverbSettings>>,
@@ -40,6 +41,7 @@ impl PlayerEngine {
     ) -> Self {
         let buffer_map = init_buffer_map();
         let buffer_notify = Arc::new(Condvar::new());
+        let track_weights = Arc::new(Mutex::new(HashMap::new()));
         let finished_tracks: Arc<Mutex<Vec<u16>>> = Arc::new(Mutex::new(Vec::new()));
         let abort = if abort_option.is_some() {
             abort_option.unwrap()
@@ -64,6 +66,7 @@ impl PlayerEngine {
             buffer_map,
             buffer_notify,
             effects_buffer,
+            track_weights,
             abort,
             prot,
             buffer_settings,
@@ -94,6 +97,7 @@ impl PlayerEngine {
             buffer_map: self.buffer_map.clone(),
             buffer_notify: self.buffer_notify.clone(),
             effects_buffer: self.effects_buffer.clone(),
+            track_weights: self.track_weights.clone(),
             finished_tracks: self.finished_tracks.clone(),
             prot: self.prot.clone(),
             abort: self.abort.clone(),
@@ -111,6 +115,7 @@ impl PlayerEngine {
 
     fn ready_buffer_map(&mut self, keys: &Vec<u32>) {
         self.buffer_map = init_buffer_map();
+        self.track_weights.lock().unwrap().clear();
 
         let prot = self.prot.lock().unwrap();
         let sample_rate = prot.info.sample_rate;
@@ -128,6 +133,10 @@ impl PlayerEngine {
                 .lock()
                 .unwrap()
                 .insert(*key as u16, ring_buffer);
+            self.track_weights
+                .lock()
+                .unwrap()
+                .insert(*key as u16, 1.0);
         }
     }
 

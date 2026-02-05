@@ -19,6 +19,7 @@ pub struct TrackArgs {
     pub track_key: u16,
     pub buffer_map: TrackBufferMap,
     pub buffer_notify: Option<Arc<std::sync::Condvar>>,
+    pub track_weights: Option<Arc<Mutex<HashMap<u16, f32>>>>,
     pub finished_tracks: Arc<Mutex<Vec<u16>>>,
     pub start_time: f64,
     pub channels: u8,
@@ -97,6 +98,7 @@ pub fn buffer_track(args: TrackArgs, abort: Arc<AtomicBool>) -> Arc<Mutex<bool>>
         track_key,
         buffer_map,
         buffer_notify,
+        track_weights,
         finished_tracks,
         start_time,
         channels,
@@ -228,6 +230,7 @@ pub struct ContainerTrackArgs {
     pub track_entries: Vec<(u16, u32)>,
     pub buffer_map: TrackBufferMap,
     pub buffer_notify: Option<Arc<std::sync::Condvar>>,
+    pub track_weights: Option<Arc<Mutex<HashMap<u16, f32>>>>,
     pub finished_tracks: Arc<Mutex<Vec<u16>>>,
     pub start_time: f64,
     pub channels: u8,
@@ -242,6 +245,7 @@ pub fn buffer_container_tracks(
         track_entries,
         buffer_map,
         buffer_notify,
+        track_weights,
         finished_tracks,
         start_time,
         channels,
@@ -276,10 +280,7 @@ pub fn buffer_container_tracks(
                 .n_frames
                 .map(|frames| track.codec_params.start_ts + frames);
             durations.insert(*track_id, dur);
-            keys_for_track
-                .entry(*track_id)
-                .or_default()
-                .push(*track_key);
+            keys_for_track.entry(*track_id).or_default().push(*track_key);
             valid_entries.push((*track_key, *track_id));
         }
 
@@ -295,6 +296,20 @@ pub fn buffer_container_tracks(
                 mark_track_as_finished(&mut finished_tracks.clone(), *track_key);
             }
             return;
+        }
+
+        if let Some(weights) = &track_weights {
+            let mut weights = weights.lock().unwrap();
+            for (_, keys) in keys_for_track.iter() {
+                if let Some(primary_key) = keys.first() {
+                    let count = keys.len() as f32;
+                    weights.insert(*primary_key, count);
+                    for dup_key in keys.iter().skip(1) {
+                        weights.insert(*dup_key, 0.0);
+                        mark_track_as_finished(&mut finished_tracks.clone(), *dup_key);
+                    }
+                }
+            }
         }
 
         let seconds = start_time.floor() as u64;
@@ -331,14 +346,16 @@ pub fn buffer_container_tracks(
                 Some(track_keys) => track_keys.clone(),
                 None => continue,
             };
+            if track_keys.is_empty() {
+                continue;
+            }
+            let primary_track_key = track_keys[0];
 
             if let Some(dur) = durations.get(&track_id).copied().flatten() {
                 if packet.ts() >= dur {
                     if !finished_track_ids.contains(&track_id) {
                         finished_track_ids.push(track_id);
-                        for track_key in &track_keys {
-                            mark_track_as_finished(&mut finished_tracks.clone(), *track_key);
-                        }
+                        mark_track_as_finished(&mut finished_tracks.clone(), primary_track_key);
                     }
                     if finished_track_ids.len() == keys_for_track.len() {
                         break Ok(true);
@@ -378,14 +395,12 @@ pub fn buffer_container_tracks(
                         continue;
                     }
 
-                    for track_key in &track_keys {
-                        add_samples_to_buffer_map_nonblocking(
-                            &mut buffer_map.clone(),
-                            *track_key,
-                            stereo_samples.clone(),
-                            buffer_notify.as_ref(),
-                        );
-                    }
+                    add_samples_to_buffer_map(
+                        &mut buffer_map.clone(),
+                        primary_track_key,
+                        stereo_samples,
+                        buffer_notify.as_ref(),
+                    );
                 }
                 Err(Error::DecodeError(err)) => {
                     warn!("decode error: {}", err);
