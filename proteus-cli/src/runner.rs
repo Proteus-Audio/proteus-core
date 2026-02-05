@@ -45,6 +45,12 @@ pub fn run(args: &ArgMatches, log_buffer: Arc<Mutex<VecDeque<String>>>) -> Resul
         .parse::<f32>()
         .unwrap();
     player.set_start_buffer_ms(start_buffer_ms);
+    let track_eos_ms = args
+        .get_one::<String>("track-eos-ms")
+        .unwrap()
+        .parse::<f32>()
+        .unwrap();
+    player.set_track_eos_ms(track_eos_ms);
     if let Some(impulse_response) = args.get_one::<String>("impulse-response") {
         player.set_impulse_response_from_string(impulse_response);
     }

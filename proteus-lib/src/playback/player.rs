@@ -194,6 +194,11 @@ impl Player {
         settings.start_buffer_ms = start_buffer_ms.max(0.0);
     }
 
+    pub fn set_track_eos_ms(&self, track_eos_ms: f32) {
+        let mut settings = self.buffer_settings.lock().unwrap();
+        settings.track_eos_ms = track_eos_ms.max(0.0);
+    }
+
     fn audition(&self, length: Duration) {
         let audition_source_mutex = self.audition_source.clone();
 

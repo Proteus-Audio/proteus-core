@@ -18,12 +18,14 @@ impl ReverbSettings {
 #[derive(Debug, Clone, Copy)]
 pub struct PlaybackBufferSettings {
     pub start_buffer_ms: f32,
+    pub track_eos_ms: f32,
 }
 
 impl PlaybackBufferSettings {
     pub fn new(start_buffer_ms: f32) -> Self {
         Self {
             start_buffer_ms: start_buffer_ms.max(0.0),
+            track_eos_ms: 1000.0,
         }
     }
 }

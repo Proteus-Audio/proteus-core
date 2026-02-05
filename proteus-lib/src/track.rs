@@ -8,7 +8,7 @@ use symphonia::core::audio::{AudioBufferRef, Signal};
 use symphonia::core::codecs::{Decoder, DecoderOptions};
 use symphonia::core::errors::Error;
 use symphonia::core::formats::{SeekMode, SeekTo};
-use symphonia::core::units::Time;
+use symphonia::core::units::{Time, TimeBase};
 
 use crate::audio::buffer::{buffer_remaining_space, TrackBufferMap};
 use crate::tools::tools::open_file;
@@ -234,6 +234,7 @@ pub struct ContainerTrackArgs {
     pub finished_tracks: Arc<Mutex<Vec<u16>>>,
     pub start_time: f64,
     pub channels: u8,
+    pub track_eos_ms: f32,
 }
 
 pub fn buffer_container_tracks(
@@ -249,12 +250,15 @@ pub fn buffer_container_tracks(
         finished_tracks,
         start_time,
         channels,
+        track_eos_ms,
     } = args;
 
-    let (mut format, mut decoders, durations, keys_for_track, valid_entries) = {
+    let (mut format, mut decoders, durations, time_bases, sample_rates, keys_for_track, valid_entries) = {
         let format = crate::tools::tools::get_reader(&file_path);
         let mut decoders: HashMap<u32, Box<dyn Decoder>> = HashMap::new();
         let mut durations: HashMap<u32, Option<u64>> = HashMap::new();
+        let mut time_bases: HashMap<u32, Option<TimeBase>> = HashMap::new();
+        let mut sample_rates: HashMap<u32, Option<u32>> = HashMap::new();
         let mut keys_for_track: HashMap<u32, Vec<u16>> = HashMap::new();
         let mut valid_entries: Vec<(u16, u32)> = Vec::new();
 
@@ -284,6 +288,8 @@ pub fn buffer_container_tracks(
                 .n_frames
                 .map(|frames| track.codec_params.start_ts + frames);
             durations.insert(*track_id, dur);
+            time_bases.insert(*track_id, track.codec_params.time_base);
+            sample_rates.insert(*track_id, track.codec_params.sample_rate);
             keys_for_track
                 .entry(*track_id)
                 .or_default()
@@ -291,7 +297,15 @@ pub fn buffer_container_tracks(
             valid_entries.push((*track_key, *track_id));
         }
 
-        (format, decoders, durations, keys_for_track, valid_entries)
+        (
+            format,
+            decoders,
+            durations,
+            time_bases,
+            sample_rates,
+            keys_for_track,
+            valid_entries,
+        )
     };
 
     let playing: Arc<Mutex<bool>> = Arc::new(Mutex::new(true));
@@ -345,12 +359,16 @@ pub fn buffer_container_tracks(
         }
 
         let mut finished_track_ids: Vec<u32> = Vec::new();
+        let mut last_seen_secs: HashMap<u32, f64> = HashMap::new();
+        let mut max_seen_secs: f64 = 0.0;
+        let eos_seconds = (track_eos_ms.max(0.0) / 1000.0) as f64;
 
         let _result: Result<bool, Error> = loop {
             if abort.load(std::sync::atomic::Ordering::Relaxed) {
                 break Ok(true);
             }
 
+            info!("Waiting for next packet");
             let packet = match format.next_packet() {
                 Ok(packet) => packet,
                 Err(err) => break Err(err),
@@ -365,6 +383,23 @@ pub fn buffer_container_tracks(
                 continue;
             }
             let primary_track_key = track_keys[0];
+
+            if let Some(time_base) = time_bases.get(&track_id).copied().flatten() {
+                let time = time_base.calc_time(packet.ts());
+                let secs = time.seconds as f64 + time.frac;
+                last_seen_secs.insert(track_id, secs);
+                if secs > max_seen_secs {
+                    max_seen_secs = secs;
+                }
+            } else if let Some(sample_rate) = sample_rates.get(&track_id).copied().flatten() {
+                let secs = packet.ts() as f64 / sample_rate as f64;
+                last_seen_secs.insert(track_id, secs);
+                if secs > max_seen_secs {
+                    max_seen_secs = secs;
+                }
+            }
+
+            info!("Durations: {:?}", durations);
 
             if let Some(dur) = durations.get(&track_id).copied().flatten() {
                 info!(
@@ -386,6 +421,28 @@ pub fn buffer_container_tracks(
                 }
             } else {
                 warn!("Track {} has no duration", primary_track_key);
+            }
+
+            if eos_seconds > 0.0 && max_seen_secs > 0.0 {
+                for (candidate_track_id, keys) in keys_for_track.iter() {
+                    if finished_track_ids.contains(candidate_track_id) {
+                        continue;
+                    }
+                    if let Some(last_seen) = last_seen_secs.get(candidate_track_id).copied() {
+                        if max_seen_secs - last_seen >= eos_seconds {
+                            if let Some(primary_key) = keys.first() {
+                                finished_track_ids.push(*candidate_track_id);
+                                mark_track_as_finished(
+                                    &mut finished_tracks.clone(),
+                                    *primary_key,
+                                );
+                                if let Some(notify) = buffer_notify.as_ref() {
+                                    notify.notify_all();
+                                }
+                            }
+                        }
+                    }
+                }
             }
 
             let decoder = match decoders.get_mut(&track_id) {
@@ -439,6 +496,7 @@ pub fn buffer_container_tracks(
 
         for (track_key, track_id) in &valid_entries {
             if !finished_track_ids.contains(track_id) {
+                info!("Track {} has no duration", track_key);
                 mark_track_as_finished(&mut finished_tracks.clone(), *track_key);
                 if let Some(notify) = buffer_notify.as_ref() {
                     notify.notify_all();
@@ -456,7 +514,8 @@ fn add_samples_to_buffer_map(
     samples: Vec<f32>,
     notify: Option<&Arc<std::sync::Condvar>>,
 ) {
-    loop {
+    let mut offset = 0usize;
+    while offset < samples.len() {
         let mut map = buffer_map.lock().unwrap();
         let remaining = match map.get(&track_key) {
             Some(buffer) => {
@@ -466,28 +525,32 @@ fn add_samples_to_buffer_map(
             None => 0,
         };
 
-        if remaining >= samples.len() {
-            if let Some(buffer) = map.get(&track_key) {
-                let mut buffer = buffer.lock().unwrap();
-                for sample in samples {
-                    buffer.push(sample);
-                }
+        if remaining == 0 {
+            if let Some(notify) = notify {
+                // #[cfg(feature = "debug")]
+                // info!("Waiting for buffer space");
+                let (guard, _) = notify.wait_timeout(map, Duration::from_millis(20)).unwrap();
+                drop(guard);
+            } else {
+                drop(map);
+                thread::sleep(Duration::from_millis(100));
             }
-            drop(map);
-            break;
+            continue;
         }
+
+        let take = remaining.min(samples.len() - offset);
+        if let Some(buffer) = map.get(&track_key) {
+            let mut buffer = buffer.lock().unwrap();
+            for sample in samples[offset..offset + take].iter().copied() {
+                buffer.push(sample);
+            }
+        }
+        offset += take;
+        drop(map);
 
         if let Some(notify) = notify {
-            let (guard, _) = notify.wait_timeout(map, Duration::from_millis(20)).unwrap();
-            drop(guard);
-        } else {
-            drop(map);
-            thread::sleep(Duration::from_millis(100));
+            notify.notify_one();
         }
-    }
-
-    if let Some(notify) = notify {
-        notify.notify_one();
     }
 }
 

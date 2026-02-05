@@ -105,6 +105,7 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer<f3
                     finished_tracks: finished_tracks.clone(),
                     start_time,
                     channels: audio_info.channels as u8,
+                    track_eos_ms: buffer_settings.lock().unwrap().track_eos_ms,
                 },
                 abort.clone(),
             );

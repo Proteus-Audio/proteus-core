@@ -136,7 +136,7 @@ impl PlayerEngine {
         let start_buffer_ms = self.buffer_settings.lock().unwrap().start_buffer_ms;
         drop(prot);
         let start_samples = ((sample_rate as f32 * start_buffer_ms) / 1000.0) as usize * channels;
-        let buffer_size = (sample_rate as usize * 1).max(start_samples * 2);
+        let buffer_size = (sample_rate as usize * 10).max(start_samples * 2);
 
         for key in keys {
             let ring_buffer = Arc::new(Mutex::new(dasp_ring_buffer::Bounded::from(

@@ -85,6 +85,13 @@ pub fn build_cli() -> Command {
                 .help("Amount of audio (ms) to buffer before starting playback"),
         )
         .arg(
+            Arg::new("track-eos-ms")
+                .long("track-eos-ms")
+                .value_name("MS")
+                .default_value("1000")
+                .help("Heuristic end-of-track threshold in ms for container tracks"),
+        )
+        .arg(
             Arg::new("decode-only")
                 .long("decode-only")
                 .help("Decode, but do not play the audio")
