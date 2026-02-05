@@ -50,7 +50,7 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer<f3
     } = args;
 
     thread::spawn(move || {
-        const MIN_MIX_MS: f32 = 10.0;
+        const MIN_MIX_MS: f32 = 300.0;
         #[cfg(feature = "debug")]
         let mut avg_buffer_fill = 0.0_f64;
         #[cfg(feature = "debug")]
@@ -204,10 +204,10 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer<f3
                         .unwrap();
                     drop(guard);
                     continue;
-                    }
                 }
+            }
 
-                let effects_len = effects_buffer.lock().unwrap().len();
+            let effects_len = effects_buffer.lock().unwrap().len();
             let mut did_work = false;
             let min_len = if hash_buffer.is_empty() {
                 0
@@ -220,7 +220,9 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer<f3
             };
             let all_tracks_finished = {
                 let finished = finished_tracks.lock().unwrap();
-                hash_buffer.iter().all(|(track_key, _)| finished.contains(track_key))
+                hash_buffer
+                    .iter()
+                    .all(|(track_key, _)| finished.contains(track_key))
             };
             let should_mix_tracks = (!hash_buffer.is_empty()
                 && (min_len >= min_mix_samples || (all_tracks_finished && min_len > 0)));
@@ -305,9 +307,8 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer<f3
                 } else {
                     num_effects_samples
                 };
-                let length_in_seconds = base_len as f64
-                    / audio_info.sample_rate as f64
-                    / audio_info.channels as f64;
+                let length_in_seconds =
+                    base_len as f64 / audio_info.sample_rate as f64 / audio_info.channels as f64;
 
                 #[cfg(feature = "debug")]
                 {
@@ -352,8 +353,7 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer<f3
                     avg_chain_time_ms = if avg_chain_time_ms == 0.0 {
                         chain_time_ms
                     } else {
-                        (avg_chain_time_ms * (1.0 - alpha_chain))
-                            + (chain_time_ms * alpha_chain)
+                        (avg_chain_time_ms * (1.0 - alpha_chain)) + (chain_time_ms * alpha_chain)
                     };
                     min_chain_time_ms = min_chain_time_ms.min(chain_time_ms);
                     max_chain_time_ms = max_chain_time_ms.max(chain_time_ms);
