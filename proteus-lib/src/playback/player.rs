@@ -107,6 +107,7 @@ impl Player {
     pub fn set_impulse_response_spec(&mut self, spec: ImpulseResponseSpec) {
         let mut prot = self.prot.lock().unwrap();
         prot.set_impulse_response_spec(spec);
+        self.request_reverb_reset();
     }
 
     pub fn set_impulse_response_from_string(&mut self, value: &str) {
@@ -118,16 +119,19 @@ impl Player {
     pub fn set_impulse_response_tail_db(&mut self, tail_db: f32) {
         let mut prot = self.prot.lock().unwrap();
         prot.set_impulse_response_tail_db(tail_db);
+        self.request_reverb_reset();
     }
 
     pub fn set_reverb_enabled(&self, enabled: bool) {
         let mut settings = self.reverb_settings.lock().unwrap();
         settings.enabled = enabled;
+        settings.reset_pending = true;
     }
 
     pub fn set_reverb_mix(&self, dry_wet: f32) {
         let mut settings = self.reverb_settings.lock().unwrap();
         settings.dry_wet = dry_wet.clamp(0.0, 1.0);
+        settings.reset_pending = true;
     }
 
     pub fn get_reverb_settings(&self) -> ReverbSettings {
@@ -136,6 +140,11 @@ impl Player {
 
     pub fn get_reverb_metrics(&self) -> ReverbMetrics {
         *self.reverb_metrics.lock().unwrap()
+    }
+
+    fn request_reverb_reset(&self) {
+        let mut settings = self.reverb_settings.lock().unwrap();
+        settings.reset_pending = true;
     }
 
     pub fn set_start_buffer_ms(&self, start_buffer_ms: f32) {
@@ -413,6 +422,7 @@ impl Player {
         *timestamp = ts;
         drop(timestamp);
 
+        self.request_reverb_reset();
         self.kill_current();
         // self.stop.store(false, Ordering::SeqCst);
         self.initialize_thread(Some(ts));
@@ -510,6 +520,7 @@ impl Player {
         *timestamp = ts;
         drop(timestamp);
 
+        self.request_reverb_reset();
         let state = self.state.lock().unwrap().clone();
 
         self.kill_current();
@@ -530,6 +541,7 @@ impl Player {
         prot.refresh_tracks();
         drop(prot);
 
+        self.request_reverb_reset();
         // If stopped, return
         if self.thread_finished() {
             return;

@@ -321,7 +321,15 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer<f3
 
                 let input_channels = audio_info.channels as u16;
                 let sample_rate = audio_info.sample_rate as u32;
-                let settings = *reverb_settings.lock().unwrap();
+                let mut settings = reverb_settings.lock().unwrap();
+                if settings.reset_pending {
+                    reverb.clear_state();
+                    reverb_input_buf.clear();
+                    reverb_output_buf.clear();
+                    reverb_block_out.clear();
+                    settings.reset_pending = false;
+                }
+                let settings = *settings;
                 if (settings.dry_wet - current_dry_wet).abs() > f32::EPSILON {
                     reverb.set_dry_wet(settings.dry_wet);
                     current_dry_wet = settings.dry_wet;

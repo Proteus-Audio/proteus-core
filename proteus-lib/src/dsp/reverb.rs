@@ -192,6 +192,15 @@ impl Reverb {
             convolver.previous_tail.fill(0.0);
         }
     }
+
+    pub fn clear_state(&mut self) {
+        for convolver in &mut self.convolvers {
+            convolver.clear_state();
+        }
+        self.scratch_dry.clear();
+        self.scratch_wet.clear();
+        self.scratch_mixed.clear();
+    }
 }
 
 // pub fn apply_reverb(samples: Vec<f32>, dry_wet: f32) -> Vec<f32> {

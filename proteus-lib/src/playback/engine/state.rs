@@ -2,6 +2,7 @@
 pub struct ReverbSettings {
     pub enabled: bool,
     pub dry_wet: f32,
+    pub reset_pending: bool,
 }
 
 impl ReverbSettings {
@@ -9,6 +10,7 @@ impl ReverbSettings {
         Self {
             enabled: true,
             dry_wet: dry_wet.clamp(0.0, 1.0),
+            reset_pending: false,
         }
     }
 }

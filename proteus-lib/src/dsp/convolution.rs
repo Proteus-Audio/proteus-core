@@ -88,6 +88,17 @@ mod complex_fft {
             output
         }
 
+        pub fn clear_state(&mut self) {
+            for frame in &mut self.previous_frame_q {
+                for sample in frame.iter_mut() {
+                    sample.re = 0.0;
+                    sample.im = 0.0;
+                }
+            }
+            self.previous_tail.fill(0.0);
+            self.pending_output.clear();
+        }
+
         fn convolve_frame(&mut self) -> Vec<Complex<f32>> {
             let mut convolved = vec![Complex { re: 0.0, im: 0.0 }; self.fft_size];
 
@@ -269,6 +280,17 @@ mod real_fft {
             }
 
             output
+        }
+
+        pub fn clear_state(&mut self) {
+            for frame in &mut self.previous_frame_q {
+                for sample in frame.iter_mut() {
+                    sample.re = 0.0;
+                    sample.im = 0.0;
+                }
+            }
+            self.previous_tail.fill(0.0);
+            self.pending_output.clear();
         }
     }
 
