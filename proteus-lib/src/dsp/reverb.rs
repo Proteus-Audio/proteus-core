@@ -19,6 +19,9 @@ pub struct Reverb {
     channels: usize,
     dry_wet: f32,
     convolvers: Vec<Convolver>,
+    scratch_dry: Vec<Vec<f32>>,
+    scratch_wet: Vec<Vec<f32>>,
+    scratch_mixed: Vec<f32>,
 }
 
 impl Reverb {
@@ -32,6 +35,9 @@ impl Reverb {
             channels,
             dry_wet,
             convolvers,
+            scratch_dry: Vec::new(),
+            scratch_wet: Vec::new(),
+            scratch_mixed: Vec::new(),
         }
     }
 
@@ -50,6 +56,9 @@ impl Reverb {
             channels,
             dry_wet,
             convolvers,
+            scratch_dry: Vec::new(),
+            scratch_wet: Vec::new(),
+            scratch_mixed: Vec::new(),
         }
     }
 
@@ -58,14 +67,9 @@ impl Reverb {
             return input_buffer.to_vec();
         }
 
-        let channels = self.split_channels(input_buffer);
-        let mut processed = Vec::with_capacity(self.channels);
-        for (i, channel) in channels.iter().enumerate() {
-            let processed_channel = self.process_channel(channel, i);
-            processed.push(processed_channel);
-        }
-        let mixed = self.mix_channels(&channels, &processed);
-        mixed
+        let mut out = Vec::new();
+        self.process_into(input_buffer, &mut out);
+        out
     }
 
     pub fn block_size_samples(&self) -> usize {
@@ -118,36 +122,65 @@ impl Reverb {
         processed
     }
 
-    fn split_channels(&self, input_buffer: &[f32]) -> Vec<Vec<f32>> {
-        let mut unzipped = Vec::with_capacity(self.channels);
-        for i in 0..self.channels {
-            unzipped.push(
-                input_buffer
-                    .iter()
-                    .skip(i)
-                    .step_by(self.channels)
-                    .cloned()
-                    .collect::<Vec<f32>>(),
-            );
+    pub fn process_into(&mut self, input_buffer: &[f32], out: &mut Vec<f32>) {
+        if self.dry_wet <= 0.0 {
+            out.clear();
+            out.extend_from_slice(input_buffer);
+            return;
         }
-        unzipped
-    }
 
-    fn mix_channels(&self, dry: &Vec<Vec<f32>>, wet: &Vec<Vec<f32>>) -> Vec<f32> {
-        let mut mixed = Vec::with_capacity(dry[0].len() * self.channels);
-        let dry_amount = 1.0 - self.dry_wet;
-        let wet_amount = self.dry_wet;
+        let frames = if self.channels > 0 {
+            input_buffer.len() / self.channels
+        } else {
+            0
+        };
 
-        // For each sample position
-        for i in 0..dry[0].len() {
-            // For each channel
-            for ch in 0..self.channels {
-                let mixed_sample = (dry[ch][i] * dry_amount) + (wet[ch][i] * wet_amount);
-                mixed.push(mixed_sample);
+        if self.scratch_dry.len() != self.channels {
+            self.scratch_dry = vec![Vec::new(); self.channels];
+        }
+        if self.scratch_wet.len() != self.channels {
+            self.scratch_wet = vec![Vec::new(); self.channels];
+        }
+
+        for ch in 0..self.channels {
+            if self.scratch_dry[ch].len() != frames {
+                self.scratch_dry[ch].resize(frames, 0.0);
             }
         }
 
-        mixed
+        for frame in 0..frames {
+            let base = frame * self.channels;
+            for ch in 0..self.channels {
+                self.scratch_dry[ch][frame] = input_buffer[base + ch];
+            }
+        }
+
+        let channels = self.channels;
+        for ch in 0..channels {
+            let input = self.scratch_dry[ch].clone();
+            let processed = self.process_channel(&input, ch);
+            self.scratch_wet[ch] = processed;
+        }
+
+        let total_samples = frames * self.channels;
+        if self.scratch_mixed.len() != total_samples {
+            self.scratch_mixed.resize(total_samples, 0.0);
+        }
+
+        let dry_amount = 1.0 - self.dry_wet;
+        let wet_amount = self.dry_wet;
+
+        for frame in 0..frames {
+            let base = frame * self.channels;
+            for ch in 0..self.channels {
+                self.scratch_mixed[base + ch] =
+                    (self.scratch_dry[ch][frame] * dry_amount)
+                        + (self.scratch_wet[ch][frame] * wet_amount);
+            }
+        }
+
+        out.clear();
+        out.extend_from_slice(&self.scratch_mixed);
     }
 
     pub fn set_dry_wet(&mut self, dry_wet: f32) {

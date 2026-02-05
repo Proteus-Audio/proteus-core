@@ -43,7 +43,7 @@ This suggests the hot path is still the DSP/mix/reverb chain and/or per-chunk ov
 
 
 CHECK LIST:
-- [ ] #1 - Reduce Reverb Overhead
+- [x] #1 - Reduce Reverb Overhead
 - [x] #2 - Fixed Chunk Size + Preallocated Mixing Buffer (Already Started)
 - [x] #3 - Per-Track Buffer Locks (Reduce Contention)
 - [x] #4 - Batch Reverb (Process Larger Blocks)

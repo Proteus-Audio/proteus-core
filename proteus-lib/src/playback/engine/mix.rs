@@ -143,6 +143,7 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer<f3
         let mut reverb_output_buf: Vec<f32> = Vec::new();
         let reverb_block_samples = reverb.block_size_samples();
         const REVERB_BATCH_BLOCKS: usize = 2;
+        let mut reverb_block_out: Vec<f32> = Vec::new();
         #[cfg(feature = "debug")]
         let mut avg_dsp_ms = 0.0_f64;
         #[cfg(feature = "debug")]
@@ -350,8 +351,8 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer<f3
                                 reverb_input_buf.len()
                             };
                             let block: Vec<f32> = reverb_input_buf.drain(0..take).collect();
-                            let processed = reverb.process(&block);
-                            reverb_output_buf.extend_from_slice(&processed);
+                            reverb.process_into(&block, &mut reverb_block_out);
+                            reverb_output_buf.extend_from_slice(&reverb_block_out);
                             if take < batch_samples {
                                 break;
                             }
