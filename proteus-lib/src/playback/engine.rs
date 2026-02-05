@@ -394,7 +394,8 @@ impl PlayerEngine {
                                 .iter()
                                 .map(|(_, buffer)| buffer.max_len())
                                 .min()
-                                .unwrap_or(0) as f64;
+                                .unwrap_or(0)
+                                as f64;
                             let fill = if capacity_samples > 0.0 {
                                 total_samples / capacity_samples
                             } else {
@@ -493,8 +494,7 @@ impl PlayerEngine {
         let channels = prot.info.channels as usize;
         let start_buffer_ms = self.buffer_settings.lock().unwrap().start_buffer_ms;
         drop(prot);
-        let start_samples =
-            ((sample_rate as f32 * start_buffer_ms) / 1000.0) as usize * channels;
+        let start_samples = ((sample_rate as f32 * start_buffer_ms) / 1000.0) as usize * channels;
         let buffer_size = (sample_rate as usize * 1).max(start_samples * 2);
 
         for key in keys {
@@ -628,24 +628,24 @@ fn spawn_reverb_worker(
     let (result_sender, result_receiver) = mpsc::sync_channel::<ReverbResult>(1);
 
     thread::spawn(move || {
-            let mut current_dry_wet = 0.000001_f32;
-            #[cfg(feature = "debug")]
-            let mut last_log = Instant::now();
-            #[cfg(feature = "debug")]
-            let mut avg_dsp_ms = 0.0_f64;
-            #[cfg(feature = "debug")]
-            let mut avg_audio_ms = 0.0_f64;
-            #[cfg(feature = "debug")]
-            let mut avg_rt_factor = 0.0_f64;
-            #[cfg(feature = "debug")]
-            let mut min_rt_factor = f64::INFINITY;
-            #[cfg(feature = "debug")]
-            let mut max_rt_factor = 0.0_f64;
-            #[cfg(feature = "debug")]
-            let alpha = 0.1_f64;
+        let mut current_dry_wet = 0.000001_f32;
+        #[cfg(feature = "debug")]
+        let mut last_log = Instant::now();
+        #[cfg(feature = "debug")]
+        let mut avg_dsp_ms = 0.0_f64;
+        #[cfg(feature = "debug")]
+        let mut avg_audio_ms = 0.0_f64;
+        #[cfg(feature = "debug")]
+        let mut avg_rt_factor = 0.0_f64;
+        #[cfg(feature = "debug")]
+        let mut min_rt_factor = f64::INFINITY;
+        #[cfg(feature = "debug")]
+        let mut max_rt_factor = 0.0_f64;
+        #[cfg(feature = "debug")]
+        let alpha = 0.1_f64;
 
-            #[cfg(not(feature = "debug"))]
-            let _ = &reverb_metrics;
+        #[cfg(not(feature = "debug"))]
+        let _ = &reverb_metrics;
 
         while let Ok(job) = job_receiver.recv() {
             let settings = *reverb_settings.lock().unwrap();
