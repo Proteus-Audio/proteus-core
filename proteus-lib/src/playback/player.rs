@@ -3,7 +3,9 @@ use rodio::{OutputStream, Sink};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
+
+use log::warn;
 
 use crate::audio::samples::clone_samples_buffer;
 use crate::container::prot::{parse_impulse_response_string, ImpulseResponseSpec, Prot};
@@ -417,10 +419,7 @@ impl Player {
 
         self.resume();
 
-        // Wait until audio is heard
-        while !self.audio_heard.load(Ordering::Relaxed) {
-            thread::sleep(Duration::from_millis(10));
-        }
+        self.wait_for_audio_heard(Duration::from_secs(5));
     }
 
     pub fn play(&mut self) {
@@ -433,10 +432,7 @@ impl Player {
 
         self.resume();
 
-        // Wait until audio is heard
-        while !self.audio_heard.load(Ordering::Relaxed) {
-            thread::sleep(Duration::from_millis(10));
-        }
+        self.wait_for_audio_heard(Duration::from_secs(5));
     }
 
     pub fn pause(&self) {
@@ -549,8 +545,23 @@ impl Player {
             self.resume();
         }
 
-        // Wait until audio is heard
-        while !self.audio_heard.load(Ordering::Relaxed) {
+        self.wait_for_audio_heard(Duration::from_secs(5));
+    }
+
+    fn wait_for_audio_heard(&self, timeout: Duration) -> bool {
+        let start = Instant::now();
+        loop {
+            if self.audio_heard.load(Ordering::Relaxed) {
+                return true;
+            }
+            if self.thread_finished() {
+                warn!("playback thread ended before audio was heard");
+                return false;
+            }
+            if start.elapsed() >= timeout {
+                warn!("timed out waiting for audio to start");
+                return false;
+            }
             thread::sleep(Duration::from_millis(10));
         }
     }

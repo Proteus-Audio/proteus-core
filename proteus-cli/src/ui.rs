@@ -11,6 +11,7 @@ use crate::controls::StatusSnapshot;
 pub fn draw_status(
     terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>,
     status: &StatusSnapshot,
+    log_lines: &[String],
 ) {
     // Render the controls + status panels.
     let _ = terminal.draw(|f| {
@@ -28,7 +29,11 @@ pub fn draw_status(
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .margin(1)
-            .constraints([Constraint::Length(5), Constraint::Length(status_height), Constraint::Min(0)])
+            .constraints([
+                Constraint::Length(5),
+                Constraint::Length(status_height),
+                Constraint::Min(0),
+            ])
             .split(f.size());
 
         let controls = Paragraph::new(
@@ -46,5 +51,18 @@ pub fn draw_status(
             )
             .block(Block::default().borders(Borders::ALL).title("Playback"));
         f.render_widget(status_widget, chunks[1]);
+
+        let log_height = chunks[2].height.saturating_sub(2) as usize;
+        let start = log_lines.len().saturating_sub(log_height);
+        let log_text = if log_lines.is_empty() {
+            "No logs yet.".to_string()
+        } else {
+            log_lines[start..].join("\n")
+        };
+
+        let log_widget = Paragraph::new(log_text)
+            .style(Style::default().fg(Color::White))
+            .block(Block::default().borders(Borders::ALL).title("Logs"));
+        f.render_widget(log_widget, chunks[2]);
     });
 }

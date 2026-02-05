@@ -191,15 +191,19 @@ impl PlayerEngine {
             let alpha_chain = 0.1_f64;
 
             let prot = prot_locked.lock().unwrap();
-            let enumerated_list = prot.enumerated_list();
+            let container_tracks = prot.container_track_entries();
+            let enumerated_list = if container_tracks.is_some() {
+                Vec::new()
+            } else {
+                prot.enumerated_list()
+            };
             drop(prot);
 
-            for (key, file_path, track_id) in enumerated_list {
-                buffer_track(
-                    TrackArgs {
-                        file_path: file_path.clone(),
-                        track_id,
-                        track_key: key,
+            if let Some((file_path, track_entries)) = container_tracks {
+                buffer_container_tracks(
+                    ContainerTrackArgs {
+                        file_path,
+                        track_entries,
                         buffer_map: buffer_map.clone(),
                         finished_tracks: finished_tracks.clone(),
                         start_time,
@@ -207,6 +211,21 @@ impl PlayerEngine {
                     },
                     abort.clone(),
                 );
+            } else {
+                for (key, file_path, track_id) in enumerated_list {
+                    buffer_track(
+                        TrackArgs {
+                            file_path: file_path.clone(),
+                            track_id,
+                            track_key: key,
+                            buffer_map: buffer_map.clone(),
+                            finished_tracks: finished_tracks.clone(),
+                            start_time,
+                            channels: audio_info.channels as u8,
+                        },
+                        abort.clone(),
+                    );
+                }
             }
 
             // let sink_mutex_copy = sink_mutex.clone();

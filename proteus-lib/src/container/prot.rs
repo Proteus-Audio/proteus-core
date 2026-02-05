@@ -296,6 +296,16 @@ impl Prot {
         list
     }
 
+    pub fn container_track_entries(&self) -> Option<(String, Vec<(u16, u32)>)> {
+        let file_path = self.file_path.as_ref()?;
+        let track_ids = self.track_ids.as_ref()?;
+        let mut entries = Vec::new();
+        for (index, track_id) in track_ids.iter().enumerate() {
+            entries.push((index as u16, *track_id));
+        }
+        Some((file_path.clone(), entries))
+    }
+
     pub fn get_duration(&self) -> &f64 {
         &self.duration
     }

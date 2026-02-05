@@ -6,6 +6,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 use symphonia::core::audio::{AudioBufferRef, Signal};
+use symphonia::core::codecs::{Decoder, DecoderOptions};
 use symphonia::core::errors::Error;
 use symphonia::core::formats::{SeekMode, SeekTo};
 use symphonia::core::units::Time;
@@ -213,6 +214,194 @@ pub fn buffer_track(args: TrackArgs, abort: Arc<AtomicBool>) -> Arc<Mutex<bool>>
     return playing;
 }
 
+pub struct ContainerTrackArgs {
+    pub file_path: String,
+    pub track_entries: Vec<(u16, u32)>,
+    pub buffer_map: Arc<Mutex<HashMap<u16, Bounded<Vec<f32>>>>>,
+    pub finished_tracks: Arc<Mutex<Vec<u16>>>,
+    pub start_time: f64,
+    pub channels: u8,
+}
+
+pub fn buffer_container_tracks(args: ContainerTrackArgs, abort: Arc<AtomicBool>) -> Arc<Mutex<bool>> {
+    let ContainerTrackArgs {
+        file_path,
+        track_entries,
+        buffer_map,
+        finished_tracks,
+        start_time,
+        channels,
+    } = args;
+
+    let (mut format, mut decoders, mut durations, mut key_for_track, valid_entries) = {
+        let mut format = crate::tools::tools::get_reader(&file_path);
+        let mut decoders: HashMap<u32, Box<dyn Decoder>> = HashMap::new();
+        let mut durations: HashMap<u32, Option<u64>> = HashMap::new();
+        let mut key_for_track: HashMap<u32, u16> = HashMap::new();
+        let mut valid_entries: Vec<(u16, u32)> = Vec::new();
+
+        eprintln!(
+            "container tracks requested: {}",
+            track_entries
+                .iter()
+                .map(|(key, id)| format!("{}=>{}", key, id))
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+
+        for (track_key, track_id) in &track_entries {
+            let track = match format.tracks().iter().find(|track| track.id == *track_id) {
+                Some(track) => track,
+                None => {
+                    eprintln!("container track missing: id {}", track_id);
+                    continue;
+                }
+            };
+
+            let dec_opts: DecoderOptions = Default::default();
+            let decoder = symphonia::default::get_codecs()
+                .make(&track.codec_params, &dec_opts)
+                .expect("unsupported codec");
+            decoders.insert(*track_id, decoder);
+
+            let dur = track
+                .codec_params
+                .n_frames
+                .map(|frames| track.codec_params.start_ts + frames);
+            durations.insert(*track_id, dur);
+            key_for_track.insert(*track_id, *track_key);
+            valid_entries.push((*track_key, *track_id));
+        }
+
+        eprintln!(
+            "container tracks found: {}",
+            valid_entries
+                .iter()
+                .map(|(key, id)| format!("{}=>{}", key, id))
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+
+        (format, decoders, durations, key_for_track, valid_entries)
+    };
+
+    let playing: Arc<Mutex<bool>> = Arc::new(Mutex::new(true));
+
+    thread::spawn(move || {
+        if valid_entries.is_empty() {
+            warn!("no valid tracks found in container");
+            for (track_key, _) in &track_entries {
+                mark_track_as_finished(&mut finished_tracks.clone(), *track_key);
+            }
+            return;
+        }
+
+        let seconds = start_time.floor() as u64;
+        let frac_of_second = start_time.fract();
+        let time = Time::new(seconds, frac_of_second);
+
+        let seek_track_id = valid_entries[0].1;
+        let seek_success = format.seek(
+            SeekMode::Coarse,
+            SeekTo::Time {
+                time,
+                track_id: Some(seek_track_id),
+            },
+        );
+
+        if seek_success.is_err() {
+            warn!("container seek failed, starting from beginning");
+        }
+
+        let mut finished_track_ids: Vec<u32> = Vec::new();
+
+        let _result: Result<bool, Error> = loop {
+            if abort.load(std::sync::atomic::Ordering::Relaxed) {
+                break Ok(true);
+            }
+
+            let packet = match format.next_packet() {
+                Ok(packet) => packet,
+                Err(err) => break Err(err),
+            };
+
+            let track_id = packet.track_id();
+            let track_key = match key_for_track.get(&track_id) {
+                Some(track_key) => *track_key,
+                None => continue,
+            };
+
+            if let Some(dur) = durations.get(&track_id).copied().flatten() {
+                if packet.ts() >= dur {
+                    if !finished_track_ids.contains(&track_id) {
+                        finished_track_ids.push(track_id);
+                        mark_track_as_finished(&mut finished_tracks.clone(), track_key);
+                    }
+                    if finished_track_ids.len() == valid_entries.len() {
+                        break Ok(true);
+                    }
+                    continue;
+                }
+            }
+
+            let decoder = match decoders.get_mut(&track_id) {
+                Some(decoder) => decoder,
+                None => continue,
+            };
+
+            match decoder.decode(&packet) {
+                Ok(decoded) => {
+                    let mut channel_samples = Vec::new();
+
+                    for channel in 0..channels {
+                        let samples = process_channel(decoded.clone(), channel as usize);
+                        channel_samples.push(samples);
+                    }
+
+                    let channel1 = channel_samples[0].clone();
+                    let channel2 = if channel_samples.len() > 1 {
+                        channel_samples[1].clone()
+                    } else {
+                        channel_samples[0].clone()
+                    };
+
+                    let stereo_samples: Vec<f32> = channel1
+                        .into_iter()
+                        .zip(channel2.into_iter())
+                        .flat_map(|(left, right)| vec![left, right])
+                        .collect();
+
+                    if stereo_samples.is_empty() {
+                        continue;
+                    }
+
+                    add_samples_to_buffer_map_nonblocking(
+                        &mut buffer_map.clone(),
+                        track_key,
+                        stereo_samples,
+                    );
+                }
+                Err(Error::DecodeError(err)) => {
+                    warn!("decode error: {}", err);
+                }
+                Err(err) => break Err(err),
+            }
+        };
+
+        if let Err(err) = _result {
+            warn!("error: {}", err);
+        }
+
+        for (track_key, track_id) in &valid_entries {
+            if !finished_track_ids.contains(track_id) {
+                mark_track_as_finished(&mut finished_tracks.clone(), *track_key);
+            }
+        }
+    });
+
+    playing
+}
+
 fn add_samples_to_buffer_map(
     buffer_map: &mut Arc<Mutex<HashMap<u16, Bounded<Vec<f32>>>>>,
     track_key: u16,
@@ -228,6 +417,26 @@ fn add_samples_to_buffer_map(
         hash_buffer.get_mut(&track_key).unwrap().push(sample);
     }
 
+    drop(hash_buffer);
+}
+
+fn add_samples_to_buffer_map_nonblocking(
+    buffer_map: &mut Arc<Mutex<HashMap<u16, Bounded<Vec<f32>>>>>,
+    track_key: u16,
+    samples: Vec<f32>,
+) {
+    let remaining = buffer_remaining_space(buffer_map, track_key);
+    if remaining == 0 {
+        return;
+    }
+
+    let take = remaining.min(samples.len());
+    let mut hash_buffer = buffer_map.lock().unwrap();
+    if let Some(buffer) = hash_buffer.get_mut(&track_key) {
+        for sample in samples.into_iter().take(take) {
+            buffer.push(sample);
+        }
+    }
     drop(hash_buffer);
 }
 

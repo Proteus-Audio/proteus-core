@@ -1,4 +1,4 @@
-use std::{io, thread::sleep, time::Duration};
+use std::{collections::VecDeque, io, sync::{Arc, Mutex}, thread::sleep, time::Duration};
 
 use clap::ArgMatches;
 use crossterm::{
@@ -10,9 +10,9 @@ use proteus_lib::playback::player;
 use ratatui::{backend::CrosstermBackend, Terminal};
 use symphonia::core::errors::Result;
 
-use crate::{cli, controls, ui};
+use crate::{cli, controls, logging, ui};
 
-pub fn run(args: &ArgMatches) -> Result<i32> {
+pub fn run(args: &ArgMatches, log_buffer: Arc<Mutex<VecDeque<String>>>) -> Result<i32> {
     // Primary entry for CLI execution; runs benchmarks or playback.
     if let Some(code) = cli::bench::maybe_run_bench(args)? {
         return Ok(code);
@@ -72,6 +72,7 @@ pub fn run(args: &ArgMatches) -> Result<i32> {
             let reverb_settings = player.get_reverb_settings();
             #[cfg(feature = "debug")]
             let reverb_metrics = player.get_reverb_metrics();
+            let log_lines = logging::snapshot(&log_buffer);
             let status = controls::status_text(controls::StatusArgs {
                 time,
                 duration,
@@ -119,7 +120,7 @@ pub fn run(args: &ArgMatches) -> Result<i32> {
                 #[cfg(feature = "debug")]
                 max_out_interval_ms: reverb_metrics.max_out_interval_ms,
             });
-            ui::draw_status(term, &status);
+            ui::draw_status(term, &status, &log_lines);
         }
 
         if !controls::handle_key_event(&mut player) {
