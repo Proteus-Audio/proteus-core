@@ -38,3 +38,6 @@
 ## Configuration & Data Notes
 - The CLI expects `.prot` or `.mka` inputs and will error otherwise.
 - Local test data is referenced from `src/test_data.rs`; keep any new fixtures small and documented.
+
+## Persistent Notes
+- See `NOTES.md` for playback alignment constraints that should always be preserved.
