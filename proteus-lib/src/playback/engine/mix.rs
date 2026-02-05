@@ -1,9 +1,5 @@
 use dasp_ring_buffer::Bounded;
-use rodio::{
-    buffer::SamplesBuffer,
-    dynamic_mixer::{self},
-    Source,
-};
+use rodio::buffer::SamplesBuffer;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
@@ -147,9 +143,10 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer<f3
         let start_buffer_ms = buffer_settings.lock().unwrap().start_buffer_ms;
         let start_samples = ((audio_info.sample_rate as f32 * start_buffer_ms) / 1000.0) as usize
             * audio_info.channels as usize;
-        let min_mix_samples = ((audio_info.sample_rate as f32 * MIN_MIX_MS) / 1000.0) as usize
-            * audio_info.channels as usize;
+        let min_mix_frames = ((audio_info.sample_rate as f32 * MIN_MIX_MS) / 1000.0) as usize;
+        let min_mix_samples = min_mix_frames.max(1) * audio_info.channels as usize;
         let mut started = start_samples == 0;
+        let mut mix_buffer = vec![0.0_f32; min_mix_samples];
 
         loop {
             if abort.load(Ordering::SeqCst) {
@@ -224,8 +221,8 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer<f3
                     .iter()
                     .all(|(track_key, _)| finished.contains(track_key))
             };
-            let should_mix_tracks = (!hash_buffer.is_empty()
-                && (min_len >= min_mix_samples || (all_tracks_finished && min_len > 0)));
+            let should_mix_tracks = !hash_buffer.is_empty()
+                && (min_len >= min_mix_samples || (all_tracks_finished && min_len > 0));
             let should_mix_effects = hash_buffer.is_empty()
                 && (effects_len >= min_mix_samples || (all_tracks_finished && effects_len > 0));
 
@@ -233,87 +230,82 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer<f3
                 #[cfg(feature = "debug")]
                 let chain_start = Instant::now();
 
-                let (controller, mixer) = dynamic_mixer::mixer::<f32>(
-                    audio_info.channels as u16,
-                    audio_info.sample_rate as u32,
-                );
-
                 let mut effects_buffer_unlocked = effects_buffer.lock().unwrap();
-                let mut combined_buffer: HashMap<u16, Bounded<Vec<f32>>> = HashMap::new();
-                for (track_key, buffer) in hash_buffer.iter() {
-                    combined_buffer.insert(*track_key, buffer.clone());
-                }
-
                 let length_of_smallest_buffer = if hash_buffer.is_empty() { 0 } else { min_len };
-                if !hash_buffer.is_empty() {
-                    for (_, buffer) in hash_buffer.iter_mut() {
-                        let mut samples: Vec<f32> = Vec::new();
-                        for _ in 0..length_of_smallest_buffer {
-                            samples.push(buffer.pop().unwrap());
-                        }
-
-                        let source = SamplesBuffer::new(
-                            audio_info.channels as u16,
-                            audio_info.sample_rate as u32,
-                            samples,
-                        );
-
-                        controller.add(source.convert_samples().amplify(0.2));
+                let current_chunk = if !hash_buffer.is_empty() {
+                    if length_of_smallest_buffer >= min_mix_samples {
+                        min_mix_samples
+                    } else {
+                        length_of_smallest_buffer
                     }
-                }
-
-                let num_effects_samples = if hash_buffer.is_empty() {
-                    effects_buffer_unlocked.len()
-                } else if effects_buffer_unlocked.len() < length_of_smallest_buffer {
-                    effects_buffer_unlocked.len()
+                } else if effects_buffer_unlocked.len() >= min_mix_samples {
+                    min_mix_samples
                 } else {
-                    length_of_smallest_buffer
+                    effects_buffer_unlocked.len()
                 };
 
-                {
-                    let mut samples: Vec<f32> = Vec::new();
-                    for _ in 0..num_effects_samples {
-                        samples.push(effects_buffer_unlocked.pop().unwrap());
+                if current_chunk == 0 {
+                    drop(effects_buffer_unlocked);
+                    if !all_buffers_full && effects_len == 0 {
+                        #[cfg(feature = "debug")]
+                        if !did_work {
+                            wake_idle = wake_idle.saturating_add(1);
+                            let mut metrics = reverb_metrics.lock().unwrap();
+                            metrics.wake_total = wake_total;
+                            metrics.wake_idle = wake_idle;
+                        }
+                        let (guard, _) = buffer_notify
+                            .wait_timeout(hash_buffer, Duration::from_millis(20))
+                            .unwrap();
+                        drop(guard);
+                    } else {
+                        drop(hash_buffer);
                     }
+                    continue;
+                }
 
-                    let source = SamplesBuffer::new(
-                        audio_info.channels as u16,
-                        audio_info.sample_rate as u32,
-                        samples,
-                    );
+                if mix_buffer.len() != current_chunk {
+                    mix_buffer.resize(current_chunk, 0.0);
+                }
+                mix_buffer.fill(0.0);
 
-                    controller.add(source.convert_samples().amplify(0.2));
+                if !hash_buffer.is_empty() {
+                    for (_, buffer) in hash_buffer.iter_mut() {
+                        for sample in mix_buffer.iter_mut().take(current_chunk) {
+                            *sample += buffer.pop().unwrap();
+                        }
+                    }
+                }
+
+                if effects_buffer_unlocked.len() > 0 {
+                    let effects_take = effects_buffer_unlocked.len().min(current_chunk);
+                    for sample in mix_buffer.iter_mut().take(effects_take) {
+                        *sample += effects_buffer_unlocked.pop().unwrap();
+                    }
                 }
 
                 drop(effects_buffer_unlocked);
 
-                let sample_rate = mixer.sample_rate();
-                let mixer_buffered = mixer.buffered();
-                let vector_samples = mixer_buffered.clone().into_iter().collect::<Vec<f32>>();
-                let input_channels = mixer_buffered.channels();
+                let input_channels = audio_info.channels as u16;
+                let sample_rate = audio_info.sample_rate as u32;
 
                 let samples = process_reverb(
                     &reverb_sender,
                     &reverb_receiver,
-                    vector_samples,
+                    mix_buffer.clone(),
                     input_channels,
                     sample_rate,
                 );
 
                 let samples_buffer = SamplesBuffer::new(input_channels, sample_rate, samples);
 
-                let base_len = if length_of_smallest_buffer > 0 {
-                    length_of_smallest_buffer
-                } else {
-                    num_effects_samples
-                };
                 let length_in_seconds =
-                    base_len as f64 / audio_info.sample_rate as f64 / audio_info.channels as f64;
+                    current_chunk as f64 / audio_info.sample_rate as f64 / audio_info.channels as f64;
 
                 #[cfg(feature = "debug")]
                 {
                     if started && !hash_buffer.is_empty() {
-                        let total_samples = base_len as f64;
+                        let total_samples = current_chunk as f64;
                         let capacity_samples = hash_buffer
                             .iter()
                             .map(|(_, buffer)| buffer.max_len())
