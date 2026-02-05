@@ -1,11 +1,17 @@
-use std::{collections::VecDeque, io, sync::{Arc, Mutex}, thread::sleep, time::Duration};
+use std::{
+    collections::VecDeque,
+    io,
+    sync::{Arc, Mutex},
+    thread::sleep,
+    time::Duration,
+};
 
 use clap::ArgMatches;
 use crossterm::{
     cursor, execute,
     terminal::{self, EnterAlternateScreen, LeaveAlternateScreen},
 };
-use log::error;
+use log::{error, info};
 use proteus_lib::playback::player;
 use ratatui::{backend::CrosstermBackend, Terminal};
 use symphonia::core::errors::Result;
@@ -13,6 +19,7 @@ use symphonia::core::errors::Result;
 use crate::{cli, controls, logging, ui};
 
 pub fn run(args: &ArgMatches, log_buffer: Arc<Mutex<VecDeque<String>>>) -> Result<i32> {
+    info!("Starting Proteus CLI");
     // Primary entry for CLI execution; runs benchmarks or playback.
     if let Some(code) = cli::bench::maybe_run_bench(args)? {
         return Ok(code);

@@ -18,7 +18,7 @@ pub fn draw_status(
         let status_height = {
             #[cfg(feature = "debug")]
             {
-                13
+                15
             }
             #[cfg(not(feature = "debug"))]
             {
@@ -30,7 +30,7 @@ pub fn draw_status(
             .direction(Direction::Vertical)
             .margin(1)
             .constraints([
-                Constraint::Length(5),
+                Constraint::Length(3),
                 Constraint::Length(status_height),
                 Constraint::Min(0),
             ])

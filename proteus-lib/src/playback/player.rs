@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use log::warn;
+use log::{info, warn};
 
 use crate::audio::samples::clone_samples_buffer;
 use crate::container::prot::{parse_impulse_response_string, ImpulseResponseSpec, Prot};
@@ -231,7 +231,8 @@ impl Player {
         self.buffering_done.store(false, Ordering::SeqCst);
         let now_ms_value = now_ms();
         self.last_chunk_ms.store(now_ms_value, Ordering::Relaxed);
-        self.last_time_update_ms.store(now_ms_value, Ordering::Relaxed);
+        self.last_time_update_ms
+            .store(now_ms_value, Ordering::Relaxed);
 
         // ===== Clone variables ===== //
         let play_state = self.state.clone();
@@ -463,8 +464,7 @@ impl Player {
                 if final_duration.is_none() {
                     let chunk_lengths = chunk_lengths.lock().unwrap();
                     let time_chunks_passed = time_chunks_mutex.lock().unwrap();
-                    *final_duration =
-                        Some(*time_chunks_passed + chunk_lengths.iter().sum::<f64>());
+                    *final_duration = Some(*time_chunks_passed + chunk_lengths.iter().sum::<f64>());
                 }
             }
 
@@ -537,6 +537,7 @@ impl Player {
     }
 
     pub fn play(&mut self) {
+        info!("Playing audio");
         let thread_exists = self.playback_thread_exists.load(Ordering::SeqCst);
         // self.stop.store(false, Ordering::SeqCst);
 
