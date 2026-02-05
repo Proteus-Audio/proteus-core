@@ -123,6 +123,10 @@ pub fn run(args: &ArgMatches, log_buffer: Arc<Mutex<VecDeque<String>>>) -> Resul
                 min_out_interval_ms: reverb_metrics.min_out_interval_ms,
                 #[cfg(feature = "debug")]
                 max_out_interval_ms: reverb_metrics.max_out_interval_ms,
+                #[cfg(feature = "debug")]
+                wake_total: reverb_metrics.wake_total,
+                #[cfg(feature = "debug")]
+                wake_idle: reverb_metrics.wake_idle,
             });
             ui::draw_status(term, &status, &log_lines);
         }

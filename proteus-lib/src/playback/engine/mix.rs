@@ -74,6 +74,10 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer<f3
         let mut max_out_interval_ms = 0.0_f64;
         #[cfg(feature = "debug")]
         let alpha_chain = 0.1_f64;
+        #[cfg(feature = "debug")]
+        let mut wake_total: u64 = 0;
+        #[cfg(feature = "debug")]
+        let mut wake_idle: u64 = 0;
 
         let prot_locked = prot.clone();
 
@@ -150,6 +154,10 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer<f3
             }
 
             let mut hash_buffer = hash_buffer_copy.lock().unwrap();
+            #[cfg(feature = "debug")]
+            {
+                wake_total = wake_total.saturating_add(1);
+            }
 
             let mut removable_tracks: Vec<u16> = Vec::new();
 
@@ -173,26 +181,34 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer<f3
                 break;
             }
 
-                if !started {
-                    let finished = finished_tracks.lock().unwrap();
-                    let ready = hash_buffer.iter().all(|(track_key, buffer)| {
-                        finished.contains(track_key) || buffer.len() >= start_samples
-                    });
-                    if ready {
-                        started = true;
-                    } else {
-                        let (guard, _) = buffer_notify
-                            .wait_timeout(hash_buffer, Duration::from_millis(20))
-                            .unwrap();
-                        drop(guard);
-                        continue;
+            if !started {
+                let finished = finished_tracks.lock().unwrap();
+                let ready = hash_buffer.iter().all(|(track_key, buffer)| {
+                    finished.contains(track_key) || buffer.len() >= start_samples
+                });
+                if ready {
+                    started = true;
+                } else {
+                    #[cfg(feature = "debug")]
+                    {
+                        wake_idle = wake_idle.saturating_add(1);
+                        let mut metrics = reverb_metrics.lock().unwrap();
+                        metrics.wake_total = wake_total;
+                        metrics.wake_idle = wake_idle;
+                    }
+                    let (guard, _) = buffer_notify
+                        .wait_timeout(hash_buffer, Duration::from_millis(20))
+                        .unwrap();
+                    drop(guard);
+                    continue;
                     }
                 }
 
                 let effects_len = effects_buffer.lock().unwrap().len();
-                if all_buffers_full || (effects_len > 0 && hash_buffer.len() == 0) {
-                    #[cfg(feature = "debug")]
-                    let chain_start = Instant::now();
+            let mut did_work = false;
+            if all_buffers_full || (effects_len > 0 && hash_buffer.len() == 0) {
+                #[cfg(feature = "debug")]
+                let chain_start = Instant::now();
 
                 let (controller, mixer) = dynamic_mixer::mixer::<f32>(
                     audio_info.channels as u16,
@@ -350,14 +366,25 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer<f3
                 {
                     last_send = Instant::now();
                 }
+                did_work = true;
             }
 
             if !all_buffers_full && effects_len == 0 {
+                #[cfg(feature = "debug")]
+                if !did_work {
+                    wake_idle = wake_idle.saturating_add(1);
+                    let mut metrics = reverb_metrics.lock().unwrap();
+                    metrics.wake_total = wake_total;
+                    metrics.wake_idle = wake_idle;
+                }
                 let (guard, _) = buffer_notify
                     .wait_timeout(hash_buffer, Duration::from_millis(20))
                     .unwrap();
                 drop(guard);
             } else {
+                if did_work {
+                    buffer_notify.notify_all();
+                }
                 drop(hash_buffer);
             }
         }

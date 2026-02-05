@@ -48,4 +48,6 @@ pub struct ReverbMetrics {
     pub avg_out_interval_ms: f64,
     pub min_out_interval_ms: f64,
     pub max_out_interval_ms: f64,
+    pub wake_total: u64,
+    pub wake_idle: u64,
 }

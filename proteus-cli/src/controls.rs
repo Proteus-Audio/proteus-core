@@ -58,6 +58,10 @@ pub struct StatusArgs {
     pub min_out_interval_ms: f64,
     #[cfg(feature = "debug")]
     pub max_out_interval_ms: f64,
+    #[cfg(feature = "debug")]
+    pub wake_total: u64,
+    #[cfg(feature = "debug")]
+    pub wake_idle: u64,
 }
 
 pub fn status_text(args: StatusArgs) -> StatusSnapshot {
@@ -95,7 +99,7 @@ pub fn status_text(args: StatusArgs) -> StatusSnapshot {
 
     #[cfg(feature = "debug")]
     let text = format!(
-        "{}   {} / {}   ({:>5.1}%)\nReverb: {} | mix: {:.2}\nDSP: {:>5.1} ksps / {:>5.1} ksps\nAVG: {:>5.1} ksps / {:>5.1} ksps  MIN/MAX: {:>5.1}/{:>5.1} ksps\nCHAIN: {:>5.1} ksps (avg {:>5.1} min {:>5.1} max {:>5.1})\nOUT: {:>5.1} ksps (avg {:>5.1} min {:>5.1} max {:>5.1})\nBUF: {:.2} (avg {:.2} min {:.2} max {:.2})",
+        "{}   {} / {}   ({:>5.1}%)\nReverb: {} | mix: {:.2}\nDSP: {:>5.1} ksps / {:>5.1} ksps\nAVG: {:>5.1} ksps / {:>5.1} ksps  MIN/MAX: {:>5.1}/{:>5.1} ksps\nCHAIN: {:>5.1} ksps (avg {:>5.1} min {:>5.1} max {:>5.1})\nOUT: {:>5.1} ksps (avg {:>5.1} min {:>5.1} max {:>5.1})\nBUF: {:.2} (avg {:.2} min {:.2} max {:.2})\nWAKE: {} idle / {} total ({:>5.1}%)",
         state,
         current,
         total,
@@ -169,7 +173,14 @@ pub fn status_text(args: StatusArgs) -> StatusSnapshot {
         args.buffer_fill,
         args.avg_buffer_fill,
         args.min_buffer_fill,
-        args.max_buffer_fill
+        args.max_buffer_fill,
+        args.wake_idle,
+        args.wake_total,
+        if args.wake_total > 0 {
+            (args.wake_idle as f64 / args.wake_total as f64) * 100.0
+        } else {
+            0.0
+        }
     );
 
     #[cfg(not(feature = "debug"))]

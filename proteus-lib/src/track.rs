@@ -430,17 +430,34 @@ fn add_samples_to_buffer_map(
     samples: Vec<f32>,
     notify: Option<&Arc<std::sync::Condvar>>,
 ) {
-    while buffer_remaining_space(buffer_map, track_key) < samples.len() {
-        thread::sleep(Duration::from_millis(100));
+    loop {
+        let mut hash_buffer = buffer_map.lock().unwrap();
+        let remaining = match hash_buffer.get(&track_key) {
+            Some(buffer) => buffer.max_len().saturating_sub(buffer.len()),
+            None => 0,
+        };
+
+        if remaining >= samples.len() {
+            if let Some(buffer) = hash_buffer.get_mut(&track_key) {
+                for sample in samples {
+                    buffer.push(sample);
+                }
+            }
+            drop(hash_buffer);
+            break;
+        }
+
+        if let Some(notify) = notify {
+            let (guard, _) = notify
+                .wait_timeout(hash_buffer, Duration::from_millis(20))
+                .unwrap();
+            drop(guard);
+        } else {
+            drop(hash_buffer);
+            thread::sleep(Duration::from_millis(100));
+        }
     }
 
-    let mut hash_buffer = buffer_map.lock().unwrap();
-
-    for sample in samples {
-        hash_buffer.get_mut(&track_key).unwrap().push(sample);
-    }
-
-    drop(hash_buffer);
     if let Some(notify) = notify {
         notify.notify_one();
     }
