@@ -2,27 +2,13 @@ use ratatui::{
     backend::CrosstermBackend,
     layout::{Constraint, Direction, Layout},
     style::{Color, Modifier, Style},
-    text::StyledGrapheme,
     widgets::{Block, Borders, Paragraph},
     Terminal,
 };
+use std::sync::OnceLock;
+use text_to_ascii_art::{fonts, to_art};
 
 use crate::controls::StatusSnapshot;
-
-const TITLE: [&str; 3] = [
-    "░█▀█░█▀▄░█▀█░▀█▀░█▀▀░█░█░█▀▀░░░█▀█░█░█░█▀▄░▀█▀░█▀█",
-    "░█▀▀░█▀▄░█░█░░█░░█▀▀░█░█░▀▀█░░░█▀█░█░█░█░█░░█░░█░█",
-    "░▀░░░▀░▀░▀▀▀░░▀░░▀▀▀░▀▀▀░▀▀▀░░░▀░▀░▀▀▀░▀▀░░▀▀▀░▀▀▀",
-];
-
-pub fn big_text(text: &[&str]) -> String {
-    let mut result = String::new();
-    for line in text {
-        result.push_str(line);
-        result.push('\n');
-    }
-    result
-}
 
 pub fn draw_status(
     terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>,
@@ -41,19 +27,22 @@ pub fn draw_status(
                 4
             }
         };
+        let title_text = to_art("Proteus".to_string(), "standard", 0, 1, 0)
+            .unwrap_or_else(|_| "Proteus Audio".to_string());
+        let title_height = title_text.lines().count().max(1) as u16;
 
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .margin(1)
             .constraints([
-                Constraint::Length(4),
+                Constraint::Length(title_height),
                 Constraint::Length(3),
                 Constraint::Length(status_height),
                 Constraint::Min(0),
             ])
             .split(f.size());
 
-        let title = Paragraph::new(big_text(&TITLE)).style(Style::default().fg(Color::Cyan));
+        let title = Paragraph::new(title_text).style(Style::default().fg(Color::Cyan));
 
         f.render_widget(title, chunks[0]);
 

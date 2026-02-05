@@ -90,16 +90,6 @@ pub struct StatusArgs {
     pub audio_heard: bool,
     #[cfg(feature = "debug")]
     pub buffering_done: bool,
-    #[cfg(feature = "debug")]
-    pub last_chunk_age_ms: u64,
-    #[cfg(feature = "debug")]
-    pub last_time_update_age_ms: u64,
-    #[cfg(feature = "debug")]
-    pub sink_paused: bool,
-    #[cfg(feature = "debug")]
-    pub sink_empty: bool,
-    #[cfg(feature = "debug")]
-    pub sink_len: usize,
 }
 
 pub fn status_text(args: StatusArgs) -> StatusSnapshot {
@@ -137,7 +127,7 @@ pub fn status_text(args: StatusArgs) -> StatusSnapshot {
 
     #[cfg(feature = "debug")]
     let text = format!(
-        "{}   {} / {}   ({:>5.1}%)\nReverb: {} | mix: {:.2}\nDSP: {:>5.1} ksps / {:>5.1} ksps\nAVG: {:>5.1} ksps / {:>5.1} ksps  MIN/MAX: {:>5.1}/{:>5.1} ksps\nCHAIN: {:>5.1} ksps (avg {:>5.1} min {:>5.1} max {:>5.1})\nOUT: {:>5.1} ksps (avg {:>5.1} min {:>5.1} max {:>5.1})\nBUF: {:.2} (avg {:.2} min {:.2} max {:.2})\nWAKE: {} idle / {} total ({:>5.1}%)\nLVL: dry {:.3}/{:.3} wet {:.3}/{:.3} mix {:.3}/{:.3}  W/D {:>5.1}dB\nRB: in {} out {} gen {}\nDBG: thread={} state={} heard={} buf_done={}\nDBG2: last_chunk={}ms last_time_upd={}ms sink paused={} empty={} len={}",
+        "{}   {} / {}   ({:>5.1}%)\nReverb: {} | mix: {:.2}\nDSP: {:>5.1} ksps / {:>5.1} ksps\nAVG: {:>5.1} ksps / {:>5.1} ksps  MIN/MAX: {:>5.1}/{:>5.1} ksps\nCHAIN: {:>5.1} ksps (avg {:>5.1} min {:>5.1} max {:>5.1})\nOUT: {:>5.1} ksps (avg {:>5.1} min {:>5.1} max {:>5.1})\nBUF: {:.2} (avg {:.2} min {:.2} max {:.2})\nWAKE: {} idle / {} total ({:>5.1}%)\nLVL: dry {:.3}/{:.3} wet {:.3}/{:.3} mix {:.3}/{:.3}  W/D {:>5.1}dB\nRB: in {} out {} gen {}\nDBG: thread={} state={} heard={} buf_done={}",
         state,
         current,
         total,
@@ -232,12 +222,7 @@ pub fn status_text(args: StatusArgs) -> StatusSnapshot {
         args.thread_exists,
         args.state_label,
         args.audio_heard,
-        args.buffering_done,
-        args.last_chunk_age_ms,
-        args.last_time_update_age_ms,
-        args.sink_paused,
-        args.sink_empty,
-        args.sink_len
+        args.buffering_done
     );
 
     #[cfg(not(feature = "debug"))]

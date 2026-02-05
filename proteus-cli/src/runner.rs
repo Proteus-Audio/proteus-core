@@ -83,22 +83,6 @@ pub fn run(args: &ArgMatches, log_buffer: Arc<Mutex<VecDeque<String>>>) -> Resul
             let (thread_exists, state, audio_heard) = player.debug_playback_state();
             #[cfg(feature = "debug")]
             let buffering_done = player.debug_buffering_done();
-            #[cfg(feature = "debug")]
-            let (last_chunk_ms, last_time_update_ms) = player.debug_timing_ms();
-            #[cfg(feature = "debug")]
-            let (sink_paused, sink_empty, sink_len) = player.debug_sink_state();
-            #[cfg(feature = "debug")]
-            let now_ms = {
-                use std::time::SystemTime;
-                SystemTime::now()
-                    .duration_since(SystemTime::UNIX_EPOCH)
-                    .map(|d| d.as_millis() as u64)
-                    .unwrap_or(0)
-            };
-            #[cfg(feature = "debug")]
-            let last_chunk_age_ms = now_ms.saturating_sub(last_chunk_ms);
-            #[cfg(feature = "debug")]
-            let last_time_update_age_ms = now_ms.saturating_sub(last_time_update_ms);
             let log_lines = logging::snapshot(&log_buffer);
             let status = controls::status_text(controls::StatusArgs {
                 time,
@@ -182,16 +166,6 @@ pub fn run(args: &ArgMatches, log_buffer: Arc<Mutex<VecDeque<String>>>) -> Resul
                 audio_heard,
                 #[cfg(feature = "debug")]
                 buffering_done,
-                #[cfg(feature = "debug")]
-                last_chunk_age_ms,
-                #[cfg(feature = "debug")]
-                last_time_update_age_ms,
-                #[cfg(feature = "debug")]
-                sink_paused,
-                #[cfg(feature = "debug")]
-                sink_empty,
-                #[cfg(feature = "debug")]
-                sink_len,
             });
             ui::draw_status(term, &status, &log_lines);
         }
