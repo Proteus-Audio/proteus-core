@@ -92,6 +92,18 @@ pub fn build_cli() -> Command {
                 .help("Heuristic end-of-track threshold in ms for container tracks"),
         )
         .arg(
+            Arg::new("read-durations")
+                .long("read-durations")
+                .action(ArgAction::SetTrue)
+                .help("Read track durations metadata, then exit"),
+        )
+        .arg(
+            Arg::new("scan-durations")
+                .long("scan-durations")
+                .action(ArgAction::SetTrue)
+                .help("Scan all packets to compute per-track durations, then exit"),
+        )
+        .arg(
             Arg::new("decode-only")
                 .long("decode-only")
                 .help("Decode, but do not play the audio")

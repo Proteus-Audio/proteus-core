@@ -26,6 +26,30 @@ pub fn run(args: &ArgMatches, log_buffer: Arc<Mutex<VecDeque<String>>>) -> Resul
     }
 
     let file_path = args.get_one::<String>("INPUT").unwrap().clone();
+    if args.get_flag("scan-durations") {
+        let start = std::time::Instant::now();
+        let durations = proteus_lib::container::info::get_durations_by_scan(&file_path);
+        let elapsed = start.elapsed();
+        let mut items = durations.into_iter().collect::<Vec<_>>();
+        items.sort_by(|a, b| a.0.cmp(&b.0));
+        for (track_id, seconds) in items {
+            println!("track {}: {:.3}s", track_id, seconds);
+        }
+        println!("scan duration: {:.3}s", elapsed.as_secs_f64());
+        return Ok(0);
+    }
+    if args.get_flag("read-durations") {
+        let start = std::time::Instant::now();
+        let durations = proteus_lib::container::info::get_durations(&file_path);
+        let elapsed = start.elapsed();
+        let mut items = durations.into_iter().collect::<Vec<_>>();
+        items.sort_by(|a, b| a.0.cmp(&b.0));
+        for (track_id, seconds) in items {
+            println!("track {}: {:.3}s", track_id, seconds);
+        }
+        println!("scan duration: {:.3}s", elapsed.as_secs_f64());
+        return Ok(0);
+    }
     let gain = args
         .get_one::<String>("GAIN")
         .unwrap()

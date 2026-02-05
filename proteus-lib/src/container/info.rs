@@ -3,17 +3,21 @@ use std::{collections::HashMap, fs::File, path::Path};
 use log::debug;
 
 use symphonia::core::{
-    audio::{Channels, Layout}, codecs::CodecParameters, formats::{FormatOptions, Track}, io::{
-        MediaSource, MediaSourceStream, ReadOnlySource
-    }, meta::MetadataOptions, probe::{
-        Hint,
-        ProbeResult
-    }
+    audio::{Channels, Layout},
+    codecs::CodecParameters,
+    formats::{FormatOptions, Track},
+    io::{MediaSource, MediaSourceStream, ReadOnlySource},
+    meta::MetadataOptions,
+    probe::{Hint, ProbeResult},
+    units::TimeBase,
 };
 
 pub fn get_time_from_frames(codec_params: &CodecParameters) -> f64 {
     let tb = codec_params.time_base.unwrap();
-    let dur = codec_params.n_frames.map(|frames| codec_params.start_ts + frames).unwrap();
+    let dur = codec_params
+        .n_frames
+        .map(|frames| codec_params.start_ts + frames)
+        .unwrap();
     let time = tb.calc_time(dur);
 
     time.seconds as f64 + time.frac
@@ -58,10 +62,12 @@ pub fn get_probe_result_from_string(file_path: &str) -> ProbeResult {
     //     _ => None,
     // };
 
-    symphonia::default::get_probe().format(&hint, mss, &format_opts, &metadata_opts).unwrap()
+    symphonia::default::get_probe()
+        .format(&hint, mss, &format_opts, &metadata_opts)
+        .unwrap()
 }
 
-fn get_durations(file_path: &str) -> HashMap<u32, f64> {
+pub fn get_durations(file_path: &str) -> HashMap<u32, f64> {
     let mut probed = get_probe_result_from_string(file_path);
 
     let mut durations: Vec<f64> = Vec::new();
@@ -95,6 +101,46 @@ fn get_durations(file_path: &str) -> HashMap<u32, f64> {
         let codec_params = &track.codec_params;
         let duration = get_time_from_frames(codec_params);
         duration_map.insert(track.id, duration);
+    }
+
+    duration_map
+}
+
+pub fn get_durations_by_scan(file_path: &str) -> HashMap<u32, f64> {
+    let mut probed = get_probe_result_from_string(file_path);
+    let mut max_ts: HashMap<u32, u64> = HashMap::new();
+    let mut time_bases: HashMap<u32, Option<TimeBase>> = HashMap::new();
+    let mut sample_rates: HashMap<u32, Option<u32>> = HashMap::new();
+
+    for track in probed.format.tracks().iter() {
+        max_ts.insert(track.id, 0);
+        time_bases.insert(track.id, track.codec_params.time_base);
+        sample_rates.insert(track.id, track.codec_params.sample_rate);
+    }
+
+    loop {
+        match probed.format.next_packet() {
+            Ok(packet) => {
+                let entry = max_ts.entry(packet.track_id()).or_insert(0);
+                if packet.ts() > *entry {
+                    *entry = packet.ts();
+                }
+            }
+            Err(_) => break,
+        }
+    }
+
+    let mut duration_map: HashMap<u32, f64> = HashMap::new();
+    for (track_id, ts) in max_ts {
+        let seconds = if let Some(time_base) = time_bases.get(&track_id).copied().flatten() {
+            let time = time_base.calc_time(ts);
+            time.seconds as f64 + time.frac
+        } else if let Some(sample_rate) = sample_rates.get(&track_id).copied().flatten() {
+            ts as f64 / sample_rate as f64
+        } else {
+            0.0
+        };
+        duration_map.insert(track_id, seconds);
     }
 
     duration_map
@@ -134,9 +180,13 @@ fn get_track_info(track: &Track) -> TrackInfo {
     };
 
     if channel_count == 0 {
-        channel_count = codec_params.channels.unwrap_or(Channels::FRONT_CENTRE).iter().count() as u32;
+        channel_count = codec_params
+            .channels
+            .unwrap_or(Channels::FRONT_CENTRE)
+            .iter()
+            .count() as u32;
     }
-    
+
     TrackInfo {
         sample_rate,
         channel_count,
@@ -145,15 +195,19 @@ fn get_track_info(track: &Track) -> TrackInfo {
 }
 
 fn reduce_track_infos(track_infos: Vec<TrackInfo>) -> TrackInfo {
-    let info = track_infos.into_iter().fold(None, |acc: Option<TrackInfo>, track_info| {
-        match acc {
+    let info = track_infos
+        .into_iter()
+        .fold(None, |acc: Option<TrackInfo>, track_info| match acc {
             Some(acc) => {
                 if acc.sample_rate != track_info.sample_rate {
                     panic!("Sample rates do not match");
                 }
 
                 if acc.channel_count != track_info.channel_count {
-                    panic!("Channel layouts do not match {} != {}", acc.channel_count, track_info.channel_count);
+                    panic!(
+                        "Channel layouts do not match {} != {}",
+                        acc.channel_count, track_info.channel_count
+                    );
                 }
 
                 if acc.bits_per_sample != track_info.bits_per_sample {
@@ -161,10 +215,9 @@ fn reduce_track_infos(track_infos: Vec<TrackInfo>) -> TrackInfo {
                 }
 
                 Some(acc)
-            },
+            }
             None => Some(track_info),
-        }
-    });
+        });
 
     info.unwrap()
 }
@@ -178,7 +231,7 @@ fn gather_track_info(file_path: &str) -> TrackInfo {
         let track_info = get_track_info(track);
         track_infos.push(track_info);
     }
-    
+
     reduce_track_infos(track_infos)
 }
 
@@ -221,7 +274,10 @@ impl Info {
 
         for (index, file_path) in file_paths.iter().enumerate() {
             let durations = get_durations(file_path);
-            let longest = durations.iter().max_by(|a, b| a.1.partial_cmp(b.1).unwrap()).unwrap();
+            let longest = durations
+                .iter()
+                .max_by(|a, b| a.1.partial_cmp(b.1).unwrap())
+                .unwrap();
             duration_map.insert(index as u32, *longest.1);
         }
 
@@ -235,7 +291,7 @@ impl Info {
             bits_per_sample: track_info.bits_per_sample,
         }
     }
-    
+
     pub fn get_duration(&self, index: u32) -> Option<f64> {
         match self.duration_map.get(&index) {
             Some(duration) => Some(*duration),
