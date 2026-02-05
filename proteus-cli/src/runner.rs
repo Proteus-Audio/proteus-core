@@ -80,6 +80,8 @@ pub fn run(args: &ArgMatches, log_buffer: Arc<Mutex<VecDeque<String>>>) -> Resul
                 reverb_state: reverb_settings.enabled,
                 reverb_mix: reverb_settings.dry_wet,
                 #[cfg(feature = "debug")]
+                sample_rate: player.info.sample_rate,
+                #[cfg(feature = "debug")]
                 dsp_time_ms: reverb_metrics.dsp_time_ms,
                 #[cfg(feature = "debug")]
                 audio_time_ms: reverb_metrics.audio_time_ms,

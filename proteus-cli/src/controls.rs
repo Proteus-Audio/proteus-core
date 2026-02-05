@@ -15,6 +15,8 @@ pub struct StatusArgs {
     pub reverb_state: bool,
     pub reverb_mix: f32,
     #[cfg(feature = "debug")]
+    pub sample_rate: u32,
+    #[cfg(feature = "debug")]
     pub dsp_time_ms: f64,
     #[cfg(feature = "debug")]
     pub audio_time_ms: f64,
@@ -69,30 +71,43 @@ pub fn status_text(args: StatusArgs) -> StatusSnapshot {
     let reverb_state = if args.reverb_state { "on" } else { "off" };
 
     #[cfg(feature = "debug")]
+    let ksps = |audio_ms: f64, time_ms: f64, sample_rate: u32| -> f64 {
+        if time_ms <= 0.0 || audio_ms <= 0.0 {
+            return 0.0;
+        }
+        (audio_ms * sample_rate as f64) / time_ms / 1000.0
+    };
+    #[cfg(feature = "debug")]
+    let ksps_from_rt = |rt_factor: f64, sample_rate: u32| -> f64 {
+        if rt_factor <= 0.0 {
+            return 0.0;
+        }
+        (rt_factor * sample_rate as f64) / 1000.0
+    };
+
+    #[cfg(feature = "debug")]
     let text = format!(
-        "{}   {} / {}   ({:>5.1}%)\nReverb: {} | mix: {:.2}\nDSP: {:.2}ms / {:.2}ms ({:.2}x)\nAVG: {:.2}ms / {:.2}ms ({:.2}x)  MIN/MAX: {:.2}/{:.2}x\nCHAIN: {:.2}ms (avg {:.2} min {:.2} max {:.2})\nOUT: {:.2}ms (avg {:.2} min {:.2} max {:.2})\nBUF: {:.2} (avg {:.2} min {:.2} max {:.2})",
+        "{}   {} / {}   ({:>5.1}%)\nReverb: {} | mix: {:.2}\nDSP: {:>5.1} ksps / {:>5.1} ksps\nAVG: {:>5.1} ksps / {:>5.1} ksps  MIN/MAX: {:>5.1}/{:>5.1} ksps\nCHAIN: {:>5.1} ksps (avg {:>5.1} min {:>5.1} max {:>5.1})\nOUT: {:>5.1} ksps (avg {:>5.1} min {:>5.1} max {:>5.1})\nBUF: {:.2} (avg {:.2} min {:.2} max {:.2})",
         state,
         current,
         total,
         percent,
         reverb_state,
         args.reverb_mix,
-        args.dsp_time_ms,
-        args.audio_time_ms,
-        args.rt_factor,
-        args.avg_dsp_ms,
-        args.avg_audio_ms,
-        args.avg_rt_factor,
-        args.min_rt_factor,
-        args.max_rt_factor,
-        args.chain_time_ms,
-        args.avg_chain_time_ms,
-        args.min_chain_time_ms,
-        args.max_chain_time_ms,
-        args.out_interval_ms,
-        args.avg_out_interval_ms,
-        args.min_out_interval_ms,
-        args.max_out_interval_ms,
+        ksps(args.audio_time_ms, args.dsp_time_ms, args.sample_rate),
+        args.sample_rate as f64 / 1000.0,
+        ksps(args.avg_audio_ms, args.avg_dsp_ms, args.sample_rate),
+        args.sample_rate as f64 / 1000.0,
+        ksps_from_rt(args.min_rt_factor, args.sample_rate),
+        ksps_from_rt(args.max_rt_factor, args.sample_rate),
+        ksps(args.audio_time_ms, args.chain_time_ms, args.sample_rate),
+        ksps(args.avg_audio_ms, args.avg_chain_time_ms, args.sample_rate),
+        ksps(args.audio_time_ms, args.min_chain_time_ms, args.sample_rate),
+        ksps(args.audio_time_ms, args.max_chain_time_ms, args.sample_rate),
+        ksps(args.audio_time_ms, args.out_interval_ms, args.sample_rate),
+        ksps(args.avg_audio_ms, args.avg_out_interval_ms, args.sample_rate),
+        ksps(args.audio_time_ms, args.min_out_interval_ms, args.sample_rate),
+        ksps(args.audio_time_ms, args.max_out_interval_ms, args.sample_rate),
         args.buffer_fill,
         args.avg_buffer_fill,
         args.min_buffer_fill,
