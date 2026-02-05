@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::sync::atomic::AtomicBool;
 use std::sync::{mpsc::Receiver, Arc, Condvar, Mutex};
 
-use crate::audio::buffer::init_buffer_map;
+use crate::audio::buffer::{init_buffer_map, TrackBuffer};
 use crate::container::prot::Prot;
 
 mod mix;
@@ -20,7 +20,7 @@ pub struct PlayerEngine {
     pub finished_tracks: Arc<Mutex<Vec<u16>>>,
     start_time: f64,
     abort: Arc<AtomicBool>,
-    buffer_map: Arc<Mutex<HashMap<u16, Bounded<Vec<f32>>>>>,
+    buffer_map: Arc<Mutex<HashMap<u16, TrackBuffer>>>,
     buffer_notify: Arc<Condvar>,
     effects_buffer: Arc<Mutex<Bounded<Vec<f32>>>>,
     prot: Arc<Mutex<Prot>>,
@@ -54,7 +54,8 @@ impl PlayerEngine {
             as usize
             * channels;
         let buffer_size = (prot_unlocked.info.sample_rate as usize * 10).max(start_samples * 2);
-        let effects_buffer = Arc::new(Mutex::new(Bounded::from(vec![0.0; buffer_size])));
+        let effects_buffer =
+            Arc::new(Mutex::new(dasp_ring_buffer::Bounded::from(vec![0.0; buffer_size])));
         drop(prot_unlocked);
 
         Self {
@@ -120,7 +121,9 @@ impl PlayerEngine {
         let buffer_size = (sample_rate as usize * 1).max(start_samples * 2);
 
         for key in keys {
-            let ring_buffer = Bounded::from(vec![0.0; buffer_size]);
+            let ring_buffer = Arc::new(Mutex::new(dasp_ring_buffer::Bounded::from(
+                vec![0.0; buffer_size],
+            )));
             self.buffer_map
                 .lock()
                 .unwrap()

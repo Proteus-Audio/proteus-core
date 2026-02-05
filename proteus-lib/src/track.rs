@@ -1,4 +1,3 @@
-use dasp_ring_buffer::Bounded;
 use log::warn;
 use std::collections::HashMap;
 use std::sync::atomic::AtomicBool;
@@ -11,14 +10,14 @@ use symphonia::core::errors::Error;
 use symphonia::core::formats::{SeekMode, SeekTo};
 use symphonia::core::units::Time;
 
-use crate::audio::buffer::buffer_remaining_space;
+use crate::audio::buffer::{buffer_remaining_space, TrackBufferMap};
 use crate::tools::tools::open_file;
 
 pub struct TrackArgs {
     pub file_path: String,
     pub track_id: Option<u32>,
     pub track_key: u16,
-    pub buffer_map: Arc<Mutex<HashMap<u16, Bounded<Vec<f32>>>>>,
+    pub buffer_map: TrackBufferMap,
     pub buffer_notify: Option<Arc<std::sync::Condvar>>,
     pub finished_tracks: Arc<Mutex<Vec<u16>>>,
     pub start_time: f64,
@@ -227,7 +226,7 @@ pub fn buffer_track(args: TrackArgs, abort: Arc<AtomicBool>) -> Arc<Mutex<bool>>
 pub struct ContainerTrackArgs {
     pub file_path: String,
     pub track_entries: Vec<(u16, u32)>,
-    pub buffer_map: Arc<Mutex<HashMap<u16, Bounded<Vec<f32>>>>>,
+    pub buffer_map: TrackBufferMap,
     pub buffer_notify: Option<Arc<std::sync::Condvar>>,
     pub finished_tracks: Arc<Mutex<Vec<u16>>>,
     pub start_time: f64,
@@ -413,35 +412,39 @@ pub fn buffer_container_tracks(
 }
 
 fn add_samples_to_buffer_map(
-    buffer_map: &mut Arc<Mutex<HashMap<u16, Bounded<Vec<f32>>>>>,
+    buffer_map: &mut TrackBufferMap,
     track_key: u16,
     samples: Vec<f32>,
     notify: Option<&Arc<std::sync::Condvar>>,
 ) {
     loop {
-        let mut hash_buffer = buffer_map.lock().unwrap();
-        let remaining = match hash_buffer.get(&track_key) {
-            Some(buffer) => buffer.max_len().saturating_sub(buffer.len()),
+        let mut map = buffer_map.lock().unwrap();
+        let remaining = match map.get(&track_key) {
+            Some(buffer) => {
+                let buffer = buffer.lock().unwrap();
+                buffer.max_len().saturating_sub(buffer.len())
+            }
             None => 0,
         };
 
         if remaining >= samples.len() {
-            if let Some(buffer) = hash_buffer.get_mut(&track_key) {
+            if let Some(buffer) = map.get(&track_key) {
+                let mut buffer = buffer.lock().unwrap();
                 for sample in samples {
                     buffer.push(sample);
                 }
             }
-            drop(hash_buffer);
+            drop(map);
             break;
         }
 
         if let Some(notify) = notify {
             let (guard, _) = notify
-                .wait_timeout(hash_buffer, Duration::from_millis(20))
+                .wait_timeout(map, Duration::from_millis(20))
                 .unwrap();
             drop(guard);
         } else {
-            drop(hash_buffer);
+            drop(map);
             thread::sleep(Duration::from_millis(100));
         }
     }
@@ -452,7 +455,7 @@ fn add_samples_to_buffer_map(
 }
 
 fn add_samples_to_buffer_map_nonblocking(
-    buffer_map: &mut Arc<Mutex<HashMap<u16, Bounded<Vec<f32>>>>>,
+    buffer_map: &mut TrackBufferMap,
     track_key: u16,
     samples: Vec<f32>,
     notify: Option<&Arc<std::sync::Condvar>>,
@@ -463,13 +466,13 @@ fn add_samples_to_buffer_map_nonblocking(
     }
 
     let take = remaining.min(samples.len());
-    let mut hash_buffer = buffer_map.lock().unwrap();
-    if let Some(buffer) = hash_buffer.get_mut(&track_key) {
+    let map = buffer_map.lock().unwrap();
+    if let Some(buffer) = map.get(&track_key) {
+        let mut buffer = buffer.lock().unwrap();
         for sample in samples.into_iter().take(take) {
             buffer.push(sample);
         }
     }
-    drop(hash_buffer);
     if let Some(notify) = notify {
         notify.notify_one();
     }

@@ -9,6 +9,7 @@ use std::time::Duration;
 use std::time::Instant;
 
 use crate::container::prot::Prot;
+use crate::audio::buffer::TrackBuffer;
 use crate::track::{buffer_container_tracks, buffer_track, ContainerTrackArgs, TrackArgs};
 
 use super::reverb::{build_reverb_with_impulse_response, process_reverb, spawn_reverb_worker};
@@ -16,7 +17,7 @@ use super::state::{PlaybackBufferSettings, ReverbMetrics, ReverbSettings};
 
 pub struct MixThreadArgs {
     pub audio_info: crate::container::info::Info,
-    pub buffer_map: Arc<Mutex<HashMap<u16, Bounded<Vec<f32>>>>>,
+    pub buffer_map: Arc<Mutex<HashMap<u16, TrackBuffer>>>,
     pub buffer_notify: Arc<std::sync::Condvar>,
     pub effects_buffer: Arc<Mutex<Bounded<Vec<f32>>>>,
     pub finished_tracks: Arc<Mutex<Vec<u16>>>,
@@ -153,19 +154,22 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer<f3
                 break;
             }
 
-            let mut hash_buffer = hash_buffer_copy.lock().unwrap();
+        let buffer_snapshot: Vec<(u16, TrackBuffer)> = {
+            let map = hash_buffer_copy.lock().unwrap();
+            map.iter().map(|(k, v)| (*k, v.clone())).collect()
+        };
+        let mut removable_tracks: Vec<u16> = Vec::new();
             #[cfg(feature = "debug")]
             {
                 wake_total = wake_total.saturating_add(1);
             }
 
-            let mut removable_tracks: Vec<u16> = Vec::new();
-
             let mut all_buffers_full = true;
-            for (track_key, buffer) in hash_buffer.iter() {
-                if buffer.len() == 0 {
+            for (track_key, buffer) in buffer_snapshot.iter() {
+                let len = buffer.lock().unwrap().len();
+                if len == 0 {
                     let finished = finished_tracks.lock().unwrap();
-                    if finished.contains(&track_key) {
+                    if finished.contains(track_key) {
                         removable_tracks.push(*track_key);
                         continue;
                     }
@@ -173,18 +177,22 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer<f3
                 }
             }
 
-            for track_id in removable_tracks {
-                hash_buffer.remove(&track_id);
+            if !removable_tracks.is_empty() {
+                let mut map = hash_buffer_copy.lock().unwrap();
+                for track_id in removable_tracks.drain(..) {
+                    map.remove(&track_id);
+                }
             }
 
-            if hash_buffer.len() == 0 && effects_buffer.lock().unwrap().len() == 0 {
+            if buffer_snapshot.is_empty() && effects_buffer.lock().unwrap().len() == 0 {
                 break;
             }
 
             if !started {
                 let finished = finished_tracks.lock().unwrap();
-                let ready = hash_buffer.iter().all(|(track_key, buffer)| {
-                    finished.contains(track_key) || buffer.len() >= start_samples
+                let ready = buffer_snapshot.iter().all(|(track_key, buffer)| {
+                    let len = buffer.lock().unwrap().len();
+                    finished.contains(track_key) || len >= start_samples
                 });
                 if ready {
                     started = true;
@@ -197,7 +205,7 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer<f3
                         metrics.wake_idle = wake_idle;
                     }
                     let (guard, _) = buffer_notify
-                        .wait_timeout(hash_buffer, Duration::from_millis(20))
+                        .wait_timeout(hash_buffer_copy.lock().unwrap(), Duration::from_millis(20))
                         .unwrap();
                     drop(guard);
                     continue;
@@ -206,24 +214,24 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer<f3
 
             let effects_len = effects_buffer.lock().unwrap().len();
             let mut did_work = false;
-            let min_len = if hash_buffer.is_empty() {
+            let min_len = if buffer_snapshot.is_empty() {
                 0
             } else {
-                hash_buffer
+                buffer_snapshot
                     .iter()
-                    .map(|(_, buffer)| buffer.len())
+                    .map(|(_, buffer)| buffer.lock().unwrap().len())
                     .min()
                     .unwrap_or(0)
             };
             let all_tracks_finished = {
                 let finished = finished_tracks.lock().unwrap();
-                hash_buffer
+                buffer_snapshot
                     .iter()
                     .all(|(track_key, _)| finished.contains(track_key))
             };
-            let should_mix_tracks = !hash_buffer.is_empty()
+            let should_mix_tracks = !buffer_snapshot.is_empty()
                 && (min_len >= min_mix_samples || (all_tracks_finished && min_len > 0));
-            let should_mix_effects = hash_buffer.is_empty()
+            let should_mix_effects = buffer_snapshot.is_empty()
                 && (effects_len >= min_mix_samples || (all_tracks_finished && effects_len > 0));
 
             if should_mix_tracks || should_mix_effects {
@@ -231,8 +239,8 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer<f3
                 let chain_start = Instant::now();
 
                 let mut effects_buffer_unlocked = effects_buffer.lock().unwrap();
-                let length_of_smallest_buffer = if hash_buffer.is_empty() { 0 } else { min_len };
-                let current_chunk = if !hash_buffer.is_empty() {
+                let length_of_smallest_buffer = if buffer_snapshot.is_empty() { 0 } else { min_len };
+                let current_chunk = if !buffer_snapshot.is_empty() {
                     if length_of_smallest_buffer >= min_mix_samples {
                         min_mix_samples
                     } else if all_tracks_finished && length_of_smallest_buffer > 0 {
@@ -259,23 +267,24 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer<f3
                             metrics.wake_idle = wake_idle;
                         }
                         let (guard, _) = buffer_notify
-                            .wait_timeout(hash_buffer, Duration::from_millis(20))
+                            .wait_timeout(hash_buffer_copy.lock().unwrap(), Duration::from_millis(20))
                             .unwrap();
                         drop(guard);
                     } else {
-                        drop(hash_buffer);
+                        drop(buffer_snapshot);
                     }
                     continue;
                 }
 
                 mix_buffer.fill(0.0);
 
-                if !hash_buffer.is_empty() {
-                    for (_, buffer) in hash_buffer.iter_mut() {
-                    for sample in mix_buffer.iter_mut().take(current_chunk) {
-                        *sample += buffer.pop().unwrap();
+                if !buffer_snapshot.is_empty() {
+                    for (_, buffer) in buffer_snapshot.iter() {
+                        let mut buffer = buffer.lock().unwrap();
+                        for sample in mix_buffer.iter_mut().take(current_chunk) {
+                            *sample += buffer.pop().unwrap();
+                        }
                     }
-                }
                 }
 
                 if effects_buffer_unlocked.len() > 0 {
@@ -305,11 +314,11 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer<f3
 
                 #[cfg(feature = "debug")]
                 {
-                    if started && !hash_buffer.is_empty() {
+                    if started && !buffer_snapshot.is_empty() {
                         let total_samples = current_chunk as f64;
-                        let capacity_samples = hash_buffer
+                        let capacity_samples = buffer_snapshot
                             .iter()
-                            .map(|(_, buffer)| buffer.max_len())
+                            .map(|(_, buffer)| buffer.lock().unwrap().max_len())
                             .min()
                             .unwrap_or(0) as f64;
                         let fill = if capacity_samples > 0.0 {
@@ -396,14 +405,14 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer<f3
                     metrics.wake_idle = wake_idle;
                 }
                 let (guard, _) = buffer_notify
-                    .wait_timeout(hash_buffer, Duration::from_millis(20))
+                    .wait_timeout(hash_buffer_copy.lock().unwrap(), Duration::from_millis(20))
                     .unwrap();
                 drop(guard);
             } else {
                 if did_work {
                     buffer_notify.notify_all();
                 }
-                drop(hash_buffer);
+                drop(buffer_snapshot);
             }
         }
     });
