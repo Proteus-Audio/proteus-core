@@ -46,6 +46,6 @@ CHECK LIST:
 - [ ] #1 - Reduce Reverb Overhead
 - [x] #2 - Fixed Chunk Size + Preallocated Mixing Buffer (Already Started)
 - [x] #3 - Per-Track Buffer Locks (Reduce Contention)
-- [ ] #4 - Batch Reverb (Process Larger Blocks)
+- [x] #4 - Batch Reverb (Process Larger Blocks)
 - [ ] #5 - Smarter Container Backpressure (Avoid Dropping)
 - [ ] #6 - Effects Buffer Integration (Minor)
