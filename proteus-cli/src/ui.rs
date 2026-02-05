@@ -47,10 +47,9 @@ pub fn draw_status(
         f.render_widget(title, chunks[0]);
 
         let controls = Paragraph::new(
-            "space=play/pause  s=shuffle  ←/→=seek 5s  r=reverb on/off  -/= mix  q=quit",
+            "\nspace=play/pause  s=shuffle  ←/→=seek 5s  r=reverb on/off  -/= mix  q=quit",
         )
-        .style(Style::default().fg(Color::Blue))
-        .block(Block::default().borders(Borders::ALL).title("Controls"));
+        .style(Style::default().fg(Color::Blue));
         f.render_widget(controls, chunks[1]);
 
         let status_widget = Paragraph::new(status.text.as_str())
