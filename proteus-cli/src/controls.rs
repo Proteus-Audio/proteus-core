@@ -103,6 +103,12 @@ pub struct StatusArgs {
     #[cfg(feature = "debug")]
     pub max_append_gap_ms: f64,
     #[cfg(feature = "debug")]
+    pub track_key_count: usize,
+    #[cfg(feature = "debug")]
+    pub finished_track_count: usize,
+    #[cfg(feature = "debug")]
+    pub prot_key_count: usize,
+    #[cfg(feature = "debug")]
     pub thread_exists: bool,
     #[cfg(feature = "debug")]
     pub state_label: String,
@@ -149,7 +155,7 @@ pub fn status_text(args: StatusArgs) -> StatusSnapshot {
 
     #[cfg(feature = "debug")]
     let text = format!(
-        "{}   {} / {}   ({:>5.1}%)\nReverb: {} | mix: {:.2}\nDSP: {:>5.1} ksps / {:>5.1} ksps\nAVG: {:>5.1} ksps / {:>5.1} ksps  MIN/MAX: {:>5.1}/{:>5.1} ksps\nCHAIN: {:>5.1} ksps (avg {:>5.1} min {:>5.1} max {:>5.1})\nOUT: {:>5.1} ksps (avg {:>5.1} min {:>5.1} max {:>5.1})\nBUF: {:.2} (avg {:.2} min {:.2} max {:.2})\nWAKE: {} idle / {} total ({:>5.1}%)\nLVL: dry {:.3}/{:.3} wet {:.3}/{:.3} mix {:.3}/{:.3}  W/D {:>5.1}dB\nRB: in {} out {} gen {}\nRV: block {} underflow {}/{} pad {}/{} partial {}\nAPP: gap {:>6.2}ms avg {:>6.2} min {:>6.2} max {:>6.2}\nDBG: thread={} state={} heard={} buf_done={} sink_len={}",
+        "{}   {} / {}   ({:>5.1}%)\nReverb: {} | mix: {:.2}\nDSP: {:>5.1} ksps / {:>5.1} ksps\nAVG: {:>5.1} ksps / {:>5.1} ksps  MIN/MAX: {:>5.1}/{:>5.1} ksps\nCHAIN: {:>5.1} ksps (avg {:>5.1} min {:>5.1} max {:>5.1})\nOUT: {:>5.1} ksps (avg {:>5.1} min {:>5.1} max {:>5.1})\nBUF: {:.2} (avg {:.2} min {:.2} max {:.2})\nWAKE: {} idle / {} total ({:>5.1}%)\nLVL: dry {:.3}/{:.3} wet {:.3}/{:.3} mix {:.3}/{:.3}  W/D {:>5.1}dB\nRB: in {} out {} gen {}\nRV: block {} underflow {}/{} pad {}/{} partial {}\nAPP: gap {:>6.2}ms avg {:>6.2} min {:>6.2} max {:>6.2}\nTRK: {}/{} (buf {})\nDBG: thread={} state={} heard={} buf_done={} sink_len={}",
         state,
         current,
         total,
@@ -251,6 +257,9 @@ pub fn status_text(args: StatusArgs) -> StatusSnapshot {
         args.avg_append_gap_ms,
         args.min_append_gap_ms,
         args.max_append_gap_ms,
+        args.finished_track_count,
+        args.prot_key_count,
+        args.track_key_count,
         args.thread_exists,
         args.state_label,
         args.audio_heard,

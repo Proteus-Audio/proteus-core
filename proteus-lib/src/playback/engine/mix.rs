@@ -91,6 +91,7 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer<f3
         } else {
             prot.enumerated_list()
         };
+        let prot_key_count = prot.get_keys().len();
         drop(prot);
 
         if let Some((file_path, track_entries)) = container_tracks {
@@ -206,12 +207,12 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer<f3
                 wake_total = wake_total.saturating_add(1);
             }
 
+            let finished_snapshot = finished_tracks.lock().unwrap().clone();
             let mut all_buffers_full = true;
             for (track_key, buffer) in buffer_snapshot.iter() {
                 let len = buffer.lock().unwrap().len();
                 if len == 0 {
-                    let finished = finished_tracks.lock().unwrap();
-                    if finished.contains(track_key) {
+                    if finished_snapshot.contains(track_key) {
                         removable_tracks.push(*track_key);
                         continue;
                     }
@@ -265,14 +266,24 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer<f3
                     .min()
                     .unwrap_or(0)
             };
-            let all_tracks_finished = {
-                let finished = finished_tracks.lock().unwrap();
-                buffer_snapshot
-                    .iter()
-                    .all(|(track_key, _)| finished.contains(track_key))
-            };
+            let all_tracks_finished = buffer_snapshot
+                .iter()
+                .all(|(track_key, _)| finished_snapshot.contains(track_key));
+            let active_min_len = buffer_snapshot
+                .iter()
+                .filter(|(track_key, _)| !finished_snapshot.contains(track_key))
+                .map(|(_, buffer)| buffer.lock().unwrap().len())
+                .min()
+                .unwrap_or(0);
+            let finished_min_len = buffer_snapshot
+                .iter()
+                .filter(|(track_key, _)| finished_snapshot.contains(track_key))
+                .map(|(_, buffer)| buffer.lock().unwrap().len())
+                .min()
+                .unwrap_or(0);
             let should_mix_tracks = !buffer_snapshot.is_empty()
-                && (min_len >= min_mix_samples || (all_tracks_finished && min_len > 0));
+                && ((!all_tracks_finished && active_min_len >= min_mix_samples)
+                    || (all_tracks_finished && finished_min_len > 0));
             let should_mix_effects = buffer_snapshot.is_empty()
                 && (effects_len >= min_mix_samples || (all_tracks_finished && effects_len > 0));
 
@@ -281,16 +292,11 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer<f3
                 let chain_start = Instant::now();
 
                 let mut effects_buffer_unlocked = effects_buffer.lock().unwrap();
-                let length_of_smallest_buffer = if buffer_snapshot.is_empty() {
-                    0
-                } else {
-                    min_len
-                };
                 let current_chunk = if !buffer_snapshot.is_empty() {
-                    if length_of_smallest_buffer >= min_mix_samples {
+                    if !all_tracks_finished && active_min_len >= min_mix_samples {
                         min_mix_samples
-                    } else if all_tracks_finished && length_of_smallest_buffer > 0 {
-                        length_of_smallest_buffer
+                    } else if all_tracks_finished && finished_min_len > 0 {
+                        finished_min_len
                     } else {
                         0
                     }
@@ -331,8 +337,11 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer<f3
                     for (track_key, buffer) in buffer_snapshot.iter() {
                         let weight = weights_snapshot.get(track_key).copied().unwrap_or(1.0);
                         let mut buffer = buffer.lock().unwrap();
-                        for sample in mix_buffer.iter_mut().take(current_chunk) {
-                            *sample += buffer.pop().unwrap() * weight;
+                        let take = buffer.len().min(current_chunk);
+                        for sample in mix_buffer.iter_mut().take(take) {
+                            if let Some(value) = buffer.pop() {
+                                *sample += value * weight;
+                            }
                         }
                     }
                 }
@@ -659,6 +668,9 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer<f3
                     metrics.reverb_pad_events = reverb_pad_events;
                     metrics.reverb_pad_samples = reverb_pad_samples;
                     metrics.reverb_partial_drain_events = reverb_partial_drain_events;
+                    metrics.track_key_count = buffer_snapshot.len();
+                    metrics.finished_track_count = finished_snapshot.len();
+                    metrics.prot_key_count = prot_key_count;
                 }
 
                 sender.send((samples_buffer, length_in_seconds)).unwrap();

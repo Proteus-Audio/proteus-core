@@ -181,6 +181,12 @@ pub fn run(args: &ArgMatches, log_buffer: Arc<Mutex<VecDeque<String>>>) -> Resul
                 #[cfg(feature = "debug")]
                 max_append_gap_ms: reverb_metrics.max_append_gap_ms,
                 #[cfg(feature = "debug")]
+                track_key_count: reverb_metrics.track_key_count,
+                #[cfg(feature = "debug")]
+                finished_track_count: reverb_metrics.finished_track_count,
+                #[cfg(feature = "debug")]
+                prot_key_count: reverb_metrics.prot_key_count,
+                #[cfg(feature = "debug")]
                 thread_exists,
                 #[cfg(feature = "debug")]
                 state_label: format!("{:?}", state),

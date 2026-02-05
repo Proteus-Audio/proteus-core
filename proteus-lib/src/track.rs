@@ -1,4 +1,4 @@
-use log::warn;
+use log::{info, warn};
 use std::collections::HashMap;
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
@@ -251,8 +251,8 @@ pub fn buffer_container_tracks(
         channels,
     } = args;
 
-    let (mut format, mut decoders, mut durations, mut keys_for_track, valid_entries) = {
-        let mut format = crate::tools::tools::get_reader(&file_path);
+    let (mut format, mut decoders, durations, keys_for_track, valid_entries) = {
+        let format = crate::tools::tools::get_reader(&file_path);
         let mut decoders: HashMap<u32, Box<dyn Decoder>> = HashMap::new();
         let mut durations: HashMap<u32, Option<u64>> = HashMap::new();
         let mut keys_for_track: HashMap<u32, Vec<u16>> = HashMap::new();
@@ -263,6 +263,10 @@ pub fn buffer_container_tracks(
                 Some(track) => track,
                 None => {
                     warn!("container track missing: id {}", track_id);
+                    mark_track_as_finished(&mut finished_tracks.clone(), *track_key);
+                    if let Some(notify) = buffer_notify.as_ref() {
+                        notify.notify_all();
+                    }
                     continue;
                 }
             };
@@ -280,7 +284,10 @@ pub fn buffer_container_tracks(
                 .n_frames
                 .map(|frames| track.codec_params.start_ts + frames);
             durations.insert(*track_id, dur);
-            keys_for_track.entry(*track_id).or_default().push(*track_key);
+            keys_for_track
+                .entry(*track_id)
+                .or_default()
+                .push(*track_key);
             valid_entries.push((*track_key, *track_id));
         }
 
@@ -304,7 +311,15 @@ pub fn buffer_container_tracks(
                 if let Some(primary_key) = keys.first() {
                     let count = keys.len() as f32;
                     weights.insert(*primary_key, count);
+                    info!(
+                        "Marking tracks {} as finished",
+                        keys.iter()
+                            .map(|k| k.to_string())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    );
                     for dup_key in keys.iter().skip(1) {
+                        info!("Track: {}", dup_key);
                         weights.insert(*dup_key, 0.0);
                         mark_track_as_finished(&mut finished_tracks.clone(), *dup_key);
                     }
@@ -352,9 +367,16 @@ pub fn buffer_container_tracks(
             let primary_track_key = track_keys[0];
 
             if let Some(dur) = durations.get(&track_id).copied().flatten() {
+                info!(
+                    "Track {} duration: {} | packet.ts: {}",
+                    primary_track_key,
+                    dur,
+                    packet.ts()
+                );
                 if packet.ts() >= dur {
                     if !finished_track_ids.contains(&track_id) {
                         finished_track_ids.push(track_id);
+                        info!("Marking track {} as finished", primary_track_key);
                         mark_track_as_finished(&mut finished_tracks.clone(), primary_track_key);
                     }
                     if finished_track_ids.len() == keys_for_track.len() {
@@ -362,6 +384,8 @@ pub fn buffer_container_tracks(
                     }
                     continue;
                 }
+            } else {
+                warn!("Track {} has no duration", primary_track_key);
             }
 
             let decoder = match decoders.get_mut(&track_id) {
@@ -454,9 +478,7 @@ fn add_samples_to_buffer_map(
         }
 
         if let Some(notify) = notify {
-            let (guard, _) = notify
-                .wait_timeout(map, Duration::from_millis(20))
-                .unwrap();
+            let (guard, _) = notify.wait_timeout(map, Duration::from_millis(20)).unwrap();
             drop(guard);
         } else {
             drop(map);
@@ -495,6 +517,10 @@ fn add_samples_to_buffer_map_nonblocking(
 
 fn mark_track_as_finished(finished_tracks: &mut Arc<Mutex<Vec<u16>>>, track_key: u16) {
     let mut finished_tracks_copy = finished_tracks.lock().unwrap();
+    if finished_tracks_copy.contains(&track_key) {
+        return;
+    }
     finished_tracks_copy.push(track_key);
     drop(finished_tracks_copy);
+    log::info!("track finished: key={}", track_key);
 }

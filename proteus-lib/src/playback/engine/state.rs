@@ -72,4 +72,7 @@ pub struct ReverbMetrics {
     pub avg_append_gap_ms: f64,
     pub min_append_gap_ms: f64,
     pub max_append_gap_ms: f64,
+    pub track_key_count: usize,
+    pub finished_track_count: usize,
+    pub prot_key_count: usize,
 }
