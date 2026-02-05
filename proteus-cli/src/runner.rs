@@ -127,6 +127,26 @@ pub fn run(args: &ArgMatches, log_buffer: Arc<Mutex<VecDeque<String>>>) -> Resul
                 wake_total: reverb_metrics.wake_total,
                 #[cfg(feature = "debug")]
                 wake_idle: reverb_metrics.wake_idle,
+                #[cfg(feature = "debug")]
+                dry_rms: reverb_metrics.dry_rms,
+                #[cfg(feature = "debug")]
+                wet_rms: reverb_metrics.wet_rms,
+                #[cfg(feature = "debug")]
+                mix_rms: reverb_metrics.mix_rms,
+                #[cfg(feature = "debug")]
+                dry_peak: reverb_metrics.dry_peak,
+                #[cfg(feature = "debug")]
+                wet_peak: reverb_metrics.wet_peak,
+                #[cfg(feature = "debug")]
+                mix_peak: reverb_metrics.mix_peak,
+                #[cfg(feature = "debug")]
+                wet_to_dry_db: reverb_metrics.wet_to_dry_db,
+                #[cfg(feature = "debug")]
+                reverb_in_len: reverb_metrics.reverb_in_len,
+                #[cfg(feature = "debug")]
+                reverb_out_len: reverb_metrics.reverb_out_len,
+                #[cfg(feature = "debug")]
+                reverb_reset_gen: reverb_metrics.reverb_reset_gen,
             });
             ui::draw_status(term, &status, &log_lines);
         }

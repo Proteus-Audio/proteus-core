@@ -171,6 +171,31 @@ where
         }
     }
 
+    // Energy-normalize (attenuate only) so long IRs don't explode the wet gain.
+    let mut max_energy = 0.0_f32;
+    for channel in &channel_samples {
+        let mut sum_sq = 0.0_f32;
+        for sample in channel {
+            sum_sq += sample * sample;
+        }
+        if sum_sq > max_energy {
+            max_energy = sum_sq;
+        }
+    }
+    if max_energy > 0.0 {
+        let mut scale = 1.0_f32 / max_energy.sqrt();
+        if scale > 1.0 {
+            scale = 1.0;
+        }
+        if scale < 1.0 {
+            for channel in &mut channel_samples {
+                for sample in channel {
+                    *sample *= scale;
+                }
+            }
+        }
+    }
+
     if channel_samples.iter().any(|channel| channel.is_empty()) {
         warn!("Impulse response includes empty channels; results may be silent.");
     }

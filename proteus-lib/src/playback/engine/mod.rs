@@ -3,6 +3,7 @@ use rodio::buffer::SamplesBuffer;
 use std::collections::HashMap;
 use std::sync::atomic::AtomicBool;
 use std::sync::{mpsc::Receiver, Arc, Condvar, Mutex};
+use std::sync::atomic::AtomicU64;
 
 use crate::audio::buffer::{init_buffer_map, TrackBuffer};
 use crate::container::prot::Prot;
@@ -24,6 +25,7 @@ pub struct PlayerEngine {
     buffer_notify: Arc<Condvar>,
     effects_buffer: Arc<Mutex<Bounded<Vec<f32>>>>,
     track_weights: Arc<Mutex<HashMap<u16, f32>>>,
+    reverb_reset: Arc<AtomicU64>,
     prot: Arc<Mutex<Prot>>,
     buffer_settings: Arc<Mutex<PlaybackBufferSettings>>,
     reverb_settings: Arc<Mutex<ReverbSettings>>,
@@ -38,6 +40,7 @@ impl PlayerEngine {
         buffer_settings: Arc<Mutex<PlaybackBufferSettings>>,
         reverb_settings: Arc<Mutex<ReverbSettings>>,
         reverb_metrics: Arc<Mutex<ReverbMetrics>>,
+        reverb_reset: Arc<AtomicU64>,
     ) -> Self {
         let buffer_map = init_buffer_map();
         let buffer_notify = Arc::new(Condvar::new());
@@ -67,6 +70,7 @@ impl PlayerEngine {
             buffer_notify,
             effects_buffer,
             track_weights,
+            reverb_reset,
             abort,
             prot,
             buffer_settings,
@@ -98,6 +102,7 @@ impl PlayerEngine {
             buffer_notify: self.buffer_notify.clone(),
             effects_buffer: self.effects_buffer.clone(),
             track_weights: self.track_weights.clone(),
+            reverb_reset: self.reverb_reset.clone(),
             finished_tracks: self.finished_tracks.clone(),
             prot: self.prot.clone(),
             abort: self.abort.clone(),

@@ -62,6 +62,26 @@ pub struct StatusArgs {
     pub wake_total: u64,
     #[cfg(feature = "debug")]
     pub wake_idle: u64,
+    #[cfg(feature = "debug")]
+    pub dry_rms: f64,
+    #[cfg(feature = "debug")]
+    pub wet_rms: f64,
+    #[cfg(feature = "debug")]
+    pub mix_rms: f64,
+    #[cfg(feature = "debug")]
+    pub dry_peak: f64,
+    #[cfg(feature = "debug")]
+    pub wet_peak: f64,
+    #[cfg(feature = "debug")]
+    pub mix_peak: f64,
+    #[cfg(feature = "debug")]
+    pub wet_to_dry_db: f64,
+    #[cfg(feature = "debug")]
+    pub reverb_in_len: usize,
+    #[cfg(feature = "debug")]
+    pub reverb_out_len: usize,
+    #[cfg(feature = "debug")]
+    pub reverb_reset_gen: u64,
 }
 
 pub fn status_text(args: StatusArgs) -> StatusSnapshot {
@@ -99,7 +119,7 @@ pub fn status_text(args: StatusArgs) -> StatusSnapshot {
 
     #[cfg(feature = "debug")]
     let text = format!(
-        "{}   {} / {}   ({:>5.1}%)\nReverb: {} | mix: {:.2}\nDSP: {:>5.1} ksps / {:>5.1} ksps\nAVG: {:>5.1} ksps / {:>5.1} ksps  MIN/MAX: {:>5.1}/{:>5.1} ksps\nCHAIN: {:>5.1} ksps (avg {:>5.1} min {:>5.1} max {:>5.1})\nOUT: {:>5.1} ksps (avg {:>5.1} min {:>5.1} max {:>5.1})\nBUF: {:.2} (avg {:.2} min {:.2} max {:.2})\nWAKE: {} idle / {} total ({:>5.1}%)",
+        "{}   {} / {}   ({:>5.1}%)\nReverb: {} | mix: {:.2}\nDSP: {:>5.1} ksps / {:>5.1} ksps\nAVG: {:>5.1} ksps / {:>5.1} ksps  MIN/MAX: {:>5.1}/{:>5.1} ksps\nCHAIN: {:>5.1} ksps (avg {:>5.1} min {:>5.1} max {:>5.1})\nOUT: {:>5.1} ksps (avg {:>5.1} min {:>5.1} max {:>5.1})\nBUF: {:.2} (avg {:.2} min {:.2} max {:.2})\nWAKE: {} idle / {} total ({:>5.1}%)\nLVL: dry {:.3}/{:.3} wet {:.3}/{:.3} mix {:.3}/{:.3}  W/D {:>5.1}dB\nRB: in {} out {} gen {}",
         state,
         current,
         total,
@@ -180,7 +200,17 @@ pub fn status_text(args: StatusArgs) -> StatusSnapshot {
             (args.wake_idle as f64 / args.wake_total as f64) * 100.0
         } else {
             0.0
-        }
+        },
+        args.dry_rms,
+        args.dry_peak,
+        args.wet_rms,
+        args.wet_peak,
+        args.mix_rms,
+        args.mix_peak,
+        args.wet_to_dry_db,
+        args.reverb_in_len,
+        args.reverb_out_len,
+        args.reverb_reset_gen
     );
 
     #[cfg(not(feature = "debug"))]

@@ -3,6 +3,7 @@ use rodio::buffer::SamplesBuffer;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
+use std::sync::atomic::AtomicU64;
 use std::thread;
 use std::time::Duration;
 #[cfg(feature = "debug")]
@@ -21,6 +22,7 @@ pub struct MixThreadArgs {
     pub buffer_notify: Arc<std::sync::Condvar>,
     pub effects_buffer: Arc<Mutex<Bounded<Vec<f32>>>>,
     pub track_weights: Arc<Mutex<HashMap<u16, f32>>>,
+    pub reverb_reset: Arc<AtomicU64>,
     pub finished_tracks: Arc<Mutex<Vec<u16>>>,
     pub prot: Arc<Mutex<Prot>>,
     pub abort: Arc<AtomicBool>,
@@ -39,6 +41,7 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer<f3
         buffer_notify,
         effects_buffer,
         track_weights,
+        reverb_reset,
         finished_tracks,
         prot,
         abort,
@@ -138,16 +141,21 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer<f3
         let mut reverb = build_reverb_with_impulse_response(
             output_channels,
             0.000001,
-            impulse_spec,
+            impulse_spec.clone(),
             container_path.as_deref(),
             tail_db,
         );
         let mut current_dry_wet = 0.000001_f32;
         let mut reverb_input_buf: Vec<f32> = Vec::new();
         let mut reverb_output_buf: Vec<f32> = Vec::new();
-        let reverb_block_samples = reverb.block_size_samples();
+        let mut reverb_block_samples = reverb.block_size_samples();
         const REVERB_BATCH_BLOCKS: usize = 2;
         let mut reverb_block_out: Vec<f32> = Vec::new();
+        let mut last_reverb_reset = reverb_reset.load(std::sync::atomic::Ordering::SeqCst);
+        #[cfg(feature = "debug")]
+        let mut reverb_out_rms: f64 = 0.0;
+        #[cfg(feature = "debug")]
+        let mut reverb_out_peak: f64 = 0.0;
         #[cfg(feature = "debug")]
         let mut avg_dsp_ms = 0.0_f64;
         #[cfg(feature = "debug")]
@@ -330,15 +338,28 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer<f3
 
                 let input_channels = audio_info.channels as u16;
                 let sample_rate = audio_info.sample_rate as u32;
-                let mut settings = reverb_settings.lock().unwrap();
-                if settings.reset_pending {
-                    reverb.clear_state();
+                let current_reset = reverb_reset.load(std::sync::atomic::Ordering::SeqCst);
+                if current_reset != last_reverb_reset {
+                    reverb = build_reverb_with_impulse_response(
+                        output_channels,
+                        0.000001,
+                        impulse_spec.clone(),
+                        container_path.as_deref(),
+                        tail_db,
+                    );
+                    reverb_block_samples = reverb.block_size_samples();
                     reverb_input_buf.clear();
                     reverb_output_buf.clear();
                     reverb_block_out.clear();
-                    settings.reset_pending = false;
+                    #[cfg(feature = "debug")]
+                    {
+                        reverb_out_rms = 0.0;
+                        reverb_out_peak = 0.0;
+                    }
+                    current_dry_wet = f32::NAN;
+                    last_reverb_reset = current_reset;
                 }
-                let settings = *settings;
+                let settings = *reverb_settings.lock().unwrap();
                 if (settings.dry_wet - current_dry_wet).abs() > f32::EPSILON {
                     reverb.set_dry_wet(settings.dry_wet);
                     current_dry_wet = settings.dry_wet;
@@ -369,6 +390,27 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer<f3
                             };
                             let block: Vec<f32> = reverb_input_buf.drain(0..take).collect();
                             reverb.process_into(&block, &mut reverb_block_out);
+                            #[cfg(feature = "debug")]
+                            {
+                                if !reverb_block_out.is_empty() {
+                                    let mut sum_sq = 0.0_f64;
+                                    let mut peak = 0.0_f64;
+                                    for sample in &reverb_block_out {
+                                        let v = *sample as f64;
+                                        sum_sq += v * v;
+                                        let abs = v.abs();
+                                        if abs > peak {
+                                            peak = abs;
+                                        }
+                                    }
+                                    let rms = (sum_sq / reverb_block_out.len() as f64).sqrt();
+                                    reverb_out_rms = rms;
+                                    reverb_out_peak = peak;
+                                    let mut metrics = reverb_metrics.lock().unwrap();
+                                    metrics.wet_rms = rms;
+                                    metrics.wet_peak = peak;
+                                }
+                            }
                             reverb_output_buf.extend_from_slice(&reverb_block_out);
                             if take < batch_samples {
                                 break;
@@ -433,6 +475,8 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer<f3
                     metrics.max_rt_factor = max_rt_factor;
                 }
 
+                let samples_for_metrics = samples.clone();
+                let samples_len = samples_for_metrics.len();
                 let samples_buffer = SamplesBuffer::new(input_channels, sample_rate, samples);
 
                 let length_in_seconds = current_chunk as f64
@@ -476,6 +520,46 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer<f3
 
                 #[cfg(feature = "debug")]
                 {
+                    let mut dry_sum_sq = 0.0_f64;
+                    let mut dry_peak = 0.0_f64;
+                    for sample in mix_buffer.iter().take(current_chunk) {
+                        let v = *sample as f64;
+                        dry_sum_sq += v * v;
+                        let abs = v.abs();
+                        if abs > dry_peak {
+                            dry_peak = abs;
+                        }
+                    }
+                    let dry_rms = if current_chunk > 0 {
+                        (dry_sum_sq / current_chunk as f64).sqrt()
+                    } else {
+                        0.0
+                    };
+
+                    let mut mix_sum_sq = 0.0_f64;
+                    let mut mix_peak = 0.0_f64;
+                    for sample in samples_for_metrics.iter() {
+                        let v = *sample as f64;
+                        mix_sum_sq += v * v;
+                        let abs = v.abs();
+                        if abs > mix_peak {
+                            mix_peak = abs;
+                        }
+                    }
+                    let mix_rms = if samples_len > 0 {
+                        (mix_sum_sq / samples_len as f64).sqrt()
+                    } else {
+                        0.0
+                    };
+
+                    let wet_rms = reverb_out_rms;
+                    let wet_peak = reverb_out_peak;
+                    let wet_to_dry_db = if dry_rms > 0.0 && wet_rms > 0.0 {
+                        20.0 * (wet_rms / dry_rms).log10()
+                    } else {
+                        0.0
+                    };
+
                     let chain_time_ms = chain_start.elapsed().as_secs_f64() * 1000.0;
                     let out_interval_ms = last_send.elapsed().as_secs_f64() * 1000.0;
 
@@ -513,6 +597,16 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer<f3
                         0.0
                     };
                     metrics.max_out_interval_ms = max_out_interval_ms;
+                    metrics.dry_rms = dry_rms;
+                    metrics.wet_rms = wet_rms;
+                    metrics.mix_rms = mix_rms;
+                    metrics.dry_peak = dry_peak;
+                    metrics.wet_peak = wet_peak;
+                    metrics.mix_peak = mix_peak;
+                    metrics.wet_to_dry_db = wet_to_dry_db;
+                    metrics.reverb_in_len = reverb_input_buf.len();
+                    metrics.reverb_out_len = reverb_output_buf.len();
+                    metrics.reverb_reset_gen = current_reset;
                 }
 
                 sender.send((samples_buffer, length_in_seconds)).unwrap();

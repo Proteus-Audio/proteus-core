@@ -47,6 +47,9 @@ pub struct Player {
     buffer_settings: Arc<Mutex<PlaybackBufferSettings>>,
     reverb_settings: Arc<Mutex<ReverbSettings>>,
     reverb_metrics: Arc<Mutex<ReverbMetrics>>,
+    reverb_reset: Arc<AtomicU64>,
+    impulse_response_override: Option<ImpulseResponseSpec>,
+    impulse_response_tail_override: Option<f32>,
 }
 
 impl Player {
@@ -99,6 +102,9 @@ impl Player {
             buffer_settings: Arc::new(Mutex::new(PlaybackBufferSettings::new(20.0))),
             reverb_settings: Arc::new(Mutex::new(ReverbSettings::new(0.000001))),
             reverb_metrics: Arc::new(Mutex::new(ReverbMetrics::default())),
+            reverb_reset: Arc::new(AtomicU64::new(0)),
+            impulse_response_override: None,
+            impulse_response_tail_override: None,
         };
 
         this.initialize_thread(None);
@@ -107,6 +113,7 @@ impl Player {
     }
 
     pub fn set_impulse_response_spec(&mut self, spec: ImpulseResponseSpec) {
+        self.impulse_response_override = Some(spec.clone());
         let mut prot = self.prot.lock().unwrap();
         prot.set_impulse_response_spec(spec);
         self.request_reverb_reset();
@@ -119,6 +126,7 @@ impl Player {
     }
 
     pub fn set_impulse_response_tail_db(&mut self, tail_db: f32) {
+        self.impulse_response_tail_override = Some(tail_db);
         let mut prot = self.prot.lock().unwrap();
         prot.set_impulse_response_tail_db(tail_db);
         self.request_reverb_reset();
@@ -145,8 +153,7 @@ impl Player {
     }
 
     fn request_reverb_reset(&self) {
-        let mut settings = self.reverb_settings.lock().unwrap();
-        settings.reset_pending = true;
+        self.reverb_reset.fetch_add(1, Ordering::SeqCst);
     }
 
     pub fn set_start_buffer_ms(&self, start_buffer_ms: f32) {
@@ -201,6 +208,7 @@ impl Player {
         let buffer_settings = self.buffer_settings.clone();
         let reverb_settings = self.reverb_settings.clone();
         let reverb_metrics = self.reverb_metrics.clone();
+        let reverb_reset = self.reverb_reset.clone();
 
         let audio_heard = self.audio_heard.clone();
         let volume = self.volume.clone();
@@ -236,6 +244,7 @@ impl Player {
                 buffer_settings,
                 reverb_settings,
                 reverb_metrics,
+                reverb_reset,
             );
             let (_stream, stream_handle) = OutputStream::try_default().unwrap();
             // let sink_mutex = Arc::new(Mutex::new(Sink::try_new(&stream_handle).unwrap()));
@@ -550,6 +559,12 @@ impl Player {
     pub fn refresh_tracks(&mut self) {
         let mut prot = self.prot.lock().unwrap();
         prot.refresh_tracks();
+        if let Some(spec) = self.impulse_response_override.clone() {
+            prot.set_impulse_response_spec(spec);
+        }
+        if let Some(tail_db) = self.impulse_response_tail_override {
+            prot.set_impulse_response_tail_db(tail_db);
+        }
         drop(prot);
 
         self.request_reverb_reset();
