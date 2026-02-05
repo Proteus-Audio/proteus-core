@@ -234,7 +234,10 @@ pub struct ContainerTrackArgs {
     pub channels: u8,
 }
 
-pub fn buffer_container_tracks(args: ContainerTrackArgs, abort: Arc<AtomicBool>) -> Arc<Mutex<bool>> {
+pub fn buffer_container_tracks(
+    args: ContainerTrackArgs,
+    abort: Arc<AtomicBool>,
+) -> Arc<Mutex<bool>> {
     let ContainerTrackArgs {
         file_path,
         track_entries,
@@ -252,20 +255,11 @@ pub fn buffer_container_tracks(args: ContainerTrackArgs, abort: Arc<AtomicBool>)
         let mut keys_for_track: HashMap<u32, Vec<u16>> = HashMap::new();
         let mut valid_entries: Vec<(u16, u32)> = Vec::new();
 
-        eprintln!(
-            "container tracks requested: {}",
-            track_entries
-                .iter()
-                .map(|(key, id)| format!("{}=>{}", key, id))
-                .collect::<Vec<_>>()
-                .join(", ")
-        );
-
         for (track_key, track_id) in &track_entries {
             let track = match format.tracks().iter().find(|track| track.id == *track_id) {
                 Some(track) => track,
                 None => {
-                    eprintln!("container track missing: id {}", track_id);
+                    warn!("container track missing: id {}", track_id);
                     continue;
                 }
             };
@@ -283,18 +277,12 @@ pub fn buffer_container_tracks(args: ContainerTrackArgs, abort: Arc<AtomicBool>)
                 .n_frames
                 .map(|frames| track.codec_params.start_ts + frames);
             durations.insert(*track_id, dur);
-            keys_for_track.entry(*track_id).or_default().push(*track_key);
+            keys_for_track
+                .entry(*track_id)
+                .or_default()
+                .push(*track_key);
             valid_entries.push((*track_key, *track_id));
         }
-
-        eprintln!(
-            "container tracks found: {}",
-            valid_entries
-                .iter()
-                .map(|(key, id)| format!("{}=>{}", key, id))
-                .collect::<Vec<_>>()
-                .join(", ")
-        );
 
         (format, decoders, durations, keys_for_track, valid_entries)
     };
