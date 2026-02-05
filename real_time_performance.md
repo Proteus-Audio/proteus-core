@@ -1,86 +1,42 @@
-## Other likely performance hotspots to investigate
+## Performance Re-Assessment (Feb 2026)
 
-Here’s a concrete list of places that can yield real gains:
+Observed:
+- `OUT` ksps below the target sample rate even without reverb.
+- With reverb enabled, `OUT` ksps drops further and audio becomes choppy.
+- Buffer fill is steady, so the bottleneck is likely compute or per-chunk overhead rather than starvation.
 
-### 1) Mixing strategy (biggest win)
+This suggests the hot path is still the DSP/mix/reverb chain and/or per-chunk overhead, not I/O.
 
-Right now you:
+## Recommended Improvements (Ordered By Expected Impact)
 
-- build a dynamic_mixer,
-- convert buffers into SamplesBuffer,
-- then collect into a Vec<f32>.
+### 1) Reduce Reverb Overhead (Biggest Win)
+- Remove the reverb worker IPC copy by processing in the mix thread when enabled.
+- Or keep the worker but use a shared buffer pool to avoid allocating/copying per chunk.
+- Expected impact: large reduction in CPU and latency because the current IPC + allocations are on every chunk.
 
-That allocates and copies every mix cycle.
+### 2) Fixed Chunk Size + Preallocated Mixing Buffer (Already Started)
+- Keep fixed-size chunks (e.g., 10–50ms) and avoid variable-size chunking.
+- Mix directly into a reusable `Vec<f32>` and avoid `dynamic_mixer` and repeated `SamplesBuffer` creation.
+- Expected impact: reduces per-chunk overhead and stabilizes throughput.
 
-Better: custom mix into a preallocated Vec<f32> (or ring buffer) and reuse it. That removes most allocations
-and SamplesBuffer conversions.
+### 3) Per-Track Buffer Locks (Reduce Contention)
+- Replace the single `Mutex<HashMap<...>>` with per-track buffers (`Arc<Mutex<Bounded<_>>>` per track).
+- Expected impact: lower lock contention between decoder threads and the mix loop.
 
-———
+### 4) Batch Reverb (Process Larger Blocks)
+- Increase block size for reverb specifically, even if mix chunks are smaller.
+- Example: accumulate N mix chunks, process reverb in a larger block, then output in smaller blocks.
+- Expected impact: lower FFT overhead per second at the cost of slightly higher latency.
 
-### 2) Reverb worker IPC
+### 5) Smarter Container Backpressure (Avoid Dropping)
+- In container mode, avoid dropping samples when buffers are full.
+- Use the condvar to block only the specific track that is full.
+- Expected impact: reduces audible glitches due to dropped samples.
 
-You send a Vec<f32> over a sync channel, then allocate a new Vec<f32> in the worker. That’s extra copies and
-synchronization.
+### 6) Effects Buffer Integration (Minor)
+- Avoid locking/reading the effects buffer when it is empty.
+- Use a flag or notify to skip the lock path.
 
-Better:
-
-- Use a reusable buffer pool (e.g. Vec<Vec<f32>>).
-- Or move reverb into the same thread and avoid IPC if the worker isn’t needed.
-
-———
-
-### 3) Buffer map locking
-
-buffer_map is a single Mutex<HashMap<...>>. The mixer loop holds it while reading and popping, and producers
-also lock it to push.
-
-That creates contention.
-
-Better:
-
-- Use per‑track locks (map of Arc<Mutex<Bounded<_>>>).
-- Or use dashmap to reduce contention.
-
-———
-
-### 4) Non‑blocking container buffering
-
-In container mode you now drop samples when buffers are full. That keeps things moving but can lead to
-choppiness if sustained.
-
-Better:
-
-- Use the condvar to wait when full, but only block per‑track.
-- Or add backpressure by pausing that specific track’s decoding.
-
-———
-
-### 5) Chunk size stability
-
-The “smallest buffer” heuristic makes chunk size volatile.
-
-Better:
-
-- Target a fixed chunk size (e.g. 4096 frames).
-- If any track doesn’t have enough, wait.
-  This stabilizes performance and mixing overhead.
-
-———
-
-### 6) Effects buffer integration
-
-Effects buffer and track buffers are mixed together, but effects buffer often is empty. The current code
-still locks and checks it each pass.
-
-Better:
-
-- Only lock effects buffer when you know it’s non‑empty (a flag + notify).
-
-———
-
-## Recommendation order (highest impact first)
-
-1. Fixed chunk size mixing with preallocated output buffer.
-2. Per‑track buffer locks to reduce contention.
-3. Reverb worker buffer reuse / avoid IPC.
-4. Smarter container backpressure (avoid dropping).
+## Notes For Next Tests
+- If `OUT` ksps is below the target sample rate, throughput is the primary issue.
+- If `BUF` is stable but `OUT` is low, focus on CPU per chunk rather than buffering.
