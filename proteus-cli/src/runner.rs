@@ -83,6 +83,8 @@ pub fn run(args: &ArgMatches, log_buffer: Arc<Mutex<VecDeque<String>>>) -> Resul
             let (thread_exists, state, audio_heard) = player.debug_playback_state();
             #[cfg(feature = "debug")]
             let buffering_done = player.debug_buffering_done();
+            #[cfg(feature = "debug")]
+            let (sink_paused, sink_empty, sink_len) = player.debug_sink_state();
             let log_lines = logging::snapshot(&log_buffer);
             let status = controls::status_text(controls::StatusArgs {
                 time,
@@ -166,6 +168,8 @@ pub fn run(args: &ArgMatches, log_buffer: Arc<Mutex<VecDeque<String>>>) -> Resul
                 audio_heard,
                 #[cfg(feature = "debug")]
                 buffering_done,
+                #[cfg(feature = "debug")]
+                sink_len,
             });
             ui::draw_status(term, &status, &log_lines);
         }
