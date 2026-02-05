@@ -7,6 +7,7 @@ const LOG_CAPACITY: usize = 500;
 struct SharedLogger {
     level: LevelFilter,
     buffer: Arc<Mutex<VecDeque<String>>>,
+    echo_stderr: bool,
 }
 
 impl Log for SharedLogger {
@@ -20,7 +21,9 @@ impl Log for SharedLogger {
         }
 
         let line = format!("[{}] {}", record.level(), record.args());
-        eprintln!("{}", line);
+        if self.echo_stderr {
+            eprintln!("{}", line);
+        }
 
         let mut buffer = self.buffer.lock().unwrap();
         if buffer.len() >= LOG_CAPACITY {
@@ -51,9 +54,14 @@ pub fn init() -> Arc<Mutex<VecDeque<String>>> {
         Err(_) => LevelFilter::Info,
     };
 
+    let echo_stderr = std::env::var("PROTEUS_LOG_STDERR")
+        .map(|value| value != "0")
+        .unwrap_or(false);
+
     let logger = SharedLogger {
         level,
         buffer: buffer.clone(),
+        echo_stderr,
     };
 
     let logger_ref = LOGGER.get_or_init(|| logger);

@@ -233,11 +233,11 @@ pub fn buffer_container_tracks(args: ContainerTrackArgs, abort: Arc<AtomicBool>)
         channels,
     } = args;
 
-    let (mut format, mut decoders, mut durations, mut key_for_track, valid_entries) = {
+    let (mut format, mut decoders, mut durations, mut keys_for_track, valid_entries) = {
         let mut format = crate::tools::tools::get_reader(&file_path);
         let mut decoders: HashMap<u32, Box<dyn Decoder>> = HashMap::new();
         let mut durations: HashMap<u32, Option<u64>> = HashMap::new();
-        let mut key_for_track: HashMap<u32, u16> = HashMap::new();
+        let mut keys_for_track: HashMap<u32, Vec<u16>> = HashMap::new();
         let mut valid_entries: Vec<(u16, u32)> = Vec::new();
 
         eprintln!(
@@ -258,18 +258,20 @@ pub fn buffer_container_tracks(args: ContainerTrackArgs, abort: Arc<AtomicBool>)
                 }
             };
 
-            let dec_opts: DecoderOptions = Default::default();
-            let decoder = symphonia::default::get_codecs()
-                .make(&track.codec_params, &dec_opts)
-                .expect("unsupported codec");
-            decoders.insert(*track_id, decoder);
+            if !decoders.contains_key(track_id) {
+                let dec_opts: DecoderOptions = Default::default();
+                let decoder = symphonia::default::get_codecs()
+                    .make(&track.codec_params, &dec_opts)
+                    .expect("unsupported codec");
+                decoders.insert(*track_id, decoder);
+            }
 
             let dur = track
                 .codec_params
                 .n_frames
                 .map(|frames| track.codec_params.start_ts + frames);
             durations.insert(*track_id, dur);
-            key_for_track.insert(*track_id, *track_key);
+            keys_for_track.entry(*track_id).or_default().push(*track_key);
             valid_entries.push((*track_key, *track_id));
         }
 
@@ -282,7 +284,7 @@ pub fn buffer_container_tracks(args: ContainerTrackArgs, abort: Arc<AtomicBool>)
                 .join(", ")
         );
 
-        (format, decoders, durations, key_for_track, valid_entries)
+        (format, decoders, durations, keys_for_track, valid_entries)
     };
 
     let playing: Arc<Mutex<bool>> = Arc::new(Mutex::new(true));
@@ -326,8 +328,8 @@ pub fn buffer_container_tracks(args: ContainerTrackArgs, abort: Arc<AtomicBool>)
             };
 
             let track_id = packet.track_id();
-            let track_key = match key_for_track.get(&track_id) {
-                Some(track_key) => *track_key,
+            let track_keys = match keys_for_track.get(&track_id) {
+                Some(track_keys) => track_keys.clone(),
                 None => continue,
             };
 
@@ -335,9 +337,11 @@ pub fn buffer_container_tracks(args: ContainerTrackArgs, abort: Arc<AtomicBool>)
                 if packet.ts() >= dur {
                     if !finished_track_ids.contains(&track_id) {
                         finished_track_ids.push(track_id);
-                        mark_track_as_finished(&mut finished_tracks.clone(), track_key);
+                        for track_key in &track_keys {
+                            mark_track_as_finished(&mut finished_tracks.clone(), *track_key);
+                        }
                     }
-                    if finished_track_ids.len() == valid_entries.len() {
+                    if finished_track_ids.len() == keys_for_track.len() {
                         break Ok(true);
                     }
                     continue;
@@ -375,11 +379,13 @@ pub fn buffer_container_tracks(args: ContainerTrackArgs, abort: Arc<AtomicBool>)
                         continue;
                     }
 
-                    add_samples_to_buffer_map_nonblocking(
-                        &mut buffer_map.clone(),
-                        track_key,
-                        stereo_samples,
-                    );
+                    for track_key in &track_keys {
+                        add_samples_to_buffer_map_nonblocking(
+                            &mut buffer_map.clone(),
+                            *track_key,
+                            stereo_samples.clone(),
+                        );
+                    }
                 }
                 Err(Error::DecodeError(err)) => {
                     warn!("decode error: {}", err);
