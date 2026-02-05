@@ -48,6 +48,9 @@ pub struct Player {
     reverb_settings: Arc<Mutex<ReverbSettings>>,
     reverb_metrics: Arc<Mutex<ReverbMetrics>>,
     reverb_reset: Arc<AtomicU64>,
+    buffering_done: Arc<AtomicBool>,
+    last_chunk_ms: Arc<AtomicU64>,
+    last_time_update_ms: Arc<AtomicU64>,
     impulse_response_override: Option<ImpulseResponseSpec>,
     impulse_response_tail_override: Option<f32>,
 }
@@ -103,6 +106,9 @@ impl Player {
             reverb_settings: Arc::new(Mutex::new(ReverbSettings::new(0.000001))),
             reverb_metrics: Arc::new(Mutex::new(ReverbMetrics::default())),
             reverb_reset: Arc::new(AtomicU64::new(0)),
+            buffering_done: Arc::new(AtomicBool::new(false)),
+            last_chunk_ms: Arc::new(AtomicU64::new(0)),
+            last_time_update_ms: Arc::new(AtomicU64::new(0)),
             impulse_response_override: None,
             impulse_response_tail_override: None,
         };
@@ -152,6 +158,33 @@ impl Player {
         *self.reverb_metrics.lock().unwrap()
     }
 
+    pub fn debug_playback_state(&self) -> (bool, PlayerState, bool) {
+        (
+            self.playback_thread_exists.load(Ordering::SeqCst),
+            *self.state.lock().unwrap(),
+            self.audio_heard.load(Ordering::Relaxed),
+        )
+    }
+
+    pub fn debug_buffering_done(&self) -> bool {
+        self.buffering_done.load(Ordering::Relaxed)
+    }
+
+    pub fn debug_timing_ms(&self) -> (u64, u64) {
+        (
+            self.last_chunk_ms.load(Ordering::Relaxed),
+            self.last_time_update_ms.load(Ordering::Relaxed),
+        )
+    }
+
+    pub fn debug_sink_state(&self) -> (bool, bool, usize) {
+        let sink = self.sink.lock().unwrap();
+        let paused = sink.is_paused();
+        let empty = sink.empty();
+        let len = sink.len();
+        (paused, empty, len)
+    }
+
     fn request_reverb_reset(&self) {
         self.reverb_reset.fetch_add(1, Ordering::SeqCst);
     }
@@ -195,6 +228,10 @@ impl Player {
         self.abort.store(false, Ordering::SeqCst);
         self.playback_thread_exists.store(true, Ordering::SeqCst);
         let playback_id = self.playback_id.fetch_add(1, Ordering::SeqCst) + 1;
+        self.buffering_done.store(false, Ordering::SeqCst);
+        let now_ms_value = now_ms();
+        self.last_chunk_ms.store(now_ms_value, Ordering::Relaxed);
+        self.last_time_update_ms.store(now_ms_value, Ordering::Relaxed);
 
         // ===== Clone variables ===== //
         let play_state = self.state.clone();
@@ -215,6 +252,9 @@ impl Player {
         let sink_mutex = self.sink.clone();
         let audition_source_mutex = self.audition_source.clone();
         let channels = 1.0 * self.info.channels as f64;
+        let buffer_done_thread_flag = self.buffering_done.clone();
+        let last_chunk_ms = self.last_chunk_ms.clone();
+        let last_time_update_ms = self.last_time_update_ms.clone();
 
         audio_heard.store(false, Ordering::Relaxed);
 
@@ -331,6 +371,9 @@ impl Player {
             // ===================== //
             let time_chunks_mutex = Arc::new(Mutex::new(start_time));
             let timer_mut = Arc::new(Mutex::new(timer::Timer::new()));
+            let buffering_done = Arc::new(AtomicBool::new(false));
+            let buffering_done_flag = buffer_done_thread_flag.clone();
+            let final_duration = Arc::new(Mutex::new(None::<f64>));
             let mut timer = timer_mut.lock().unwrap();
             timer.start();
             drop(timer);
@@ -344,16 +387,18 @@ impl Player {
                 let mut time_passed_unlocked = time_passed.lock().unwrap();
                 let mut time_chunks_passed = time_chunks_mutex.lock().unwrap();
                 let mut timer = timer_mut.lock().unwrap();
-                // Check how many chunks have been played (chunk_lengths.len() - sink.len())
-                // since the last time this function was called
-                // and add that to time_passed
+                last_time_update_ms.store(now_ms(), Ordering::Relaxed);
                 let sink = sink_mutex.lock().unwrap();
-                let chunks_played = chunk_lengths.len() - sink.len();
+                if !buffering_done.load(Ordering::Relaxed) {
+                    // Check how many chunks have been played (chunk_lengths.len() - sink.len())
+                    // since the last time this function was called and add that to time_passed.
+                    let chunks_played = chunk_lengths.len().saturating_sub(sink.len());
 
-                for _ in 0..chunks_played {
-                    timer.reset();
-                    timer.start();
-                    *time_chunks_passed += chunk_lengths.remove(0);
+                    for _ in 0..chunks_played {
+                        timer.reset();
+                        timer.start();
+                        *time_chunks_passed += chunk_lengths.remove(0);
+                    }
                 }
 
                 if sink.is_paused() {
@@ -379,6 +424,7 @@ impl Player {
                     return;
                 }
                 audio_heard.store(true, Ordering::Relaxed);
+                last_chunk_ms.store(now_ms(), Ordering::Relaxed);
 
                 let mut audition_source = audition_source_mutex.lock().unwrap();
                 let sink = sink_mutex.lock().unwrap();
@@ -405,21 +451,63 @@ impl Player {
             };
 
             engine.reception_loop(&update_sink);
+            #[cfg(feature = "debug")]
+            log::info!("engine reception loop finished");
+
+            // From here on, all audio is buffered. Stop relying on sink.len()
+            // to advance time so the UI keeps updating while the last buffer plays.
+            buffering_done.store(true, Ordering::Relaxed);
+            buffering_done_flag.store(true, Ordering::Relaxed);
+            {
+                let mut final_duration = final_duration.lock().unwrap();
+                if final_duration.is_none() {
+                    let chunk_lengths = chunk_lengths.lock().unwrap();
+                    let time_chunks_passed = time_chunks_mutex.lock().unwrap();
+                    *final_duration =
+                        Some(*time_chunks_passed + chunk_lengths.iter().sum::<f64>());
+                }
+            }
 
             // ===================== //
             // Wait until all tracks are finished playing in sink
             // ===================== //
+            let mut last_loop_log = Instant::now();
             loop {
                 update_chunk_lengths();
                 if !check_details() {
                     break;
                 }
+                #[cfg(feature = "debug")]
+                if last_loop_log.elapsed().as_secs_f64() >= 1.0 {
+                    let sink = sink_mutex.lock().unwrap();
+                    let paused = sink.is_paused();
+                    let empty = sink.empty();
+                    let sink_len = sink.len();
+                    drop(sink);
+                    let time_passed = *time_passed.lock().unwrap();
+                    let final_duration = *final_duration.lock().unwrap();
+                    log::info!(
+                        "drain loop: paused={} empty={} sink_len={} time={:.3} final={:?}",
+                        paused,
+                        empty,
+                        sink_len,
+                        time_passed,
+                        final_duration
+                    );
+                    last_loop_log = Instant::now();
+                }
 
-                let sink = sink_mutex.lock().unwrap();
-                let sink_empty = sink.empty();
-                drop(sink);
-                // If all tracks are finished buffering and sink is finished playing, exit the loop
-                if sink_empty && engine.finished_buffering() {
+                let done = if engine.finished_buffering() {
+                    if let Some(final_duration) = *final_duration.lock().unwrap() {
+                        let time_passed = *time_passed.lock().unwrap();
+                        time_passed >= (final_duration - 0.001).max(0.0)
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                };
+                if done {
                     break;
                 }
 
@@ -647,4 +735,12 @@ impl Player {
 
         self.reporter = Some(reporter);
     }
+}
+
+fn now_ms() -> u64 {
+    use std::time::SystemTime;
+    SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
 }

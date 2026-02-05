@@ -18,7 +18,7 @@ pub fn draw_status(
         let status_height = {
             #[cfg(feature = "debug")]
             {
-                11
+                13
             }
             #[cfg(not(feature = "debug"))]
             {
@@ -61,7 +61,7 @@ pub fn draw_status(
         };
 
         let log_widget = Paragraph::new(log_text)
-            .style(Style::default().fg(Color::White))
+            .style(Style::default().fg(Color::DarkGray))
             .block(Block::default().borders(Borders::ALL).title("Logs"));
         f.render_widget(log_widget, chunks[2]);
     });
