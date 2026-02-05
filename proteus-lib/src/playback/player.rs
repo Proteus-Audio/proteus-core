@@ -1,7 +1,7 @@
 use rodio::buffer::SamplesBuffer;
 use rodio::{OutputStream, Sink};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{mpsc::RecvTimeoutError, Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -451,7 +451,21 @@ impl Player {
                 check_details();
             };
 
-            engine.reception_loop(&update_sink);
+            let receiver = engine.start_receiver();
+            loop {
+                match receiver.recv_timeout(Duration::from_millis(20)) {
+                    Ok(chunk) => {
+                        update_sink(chunk);
+                    }
+                    Err(RecvTimeoutError::Timeout) => {
+                        update_chunk_lengths();
+                        if !check_details() {
+                            break;
+                        }
+                    }
+                    Err(RecvTimeoutError::Disconnected) => break,
+                }
+            }
             #[cfg(feature = "debug")]
             log::info!("engine reception loop finished");
 

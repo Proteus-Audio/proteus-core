@@ -91,6 +91,14 @@ impl PlayerEngine {
         }
     }
 
+    pub fn start_receiver(&mut self) -> Receiver<(SamplesBuffer<f32>, f64)> {
+        let prot = self.prot.lock().unwrap();
+        let keys = prot.get_keys();
+        drop(prot);
+        self.ready_buffer_map(&keys);
+        self.get_receiver()
+    }
+
     fn get_receiver(&self) -> Receiver<(SamplesBuffer<f32>, f64)> {
         let prot = self.prot.lock().unwrap();
         let audio_info = prot.info.clone();
