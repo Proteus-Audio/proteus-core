@@ -13,6 +13,7 @@ mod complex_fft {
         ir_segments: Vec<Vec<Complex<f32>>>,
         previous_frame_q: VecDeque<Vec<Complex<f32>>>,
         pub previous_tail: Vec<f32>,
+        pending_output: Vec<f32>,
         fft_processor: Arc<dyn Fft<f32>>,
         ifft_processor: Arc<dyn Fft<f32>>,
     }
@@ -32,6 +33,7 @@ mod complex_fft {
                 ifft_processor,
                 previous_frame_q: init_previous_frame_q(segment_count, fft_size),
                 previous_tail: init_previous_tail(fft_size / 2),
+                pending_output: Vec::new(),
             }
         }
 
@@ -40,8 +42,14 @@ mod complex_fft {
             let segment_size = self.fft_size / 2;
             let input_segments = segment_buffer(input_buffer, self.fft_size, &self.fft_processor);
 
-            let mut output: Vec<f32> = Vec::with_capacity(input_segments.len() * segment_size);
+            let mut output: Vec<f32> = Vec::with_capacity(io_len);
             let norm = self.fft_size as f32;
+
+            if !self.pending_output.is_empty() {
+                let take = io_len.min(self.pending_output.len());
+                output.extend_from_slice(&self.pending_output[..take]);
+                self.pending_output.drain(0..take);
+            }
 
             for segment in input_segments {
                 self.previous_frame_q.push_front(segment);
@@ -62,11 +70,19 @@ mod complex_fft {
                 }
 
                 self.previous_tail = time_domain[segment_size..self.fft_size].to_vec();
-                output.extend_from_slice(&time_domain[0..segment_size]);
-            }
-
-            if output.len() > io_len {
-                output.truncate(io_len);
+                let remaining = io_len.saturating_sub(output.len());
+                if remaining == 0 {
+                    self.pending_output
+                        .extend_from_slice(&time_domain[0..segment_size]);
+                    continue;
+                }
+                if remaining >= segment_size {
+                    output.extend_from_slice(&time_domain[0..segment_size]);
+                } else {
+                    output.extend_from_slice(&time_domain[0..remaining]);
+                    self.pending_output
+                        .extend_from_slice(&time_domain[remaining..segment_size]);
+                }
             }
 
             output
@@ -169,6 +185,7 @@ mod real_fft {
         ir_segments: Vec<Vec<Complex<f32>>>,
         previous_frame_q: VecDeque<Vec<Complex<f32>>>,
         pub previous_tail: Vec<f32>,
+        pending_output: Vec<f32>,
         r2c: Arc<dyn RealToComplex<f32>>,
         c2r: Arc<dyn ComplexToReal<f32>>,
     }
@@ -189,6 +206,7 @@ mod real_fft {
                 c2r,
                 previous_frame_q: init_previous_frame_q(segment_count, spectrum_len),
                 previous_tail: init_previous_tail(fft_size / 2),
+                pending_output: Vec::new(),
             }
         }
 
@@ -199,9 +217,15 @@ mod real_fft {
             let input_segments =
                 segment_buffer(input_buffer, self.fft_size, &self.r2c, spectrum_len);
 
-            let mut output: Vec<f32> = Vec::with_capacity(input_segments.len() * segment_size);
+            let mut output: Vec<f32> = Vec::with_capacity(io_len);
             let norm = self.fft_size as f32;
             let spectrum_len = self.ir_segments.first().map(|seg| seg.len()).unwrap_or(0);
+
+            if !self.pending_output.is_empty() {
+                let take = io_len.min(self.pending_output.len());
+                output.extend_from_slice(&self.pending_output[..take]);
+                self.pending_output.drain(0..take);
+            }
 
             for segment in input_segments {
                 self.previous_frame_q.push_front(segment);
@@ -229,11 +253,19 @@ mod real_fft {
                 }
 
                 self.previous_tail = time_domain[segment_size..self.fft_size].to_vec();
-                output.extend_from_slice(&time_domain[0..segment_size]);
-            }
-
-            if output.len() > io_len {
-                output.truncate(io_len);
+                let remaining = io_len.saturating_sub(output.len());
+                if remaining == 0 {
+                    self.pending_output
+                        .extend_from_slice(&time_domain[0..segment_size]);
+                    continue;
+                }
+                if remaining >= segment_size {
+                    output.extend_from_slice(&time_domain[0..segment_size]);
+                } else {
+                    output.extend_from_slice(&time_domain[0..remaining]);
+                    self.pending_output
+                        .extend_from_slice(&time_domain[remaining..segment_size]);
+                }
             }
 
             output

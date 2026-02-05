@@ -12,7 +12,7 @@ use crate::container::prot::Prot;
 use crate::audio::buffer::TrackBuffer;
 use crate::track::{buffer_container_tracks, buffer_track, ContainerTrackArgs, TrackArgs};
 
-use super::reverb::{build_reverb_with_impulse_response, process_reverb, spawn_reverb_worker};
+use super::reverb::build_reverb_with_impulse_response;
 use super::state::{PlaybackBufferSettings, ReverbMetrics, ReverbSettings};
 
 pub struct MixThreadArgs {
@@ -131,15 +131,29 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer<f3
             )
         };
 
-        let reverb = build_reverb_with_impulse_response(
+        let mut reverb = build_reverb_with_impulse_response(
             output_channels,
             0.000001,
             impulse_spec,
             container_path.as_deref(),
             tail_db,
         );
-        let (reverb_sender, reverb_receiver) =
-            spawn_reverb_worker(reverb, reverb_settings.clone(), reverb_metrics.clone());
+        let mut current_dry_wet = 0.000001_f32;
+        let mut reverb_input_buf: Vec<f32> = Vec::new();
+        let mut reverb_output_buf: Vec<f32> = Vec::new();
+        let reverb_block_samples = reverb.block_size_samples();
+        #[cfg(feature = "debug")]
+        let mut avg_dsp_ms = 0.0_f64;
+        #[cfg(feature = "debug")]
+        let mut avg_audio_ms = 0.0_f64;
+        #[cfg(feature = "debug")]
+        let mut avg_rt_factor = 0.0_f64;
+        #[cfg(feature = "debug")]
+        let mut min_rt_factor = f64::INFINITY;
+        #[cfg(feature = "debug")]
+        let mut max_rt_factor = 0.0_f64;
+        #[cfg(feature = "debug")]
+        let alpha = 0.1_f64;
 
         let start_buffer_ms = buffer_settings.lock().unwrap().start_buffer_ms;
         let start_samples = ((audio_info.sample_rate as f32 * start_buffer_ms) / 1000.0) as usize
@@ -298,14 +312,91 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer<f3
 
                 let input_channels = audio_info.channels as u16;
                 let sample_rate = audio_info.sample_rate as u32;
+                let settings = *reverb_settings.lock().unwrap();
+                if (settings.dry_wet - current_dry_wet).abs() > f32::EPSILON {
+                    reverb.set_dry_wet(settings.dry_wet);
+                    current_dry_wet = settings.dry_wet;
+                }
 
-                let samples = process_reverb(
-                    &reverb_sender,
-                    &reverb_receiver,
-                    mix_buffer[..current_chunk].to_vec(),
-                    input_channels,
-                    sample_rate,
-                );
+                #[cfg(feature = "debug")]
+                let audio_time_ms = if input_channels > 0 && sample_rate > 0 {
+                    let frames = current_chunk as f64 / input_channels as f64;
+                    (frames / sample_rate as f64) * 1000.0
+                } else {
+                    0.0
+                };
+
+                #[cfg(feature = "debug")]
+                let dsp_start = Instant::now();
+                let samples = if settings.enabled && settings.dry_wet > 0.0 {
+                    if reverb_block_samples == 0 {
+                        reverb.process(&mix_buffer[..current_chunk])
+                    } else {
+                        reverb_input_buf.extend_from_slice(&mix_buffer[..current_chunk]);
+                        while reverb_input_buf.len() >= reverb_block_samples {
+                            let block: Vec<f32> =
+                                reverb_input_buf.drain(0..reverb_block_samples).collect();
+                            let processed = reverb.process(&block);
+                            reverb_output_buf.extend_from_slice(&processed);
+                        }
+                        if reverb_output_buf.len() < current_chunk {
+                            let mut out = reverb_output_buf.clone();
+                            out.extend(std::iter::repeat(0.0).take(current_chunk - out.len()));
+                            reverb_output_buf.clear();
+                            out
+                        } else {
+                            reverb_output_buf.drain(0..current_chunk).collect()
+                        }
+                    }
+                } else {
+                    mix_buffer[..current_chunk].to_vec()
+                };
+                #[cfg(feature = "debug")]
+                let dsp_time_ms = dsp_start.elapsed().as_secs_f64() * 1000.0;
+                #[cfg(feature = "debug")]
+                let rt_factor = if audio_time_ms > 0.0 {
+                    dsp_time_ms / audio_time_ms
+                } else {
+                    0.0
+                };
+
+                #[cfg(feature = "debug")]
+                {
+                    avg_dsp_ms = if avg_dsp_ms == 0.0 {
+                        dsp_time_ms
+                    } else {
+                        (avg_dsp_ms * (1.0 - alpha)) + (dsp_time_ms * alpha)
+                    };
+                    avg_audio_ms = if avg_audio_ms == 0.0 {
+                        audio_time_ms
+                    } else {
+                        (avg_audio_ms * (1.0 - alpha)) + (audio_time_ms * alpha)
+                    };
+                    avg_rt_factor = if avg_rt_factor == 0.0 {
+                        rt_factor
+                    } else {
+                        (avg_rt_factor * (1.0 - alpha)) + (rt_factor * alpha)
+                    };
+
+                    if rt_factor > 0.0 {
+                        min_rt_factor = min_rt_factor.min(rt_factor);
+                        max_rt_factor = max_rt_factor.max(rt_factor);
+                    }
+
+                    let mut metrics = reverb_metrics.lock().unwrap();
+                    metrics.dsp_time_ms = dsp_time_ms;
+                    metrics.audio_time_ms = audio_time_ms;
+                    metrics.rt_factor = rt_factor;
+                    metrics.avg_dsp_ms = avg_dsp_ms;
+                    metrics.avg_audio_ms = avg_audio_ms;
+                    metrics.avg_rt_factor = avg_rt_factor;
+                    metrics.min_rt_factor = if min_rt_factor.is_finite() {
+                        min_rt_factor
+                    } else {
+                        0.0
+                    };
+                    metrics.max_rt_factor = max_rt_factor;
+                }
 
                 let samples_buffer = SamplesBuffer::new(input_channels, sample_rate, samples);
 

@@ -68,6 +68,14 @@ impl Reverb {
         mixed
     }
 
+    pub fn block_size_samples(&self) -> usize {
+        if self.convolvers.is_empty() {
+            return 0;
+        }
+        let segment_size = self.convolvers[0].fft_size / 2;
+        segment_size * self.channels
+    }
+
     pub fn process_mixer(&mut self, mixer: DynamicMixer<f32>) -> SamplesBuffer<f32> {
         let sample_rate = mixer.sample_rate();
         let mixer_buffered = mixer.buffered();
