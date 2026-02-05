@@ -1,3 +1,3 @@
 [workspace]
-members = ["proteus-lib", "proteus-cli"]
+members = ["proteus-lib", "proteus-cli", "proteus-scripts"]
 resolver = "2"

@@ -146,8 +146,24 @@ where
         channel_samples[index % channels].push(sample as f32);
     }
 
+    normalize_impulse_response_channels(&mut channel_samples, tail_db);
+
+    if channel_samples.iter().any(|channel| channel.is_empty()) {
+        warn!("Impulse response includes empty channels; results may be silent.");
+    }
+
+    Ok(ImpulseResponse {
+        sample_rate,
+        channels: channel_samples,
+    })
+}
+
+pub fn normalize_impulse_response_channels(
+    channel_samples: &mut [Vec<f32>],
+    tail_db: Option<f32>,
+) {
     let mut max_abs = 0.0_f32;
-    for channel in &channel_samples {
+    for channel in channel_samples.iter() {
         for sample in channel {
             let abs = sample.abs();
             if abs > max_abs {
@@ -158,7 +174,7 @@ where
 
     if max_abs > 0.0 {
         let scale = 1.0 / max_abs;
-        for channel in &mut channel_samples {
+        for channel in channel_samples.iter_mut() {
             for sample in channel {
                 *sample *= scale;
             }
@@ -167,13 +183,13 @@ where
 
     if let Some(tail_db) = tail_db {
         if tail_db.is_finite() {
-            trim_impulse_response_tail(&mut channel_samples, tail_db);
+            trim_impulse_response_tail(channel_samples, tail_db);
         }
     }
 
     // Energy-normalize (attenuate only) so long IRs don't explode the wet gain.
     let mut max_energy = 0.0_f32;
-    for channel in &channel_samples {
+    for channel in channel_samples.iter() {
         let mut sum_sq = 0.0_f32;
         for sample in channel {
             sum_sq += sample * sample;
@@ -188,22 +204,13 @@ where
             scale = 1.0;
         }
         if scale < 1.0 {
-            for channel in &mut channel_samples {
+            for channel in channel_samples.iter_mut() {
                 for sample in channel {
                     *sample *= scale;
                 }
             }
         }
     }
-
-    if channel_samples.iter().any(|channel| channel.is_empty()) {
-        warn!("Impulse response includes empty channels; results may be silent.");
-    }
-
-    Ok(ImpulseResponse {
-        sample_rate,
-        channels: channel_samples,
-    })
 }
 
 fn trim_impulse_response_tail(channels: &mut [Vec<f32>], tail_db: f32) {

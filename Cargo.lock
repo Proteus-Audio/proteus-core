@@ -986,6 +986,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "proteus-scripts"
+version = "0.1.0"
+dependencies = [
+ "proteus-lib",
+]
+
+[[package]]
 name = "quote"
 version = "1.0.38"
 source = "registry+https://github.com/rust-lang/crates.io-index"

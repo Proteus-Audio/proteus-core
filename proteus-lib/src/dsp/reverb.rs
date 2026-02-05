@@ -9,7 +9,7 @@ use rodio::{
 
 use crate::dsp::convolution::Convolver;
 use crate::dsp::impulse_response::ImpulseResponse;
-use crate::dsp::spring_impulse_response::SPRING_IMPULSE_RESPONSE;
+use crate::dsp::normalized_spring_impulse_response::SPRING_IMPULSE_RESPONSE;
 
 //   1. Power‑of‑two FFT size (e.g., 8192 or 16384).
 const FFT_SIZE: usize = 32768;
@@ -173,9 +173,8 @@ impl Reverb {
         for frame in 0..frames {
             let base = frame * self.channels;
             for ch in 0..self.channels {
-                self.scratch_mixed[base + ch] =
-                    (self.scratch_dry[ch][frame] * dry_amount)
-                        + (self.scratch_wet[ch][frame] * wet_amount);
+                self.scratch_mixed[base + ch] = (self.scratch_dry[ch][frame] * dry_amount)
+                    + (self.scratch_wet[ch][frame] * wet_amount);
             }
         }
 
