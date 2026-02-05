@@ -1,20 +1,3 @@
-Yes — that can make sense given how the current logic is structured.
-
-Why 300ms is plausible
-
-- The old loop slept 100ms, but it didn’t force a 100ms chunk size. It only mixed when all buffers were
-  “full” (i.e., non‑empty) and then drained the smallest buffer.
-- If the per‑track producer threads were continuously filling buffers during that sleep, the “smallest
-  buffer” could easily accumulate >100ms of samples (especially with multiple tracks).
-- With the trigger version, you’re mixing as soon as data is available, which often means very small chunks
-  unless you explicitly gate it. Hence you needed a larger MIN_MIX_MS to recreate the old “batching”
-  behavior.
-
-So yes — 300ms sounds like you’re recreating the old accidental batching. It’s not great for latency, but
-it’s great for throughput because it amortizes overhead.
-
-———
-
 ## Other likely performance hotspots to investigate
 
 Here’s a concrete list of places that can yield real gains:
@@ -101,8 +84,3 @@ Better:
 2. Per‑track buffer locks to reduce contention.
 3. Reverb worker buffer reuse / avoid IPC.
 4. Smarter container backpressure (avoid dropping).
-
-———
-
-If you want, I can implement #1 (fixed chunk size, prealloc mix buffer) first. It will likely give the most
-immediate performance improvement without changing functionality.
