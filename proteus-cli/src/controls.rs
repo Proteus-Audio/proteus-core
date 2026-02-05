@@ -200,6 +200,10 @@ pub fn handle_key_event(player: &mut player::Player) -> bool {
                 return true;
             }
             match key.code {
+                KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    player.stop();
+                    return false;
+                }
                 KeyCode::Char('q') => {
                     player.stop();
                     return false;

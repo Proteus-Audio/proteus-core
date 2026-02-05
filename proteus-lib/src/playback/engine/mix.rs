@@ -235,13 +235,17 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer<f3
                 let current_chunk = if !hash_buffer.is_empty() {
                     if length_of_smallest_buffer >= min_mix_samples {
                         min_mix_samples
-                    } else {
+                    } else if all_tracks_finished && length_of_smallest_buffer > 0 {
                         length_of_smallest_buffer
+                    } else {
+                        0
                     }
                 } else if effects_buffer_unlocked.len() >= min_mix_samples {
                     min_mix_samples
-                } else {
+                } else if all_tracks_finished && effects_buffer_unlocked.len() > 0 {
                     effects_buffer_unlocked.len()
+                } else {
+                    0
                 };
 
                 if current_chunk == 0 {
@@ -264,17 +268,14 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer<f3
                     continue;
                 }
 
-                if mix_buffer.len() != current_chunk {
-                    mix_buffer.resize(current_chunk, 0.0);
-                }
                 mix_buffer.fill(0.0);
 
                 if !hash_buffer.is_empty() {
                     for (_, buffer) in hash_buffer.iter_mut() {
-                        for sample in mix_buffer.iter_mut().take(current_chunk) {
-                            *sample += buffer.pop().unwrap();
-                        }
+                    for sample in mix_buffer.iter_mut().take(current_chunk) {
+                        *sample += buffer.pop().unwrap();
                     }
+                }
                 }
 
                 if effects_buffer_unlocked.len() > 0 {
@@ -292,7 +293,7 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer<f3
                 let samples = process_reverb(
                     &reverb_sender,
                     &reverb_receiver,
-                    mix_buffer.clone(),
+                    mix_buffer[..current_chunk].to_vec(),
                     input_channels,
                     sample_rate,
                 );
