@@ -2,8 +2,8 @@ use dasp_ring_buffer::Bounded;
 use rodio::buffer::SamplesBuffer;
 use std::collections::HashMap;
 use std::sync::atomic::AtomicBool;
-use std::sync::{mpsc::Receiver, Arc, Condvar, Mutex};
 use std::sync::atomic::AtomicU64;
+use std::sync::{mpsc::Receiver, Arc, Condvar, Mutex};
 
 use crate::audio::buffer::{init_buffer_map, TrackBuffer};
 use crate::container::prot::Prot;
@@ -59,8 +59,10 @@ impl PlayerEngine {
             as usize
             * channels;
         let buffer_size = (prot_unlocked.info.sample_rate as usize * 10).max(start_samples * 2);
-        let effects_buffer =
-            Arc::new(Mutex::new(dasp_ring_buffer::Bounded::from(vec![0.0; buffer_size])));
+        let effects_buffer = Arc::new(Mutex::new(dasp_ring_buffer::Bounded::from(vec![
+            0.0;
+            buffer_size
+        ])));
         drop(prot_unlocked);
 
         Self {
@@ -79,7 +81,7 @@ impl PlayerEngine {
         }
     }
 
-    pub fn reception_loop(&mut self, f: &dyn Fn((SamplesBuffer<f32>, f64))) {
+    pub fn reception_loop(&mut self, f: &dyn Fn((SamplesBuffer, f64))) {
         let prot = self.prot.lock().unwrap();
         let keys = prot.get_keys();
         drop(prot);
@@ -91,7 +93,7 @@ impl PlayerEngine {
         }
     }
 
-    pub fn start_receiver(&mut self) -> Receiver<(SamplesBuffer<f32>, f64)> {
+    pub fn start_receiver(&mut self) -> Receiver<(SamplesBuffer, f64)> {
         let prot = self.prot.lock().unwrap();
         let keys = prot.get_keys();
         drop(prot);
@@ -99,7 +101,7 @@ impl PlayerEngine {
         self.get_receiver()
     }
 
-    fn get_receiver(&self) -> Receiver<(SamplesBuffer<f32>, f64)> {
+    fn get_receiver(&self) -> Receiver<(SamplesBuffer, f64)> {
         let prot = self.prot.lock().unwrap();
         let audio_info = prot.info.clone();
         drop(prot);
@@ -139,17 +141,16 @@ impl PlayerEngine {
         let buffer_size = (sample_rate as usize * 10).max(start_samples * 2);
 
         for key in keys {
-            let ring_buffer = Arc::new(Mutex::new(dasp_ring_buffer::Bounded::from(
-                vec![0.0; buffer_size],
-            )));
+            let ring_buffer =
+                Arc::new(Mutex::new(dasp_ring_buffer::Bounded::from(vec![
+                    0.0;
+                    buffer_size
+                ])));
             self.buffer_map
                 .lock()
                 .unwrap()
                 .insert(*key as u16, ring_buffer);
-            self.track_weights
-                .lock()
-                .unwrap()
-                .insert(*key as u16, 1.0);
+            self.track_weights.lock().unwrap().insert(*key as u16, 1.0);
         }
     }
 

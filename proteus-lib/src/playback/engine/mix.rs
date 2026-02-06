@@ -33,8 +33,8 @@ pub struct MixThreadArgs {
     pub reverb_metrics: Arc<Mutex<ReverbMetrics>>,
 }
 
-pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer<f32>, f64)> {
-    let (sender, receiver) = mpsc::sync_channel::<(SamplesBuffer<f32>, f64)>(1);
+pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer, f64)> {
+    let (sender, receiver) = mpsc::sync_channel::<(SamplesBuffer, f64)>(1);
 
     let MixThreadArgs {
         audio_info,

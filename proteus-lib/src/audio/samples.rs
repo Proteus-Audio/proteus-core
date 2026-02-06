@@ -1,8 +1,6 @@
 use rodio::{buffer::SamplesBuffer, Source};
 
-pub fn clone_samples_buffer(
-    buffer: SamplesBuffer<f32>,
-) -> (SamplesBuffer<f32>, SamplesBuffer<f32>) {
+pub fn clone_samples_buffer(buffer: SamplesBuffer) -> (SamplesBuffer, SamplesBuffer) {
     let sample_rate = buffer.sample_rate();
     let buffered = buffer.buffered();
     let vector_samples = buffered.clone().into_iter().collect::<Vec<f32>>();

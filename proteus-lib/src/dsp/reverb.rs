@@ -1,11 +1,6 @@
 use std::time::Instant;
 
 use log::debug;
-use rodio::{
-    buffer::SamplesBuffer,
-    dynamic_mixer::{self, DynamicMixer},
-    Source,
-};
 
 use crate::dsp::convolution::Convolver;
 use crate::dsp::impulse_response::ImpulseResponse;
@@ -79,14 +74,6 @@ impl Reverb {
         }
         let segment_size = self.convolvers[0].fft_size / 2;
         segment_size * self.channels
-    }
-
-    pub fn process_mixer(&mut self, mixer: DynamicMixer<f32>) -> SamplesBuffer<f32> {
-        let sample_rate = mixer.sample_rate();
-        let mixer_buffered = mixer.buffered();
-        let vector_samples = mixer_buffered.clone().into_iter().collect::<Vec<f32>>();
-        let processed = self.process(&vector_samples);
-        SamplesBuffer::new(mixer_buffered.channels(), sample_rate, processed)
     }
 
     fn process_channel(&mut self, channel: &[f32], index: usize) -> Vec<f32> {

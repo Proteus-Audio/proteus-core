@@ -1,5 +1,5 @@
 use rodio::buffer::SamplesBuffer;
-use rodio::{OutputStream, Sink};
+use rodio::{OutputStreamBuilder, Sink};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc::RecvTimeoutError, Arc, Mutex};
 use std::thread;
@@ -42,7 +42,7 @@ pub struct Player {
     audio_heard: Arc<AtomicBool>,
     volume: Arc<Mutex<f32>>,
     sink: Arc<Mutex<Sink>>,
-    audition_source: Arc<Mutex<Option<SamplesBuffer<f32>>>>,
+    audition_source: Arc<Mutex<Option<SamplesBuffer>>>,
     reporter: Option<Arc<Mutex<Reporter>>>,
     buffer_settings: Arc<Mutex<PlaybackBufferSettings>>,
     reverb_settings: Arc<Mutex<ReverbSettings>>,
@@ -82,10 +82,8 @@ impl Player {
             }
         };
 
-        let (_stream, stream_handle) = OutputStream::try_default().unwrap();
-        let sink: Arc<Mutex<Sink>> = Arc::new(Mutex::new(Sink::try_new(&stream_handle).unwrap()));
-        let (_stream, audition_stream_handle) = OutputStream::try_default().unwrap();
-        let audition_sink = Arc::new(Mutex::new(Sink::try_new(&audition_stream_handle).unwrap()));
+        let (sink, _queue) = Sink::new();
+        let sink: Arc<Mutex<Sink>> = Arc::new(Mutex::new(sink));
 
         let mut this = Self {
             info,
@@ -212,8 +210,8 @@ impl Player {
             let audition_source_option = audition_source_mutex.lock().unwrap().take();
             let audition_source = audition_source_option.unwrap();
 
-            let (_stream, audition_stream_handle) = OutputStream::try_default().unwrap();
-            let audition_sink = Sink::try_new(&audition_stream_handle).unwrap();
+            let _audition_stream = OutputStreamBuilder::open_default_stream().unwrap();
+            let audition_sink = Sink::connect_new(_audition_stream.mixer());
             audition_sink.pause();
             audition_sink.set_volume(0.8);
             audition_sink.append(audition_source);
@@ -292,11 +290,11 @@ impl Player {
                 reverb_metrics,
                 reverb_reset,
             );
-            let (_stream, stream_handle) = OutputStream::try_default().unwrap();
-            // let sink_mutex = Arc::new(Mutex::new(Sink::try_new(&stream_handle).unwrap()));
+            let _stream = OutputStreamBuilder::open_default_stream().unwrap();
+            let mixer = _stream.mixer().clone();
 
             let mut sink = sink_mutex.lock().unwrap();
-            *sink = Sink::try_new(&stream_handle).unwrap();
+            *sink = Sink::connect_new(&mixer);
             sink.pause();
             sink.set_volume(*volume.lock().unwrap());
             drop(sink);
@@ -425,7 +423,7 @@ impl Player {
             // ===================== //
             // Update sink for each chunk received from engine
             // ===================== //
-            let update_sink = |(mixer, length_in_seconds): (SamplesBuffer<f32>, f64)| {
+            let update_sink = |(mixer, length_in_seconds): (SamplesBuffer, f64)| {
                 if playback_id_atomic.load(Ordering::SeqCst) != playback_id {
                     return;
                 }
