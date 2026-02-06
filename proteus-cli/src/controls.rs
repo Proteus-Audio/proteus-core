@@ -4,10 +4,12 @@ use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 
 use proteus_lib::playback::player;
 
+/// Render-ready status text for the TUI.
 pub struct StatusSnapshot {
     pub text: String,
 }
 
+/// Inputs used to build the status text block.
 pub struct StatusArgs {
     pub time: f64,
     pub duration: f64,
@@ -120,6 +122,7 @@ pub struct StatusArgs {
     pub sink_len: usize,
 }
 
+/// Produce the status snapshot string from runtime metrics.
 pub fn status_text(args: StatusArgs) -> StatusSnapshot {
     // Create a multi-line status string for the UI panel.
     let state = if args.playing {
@@ -276,6 +279,8 @@ pub fn status_text(args: StatusArgs) -> StatusSnapshot {
     StatusSnapshot { text }
 }
 
+/// Handle a single key event and apply it to the player.
+/// Returns `false` if the UI should exit.
 pub fn handle_key_event(player: &mut player::Player) -> bool {
     // Handle one input event. Returns false when the user requests exit.
     if event::poll(Duration::from_millis(100)).unwrap_or(false) {
@@ -335,6 +340,7 @@ pub fn handle_key_event(player: &mut player::Player) -> bool {
     true
 }
 
+/// Format a duration in seconds as `MM:SS`.
 fn format_time(time: f64) -> String {
     // Format milliseconds into HH:MM:SS.
     let seconds = (time / 1000.0).ceil() as u32;

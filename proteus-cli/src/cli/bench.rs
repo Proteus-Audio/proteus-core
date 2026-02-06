@@ -1,6 +1,7 @@
 use clap::ArgMatches;
 use symphonia::core::errors::Result;
 
+/// Run benchmarks if the CLI flags request them.
 pub fn maybe_run_bench(args: &ArgMatches) -> Result<Option<i32>> {
     // Dispatches benchmark sub-modes and returns an exit code if handled.
     if args.get_flag("bench-dsp") {
@@ -12,6 +13,7 @@ pub fn maybe_run_bench(args: &ArgMatches) -> Result<Option<i32>> {
     Ok(None)
 }
 
+/// Execute a single FFT benchmark run.
 fn run_single_bench(_args: &ArgMatches) -> Result<Option<i32>> {
     // Single-FFT benchmark for quick comparisons.
     #[cfg(not(feature = "bench"))]
@@ -71,6 +73,7 @@ fn run_single_bench(_args: &ArgMatches) -> Result<Option<i32>> {
     }
 }
 
+/// Execute a sweep benchmark across multiple FFT sizes.
 fn run_sweep_bench(_args: &ArgMatches) -> Result<Option<i32>> {
     // Sweep a fixed FFT-size list to find a performance sweet spot.
     #[cfg(not(feature = "bench"))]

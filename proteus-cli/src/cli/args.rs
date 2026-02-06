@@ -1,5 +1,6 @@
 use clap::{Arg, ArgAction, Command};
 
+/// Build the CLI argument parser and command definitions.
 pub fn build_cli() -> Command {
     // Build the CLI definition in one place to keep main.rs slim.
     Command::new("Prot Play")

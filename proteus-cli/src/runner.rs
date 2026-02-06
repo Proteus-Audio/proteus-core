@@ -19,6 +19,7 @@ use symphonia::core::errors::Result;
 use crate::logging::LogLine;
 use crate::{cli, controls, logging, ui};
 
+/// Main CLI execution path: parse args, run benches, or start playback.
 pub fn run(args: &ArgMatches, log_buffer: Arc<Mutex<VecDeque<LogLine>>>) -> Result<i32> {
     info!("Starting Proteus CLI");
     // Primary entry for CLI execution; runs benchmarks or playback.
@@ -253,9 +254,11 @@ pub fn run(args: &ArgMatches, log_buffer: Arc<Mutex<VecDeque<LogLine>>>) -> Resu
     Ok(0)
 }
 
+/// RAII guard for terminal raw mode.
 struct RawModeGuard;
 
 impl RawModeGuard {
+    /// Enable raw mode and return a guard that restores it on drop.
     fn enable() -> io::Result<Self> {
         terminal::enable_raw_mode()?;
         Ok(Self)
@@ -263,6 +266,7 @@ impl RawModeGuard {
 }
 
 impl Drop for RawModeGuard {
+    /// Restore terminal state.
     fn drop(&mut self) {
         let _ = terminal::disable_raw_mode();
     }

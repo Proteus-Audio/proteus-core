@@ -1,6 +1,6 @@
 //! # Prot Play
 //!
-//! A command-line audio player for the Prot audio format.
+//! Command-line player for `.prot`/`.mka` containers backed by `proteus-lib`.
 
 use dotenv::dotenv;
 use log::error;
@@ -11,6 +11,7 @@ mod logging;
 mod runner;
 mod ui;
 
+/// Entry point for the CLI binary.
 fn main() {
     let args = cli::args::build_cli().get_matches();
     let log_buffer = logging::init();

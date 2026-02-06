@@ -8,6 +8,7 @@ use std::thread::JoinHandle;
 const LOG_CAPACITY: usize = 500;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Classification used for styling log lines in the TUI.
 pub enum LogKind {
     Error,
     Stderr,
@@ -18,6 +19,7 @@ pub enum LogKind {
 }
 
 #[derive(Debug, Clone)]
+/// Structured log line with classification for styling.
 pub struct LogLine {
     pub kind: LogKind,
     pub text: String,
@@ -64,6 +66,7 @@ impl Log for SharedLogger {
 static LOG_BUFFER: OnceLock<Arc<Mutex<VecDeque<LogLine>>>> = OnceLock::new();
 static LOGGER: OnceLock<SharedLogger> = OnceLock::new();
 
+/// Initialize the logger and return the shared log buffer.
 pub fn init() -> Arc<Mutex<VecDeque<LogLine>>> {
     let buffer = LOG_BUFFER
         .get_or_init(|| Arc::new(Mutex::new(VecDeque::with_capacity(LOG_CAPACITY))))
@@ -98,10 +101,12 @@ pub fn init() -> Arc<Mutex<VecDeque<LogLine>>> {
     buffer
 }
 
+/// Snapshot the current log buffer for rendering.
 pub fn snapshot_lines(buffer: &Arc<Mutex<VecDeque<LogLine>>>) -> Vec<LogLine> {
     buffer.lock().unwrap().iter().cloned().collect()
 }
 
+/// Restores stderr on drop for capture sessions.
 pub struct StderrCaptureGuard {
     original_fd: RawFd,
     stderr_fd: RawFd,
@@ -121,6 +126,7 @@ impl Drop for StderrCaptureGuard {
     }
 }
 
+/// Redirect stderr into the log buffer for the active TUI session.
 pub fn capture_stderr(buffer: Arc<Mutex<VecDeque<LogLine>>>) -> Option<StderrCaptureGuard> {
     let stderr_fd = std::io::stderr().as_raw_fd();
     let mut fds = [0; 2];

@@ -12,6 +12,7 @@ use text_to_ascii_art::{fonts, to_art};
 use crate::controls::StatusSnapshot;
 use crate::logging::{LogKind, LogLine};
 
+/// Render the TUI frame (title, controls, status, logs).
 pub fn draw_status(
     terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>,
     status: &StatusSnapshot,
