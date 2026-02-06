@@ -106,6 +106,18 @@ pub fn get_durations(file_path: &str) -> HashMap<u32, f64> {
     duration_map
 }
 
+fn get_durations_best_effort(file_path: &str) -> HashMap<u32, f64> {
+    let metadata_durations = std::panic::catch_unwind(|| get_durations(file_path)).ok();
+    if let Some(durations) = metadata_durations {
+        let all_zero = durations.values().all(|value| *value <= 0.0);
+        if !durations.is_empty() && !all_zero {
+            return durations;
+        }
+    }
+
+    get_durations_by_scan(file_path)
+}
+
 pub fn get_durations_by_scan(file_path: &str) -> HashMap<u32, f64> {
     let mut probed = get_probe_result_from_string(file_path);
     let mut max_ts: HashMap<u32, u64> = HashMap::new();
@@ -261,7 +273,7 @@ impl Info {
         let track_info = gather_track_info(&file_path);
 
         Self {
-            duration_map: get_durations(&file_path),
+            duration_map: get_durations_by_scan(&file_path),
             file_paths: vec![file_path],
             channels: track_info.channel_count,
             sample_rate: track_info.sample_rate,
@@ -273,12 +285,13 @@ impl Info {
         let mut duration_map: HashMap<u32, f64> = HashMap::new();
 
         for (index, file_path) in file_paths.iter().enumerate() {
-            let durations = get_durations(file_path);
+            let durations = get_durations_best_effort(file_path);
             let longest = durations
                 .iter()
                 .max_by(|a, b| a.1.partial_cmp(b.1).unwrap())
-                .unwrap();
-            duration_map.insert(index as u32, *longest.1);
+                .map(|entry| *entry.1)
+                .unwrap_or(0.0);
+            duration_map.insert(index as u32, longest);
         }
 
         let track_info = gather_track_info_from_file_paths(file_paths.clone());
