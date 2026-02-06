@@ -29,3 +29,7 @@ libc = "0.2.155"
 bench = ["proteus-lib/bench"]
 debug = ["proteus-lib/debug"]
 real-fft = ["proteus-lib/real-fft"]
+
+[[bin]]
+name = "prot"
+path = "src/main.rs"
