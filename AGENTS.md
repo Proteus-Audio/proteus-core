@@ -30,7 +30,8 @@
 - Keep modules focused; audio DSP helpers generally belong under `src/dsp/`.
 - Prefer small, composable functions for decoding, buffering, and playback pipelines.
 - Use `rustfmt` (`cargo fmt`) for consistent formatting.
-- Public items in `proteus-lib` typically have doc comments; add them when introducing new public APIs.
+- Public items in `proteus-lib` should have doc comments. Include `# Arguments`, `# Returns`, and `# Errors`
+  sections when the signature warrants it, and add examples for complex functions.
 - Real-time paths should avoid unnecessary allocations and long critical sections.
 
 ## Testing Guidelines
