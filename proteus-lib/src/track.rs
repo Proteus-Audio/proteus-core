@@ -253,7 +253,15 @@ pub fn buffer_container_tracks(
         track_eos_ms,
     } = args;
 
-    let (mut format, mut decoders, durations, time_bases, sample_rates, keys_for_track, valid_entries) = {
+    let (
+        mut format,
+        mut decoders,
+        durations,
+        time_bases,
+        sample_rates,
+        keys_for_track,
+        valid_entries,
+    ) = {
         let format = crate::tools::tools::get_reader(&file_path);
         let mut decoders: HashMap<u32, Box<dyn Decoder>> = HashMap::new();
         let mut durations: HashMap<u32, Option<u64>> = HashMap::new();
@@ -325,15 +333,7 @@ pub fn buffer_container_tracks(
                 if let Some(primary_key) = keys.first() {
                     let count = keys.len() as f32;
                     weights.insert(*primary_key, count);
-                    info!(
-                        "Marking tracks {} as finished",
-                        keys.iter()
-                            .map(|k| k.to_string())
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    );
                     for dup_key in keys.iter().skip(1) {
-                        info!("Track: {}", dup_key);
                         weights.insert(*dup_key, 0.0);
                         mark_track_as_finished(&mut finished_tracks.clone(), *dup_key);
                     }
@@ -368,7 +368,6 @@ pub fn buffer_container_tracks(
                 break Ok(true);
             }
 
-            info!("Waiting for next packet");
             let packet = match format.next_packet() {
                 Ok(packet) => packet,
                 Err(err) => break Err(err),
@@ -399,19 +398,10 @@ pub fn buffer_container_tracks(
                 }
             }
 
-            info!("Durations: {:?}", durations);
-
             if let Some(dur) = durations.get(&track_id).copied().flatten() {
-                info!(
-                    "Track {} duration: {} | packet.ts: {}",
-                    primary_track_key,
-                    dur,
-                    packet.ts()
-                );
                 if packet.ts() >= dur {
                     if !finished_track_ids.contains(&track_id) {
                         finished_track_ids.push(track_id);
-                        info!("Marking track {} as finished", primary_track_key);
                         mark_track_as_finished(&mut finished_tracks.clone(), primary_track_key);
                     }
                     if finished_track_ids.len() == keys_for_track.len() {
@@ -432,10 +422,7 @@ pub fn buffer_container_tracks(
                         if max_seen_secs - last_seen >= eos_seconds {
                             if let Some(primary_key) = keys.first() {
                                 finished_track_ids.push(*candidate_track_id);
-                                mark_track_as_finished(
-                                    &mut finished_tracks.clone(),
-                                    *primary_key,
-                                );
+                                mark_track_as_finished(&mut finished_tracks.clone(), *primary_key);
                                 if let Some(notify) = buffer_notify.as_ref() {
                                     notify.notify_all();
                                 }
@@ -496,7 +483,6 @@ pub fn buffer_container_tracks(
 
         for (track_key, track_id) in &valid_entries {
             if !finished_track_ids.contains(track_id) {
-                info!("Track {} has no duration", track_key);
                 mark_track_as_finished(&mut finished_tracks.clone(), *track_key);
                 if let Some(notify) = buffer_notify.as_ref() {
                     notify.notify_all();
@@ -527,8 +513,6 @@ fn add_samples_to_buffer_map(
 
         if remaining == 0 {
             if let Some(notify) = notify {
-                // #[cfg(feature = "debug")]
-                // info!("Waiting for buffer space");
                 let (guard, _) = notify.wait_timeout(map, Duration::from_millis(20)).unwrap();
                 drop(guard);
             } else {
