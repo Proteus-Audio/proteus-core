@@ -3,23 +3,35 @@
 ## Project Structure & Module Organization
 - Workspace root `Cargo.toml` defines members.
 - `proteus-lib/` is the library crate.
-- `proteus-lib/src/lib.rs` exposes the `proteus_lib` API.
-- `proteus-lib/src/effects/` holds audio effect implementations (reverb, convolution, spring impulse response).
+- `proteus-lib/src/lib.rs` exposes the `proteus_lib` API surface.
+- `proteus-lib/src/dsp/` holds audio DSP implementations (convolution, reverb, impulse responses).
+- `proteus-lib/src/playback/` contains the real-time player and mixing engine.
+- `proteus-lib/src/container/` owns `.prot`/`.mka` parsing, play settings, and metadata scans.
+- `proteus-lib/src/track/` owns per-track decoding and buffering.
 - `proteus-cli/` is the CLI crate.
 - `proteus-cli/src/main.rs` defines the CLI and playback workflow.
+- `proteus-scripts/` is a small helper CLI (currently for impulse response normalization).
+- `play_settings_guide.rs` is a local reference for play settings schema details.
 - `Cargo.lock` captures resolved dependencies for the workspace.
 
 ## Build, Test, and Development Commands
 - `cargo build` builds all workspace members in debug mode.
 - `cargo run -p proteus-cli -- <path-to-file.prot>` runs the CLI against a `.prot` or `.mka` file.
+- `cargo run -p proteus-cli --features debug -- <path>` enables extra playback metrics in the TUI.
+- `cargo run -p proteus-scripts -- normalize --help` shows helper script usage.
 - `cargo check` performs fast type-checking without producing binaries.
-- `cargo test` runs tests (none are currently defined, so this is a no-op).
+- `cargo fmt` formats Rust sources.
+- `cargo clippy -- -D warnings` runs the lints used by this codebase.
+- `cargo test` runs tests (none are currently defined today).
 
 ## Coding Style & Naming Conventions
 - Follow Rust 2021 conventions: `snake_case` for functions/modules, `CamelCase` for types, `SCREAMING_SNAKE_CASE` for constants.
-- Keep modules focused; audio DSP helpers generally belong under `src/effects/`.
-- Prefer small, composable functions for decoding and playback pipelines.
+- Use 4 spaces for indentation (rustfmt default) and avoid emoji/unicode symbols in source.
+- Keep modules focused; audio DSP helpers generally belong under `src/dsp/`.
+- Prefer small, composable functions for decoding, buffering, and playback pipelines.
 - Use `rustfmt` (`cargo fmt`) for consistent formatting.
+- Public items in `proteus-lib` typically have doc comments; add them when introducing new public APIs.
+- Real-time paths should avoid unnecessary allocations and long critical sections.
 
 ## Testing Guidelines
 - No unit or integration tests are present today.
@@ -37,7 +49,12 @@
 
 ## Configuration & Data Notes
 - The CLI expects `.prot` or `.mka` inputs and will error otherwise.
-- Local test data is referenced from `src/test_data.rs`; keep any new fixtures small and documented.
+- Local test data is referenced from `proteus-lib/src/test_data.rs`; keep any new fixtures small and documented.
+- Container playback settings are read from `play_settings.json` inside `.prot`/`.mka` files.
+- Feature flags: `bench`, `debug`, and `real-fft` are supported in both `proteus-lib` and `proteus-cli`.
+- Logging uses the `log` crate (not `tracing`) across the workspace.
+- The library currently contains `.unwrap()`/`.expect()` calls; avoid adding new ones in library code unless an invariant is guaranteed.
+- If introducing new error types, prefer `thiserror` in `proteus-lib` and `anyhow` in `proteus-cli`.
 
 ## Persistent Notes
-- See `NOTES.md` for playback alignment constraints that should always be preserved.
+- See `.guides/NOTES.md` for playback alignment constraints that should always be preserved.
