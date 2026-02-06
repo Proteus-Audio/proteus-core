@@ -1,9 +1,10 @@
 use dasp_ring_buffer::Bounded;
+use log::error;
 use rodio::buffer::SamplesBuffer;
 use std::collections::HashMap;
+use std::sync::atomic::AtomicU64;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
-use std::sync::atomic::AtomicU64;
 use std::thread;
 use std::time::Duration;
 #[cfg(feature = "debug")]
@@ -522,9 +523,8 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer<f3
                 let samples_len = samples_for_metrics.len();
                 let samples_buffer = SamplesBuffer::new(input_channels, sample_rate, samples);
 
-                let length_in_seconds = chunk_len as f64
-                    / audio_info.sample_rate as f64
-                    / audio_info.channels as f64;
+                let length_in_seconds =
+                    chunk_len as f64 / audio_info.sample_rate as f64 / audio_info.channels as f64;
 
                 #[cfg(feature = "debug")]
                 {
@@ -675,7 +675,12 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer<f3
                     metrics.prot_key_count = prot_key_count;
                 }
 
-                sender.send((samples_buffer, length_in_seconds)).unwrap();
+                match sender.send((samples_buffer, length_in_seconds)) {
+                    Ok(_) => (),
+                    Err(e) => {
+                        error!("Failed to send samples: {}", e);
+                    }
+                }
                 #[cfg(feature = "debug")]
                 {
                     last_send = Instant::now();

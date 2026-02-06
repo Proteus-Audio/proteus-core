@@ -2,6 +2,7 @@
 //!
 //! A command-line audio player for the Prot audio format.
 
+use dotenv::dotenv;
 use log::error;
 
 mod cli;
@@ -13,6 +14,7 @@ mod ui;
 fn main() {
     let args = cli::args::build_cli().get_matches();
     let log_buffer = logging::init();
+    dotenv().ok();
 
     let code = match runner::run(&args, log_buffer) {
         Ok(code) => code,
