@@ -1,3 +1,5 @@
+//! CLI argument definitions for `proteus-cli`.
+
 use clap::{Arg, ArgAction, Command};
 
 /// Build the CLI argument parser and command definitions.

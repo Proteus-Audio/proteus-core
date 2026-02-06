@@ -1,3 +1,5 @@
+//! Runner for CLI execution, TUI lifecycle, and playback thread orchestration.
+
 use std::{
     collections::VecDeque,
     io,

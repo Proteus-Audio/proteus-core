@@ -1,3 +1,5 @@
+//! Input handling and status summary helpers for the CLI.
+
 use std::time::Duration;
 
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};

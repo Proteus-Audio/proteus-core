@@ -1,3 +1,5 @@
+//! Benchmark entry points for CLI DSP tests.
+
 use clap::ArgMatches;
 use symphonia::core::errors::Result;
 

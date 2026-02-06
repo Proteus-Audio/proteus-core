@@ -1,3 +1,5 @@
+//! Ratatui UI layout and rendering helpers.
+
 use ratatui::{
     backend::CrosstermBackend,
     layout::{Constraint, Direction, Layout},

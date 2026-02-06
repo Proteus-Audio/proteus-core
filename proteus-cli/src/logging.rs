@@ -1,3 +1,5 @@
+//! Log capture and routing for TUI-friendly rendering.
+
 use log::{LevelFilter, Log, Metadata, Record};
 use std::collections::VecDeque;
 use std::io::{BufRead, BufReader};
