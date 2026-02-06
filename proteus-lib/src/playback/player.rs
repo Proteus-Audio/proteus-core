@@ -511,30 +511,29 @@ impl Player {
             // ===================== //
             // Wait until all tracks are finished playing in sink
             // ===================== //
-            let mut last_loop_log = Instant::now();
+            #[cfg(feature = "debug")]
+            {
+                let sink = sink_mutex.lock().unwrap();
+                let paused = sink.is_paused();
+                let empty = sink.empty();
+                let sink_len = sink.len();
+                drop(sink);
+                let time_passed = *time_passed.lock().unwrap();
+                let final_duration = *final_duration.lock().unwrap();
+                log::info!(
+                    "Starting drain loop: paused={} empty={} sink_len={} time={:.3} final={:?}",
+                    paused,
+                    empty,
+                    sink_len,
+                    time_passed,
+                    final_duration
+                );
+            }
+
             loop {
                 update_chunk_lengths();
                 if !check_details() {
                     break;
-                }
-                #[cfg(feature = "debug")]
-                if last_loop_log.elapsed().as_secs_f64() >= 1.0 {
-                    let sink = sink_mutex.lock().unwrap();
-                    let paused = sink.is_paused();
-                    let empty = sink.empty();
-                    let sink_len = sink.len();
-                    drop(sink);
-                    let time_passed = *time_passed.lock().unwrap();
-                    let final_duration = *final_duration.lock().unwrap();
-                    log::info!(
-                        "drain loop: paused={} empty={} sink_len={} time={:.3} final={:?}",
-                        paused,
-                        empty,
-                        sink_len,
-                        time_passed,
-                        final_duration
-                    );
-                    last_loop_log = Instant::now();
                 }
 
                 let done = if engine.finished_buffering() {
@@ -553,6 +552,9 @@ impl Player {
 
                 thread::sleep(Duration::from_millis(10));
             }
+
+            #[cfg(feature = "debug")]
+            log::info!("Finished drain loop!");
 
             // ===================== //
             // Set playback_thread_exists to false
