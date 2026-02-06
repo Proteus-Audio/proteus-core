@@ -1,3 +1,5 @@
+//! High-level playback controller for the Proteus library.
+
 use rodio::buffer::SamplesBuffer;
 use rodio::{OutputStreamBuilder, Sink};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -16,6 +18,7 @@ use crate::{
     playback::engine::{PlaybackBufferSettings, PlayerEngine, ReverbMetrics, ReverbSettings},
 };
 
+/// High-level playback state for the player.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PlayerState {
     Init,
@@ -28,6 +31,10 @@ pub enum PlayerState {
     Finished,
 }
 
+/// Primary playback controller.
+///
+/// `Player` owns the playback threads, buffering state, and runtime settings
+/// such as volume and reverb configuration.
 #[derive(Clone)]
 pub struct Player {
     pub info: Info,
@@ -56,16 +63,19 @@ pub struct Player {
 }
 
 impl Player {
+    /// Create a new player for a single container path.
     pub fn new(file_path: &String) -> Self {
         let this = Self::new_from_path_or_paths(Some(file_path), None);
         this
     }
 
+    /// Create a new player for a set of standalone file paths.
     pub fn new_from_file_paths(file_paths: &Vec<Vec<String>>) -> Self {
         let this = Self::new_from_path_or_paths(None, Some(file_paths));
         this
     }
 
+    /// Create a player from either a container path or standalone file paths.
     pub fn new_from_path_or_paths(path: Option<&String>, paths: Option<&Vec<Vec<String>>>) -> Self {
         let (prot, info) = match path {
             Some(path) => {
@@ -116,6 +126,7 @@ impl Player {
         this
     }
 
+    /// Override the impulse response used for convolution reverb.
     pub fn set_impulse_response_spec(&mut self, spec: ImpulseResponseSpec) {
         self.impulse_response_override = Some(spec.clone());
         let mut prot = self.prot.lock().unwrap();
@@ -123,12 +134,14 @@ impl Player {
         self.request_reverb_reset();
     }
 
+    /// Parse and apply an impulse response spec string.
     pub fn set_impulse_response_from_string(&mut self, value: &str) {
         if let Some(spec) = parse_impulse_response_string(value) {
             self.set_impulse_response_spec(spec);
         }
     }
 
+    /// Override the impulse response tail trim (dB).
     pub fn set_impulse_response_tail_db(&mut self, tail_db: f32) {
         self.impulse_response_tail_override = Some(tail_db);
         let mut prot = self.prot.lock().unwrap();
@@ -136,26 +149,31 @@ impl Player {
         self.request_reverb_reset();
     }
 
+    /// Enable or disable convolution reverb.
     pub fn set_reverb_enabled(&self, enabled: bool) {
         let mut settings = self.reverb_settings.lock().unwrap();
         settings.enabled = enabled;
         settings.reset_pending = true;
     }
 
+    /// Set the reverb wet/dry mix (clamped to `[0.0, 1.0]`).
     pub fn set_reverb_mix(&self, dry_wet: f32) {
         let mut settings = self.reverb_settings.lock().unwrap();
         settings.dry_wet = dry_wet.clamp(0.0, 1.0);
         settings.reset_pending = true;
     }
 
+    /// Retrieve the current reverb settings snapshot.
     pub fn get_reverb_settings(&self) -> ReverbSettings {
         *self.reverb_settings.lock().unwrap()
     }
 
+    /// Retrieve the latest reverb performance metrics.
     pub fn get_reverb_metrics(&self) -> ReverbMetrics {
         *self.reverb_metrics.lock().unwrap()
     }
 
+    /// Debug helper returning thread alive, state, and audio heard flags.
     pub fn debug_playback_state(&self) -> (bool, PlayerState, bool) {
         (
             self.playback_thread_exists.load(Ordering::SeqCst),
@@ -164,10 +182,12 @@ impl Player {
         )
     }
 
+    /// Debug helper indicating whether buffering has completed.
     pub fn debug_buffering_done(&self) -> bool {
         self.buffering_done.load(Ordering::Relaxed)
     }
 
+    /// Debug helper returning internal timing markers in milliseconds.
     pub fn debug_timing_ms(&self) -> (u64, u64) {
         (
             self.last_chunk_ms.load(Ordering::Relaxed),
@@ -175,6 +195,7 @@ impl Player {
         )
     }
 
+    /// Debug helper returning sink paused/empty flags and queued length.
     pub fn debug_sink_state(&self) -> (bool, bool, usize) {
         let sink = self.sink.lock().unwrap();
         let paused = sink.is_paused();
@@ -187,11 +208,13 @@ impl Player {
         self.reverb_reset.fetch_add(1, Ordering::SeqCst);
     }
 
+    /// Configure the minimum buffered audio (ms) before playback starts.
     pub fn set_start_buffer_ms(&self, start_buffer_ms: f32) {
         let mut settings = self.buffer_settings.lock().unwrap();
         settings.start_buffer_ms = start_buffer_ms.max(0.0);
     }
 
+    /// Configure heuristic end-of-track threshold for containers (ms).
     pub fn set_track_eos_ms(&self, track_eos_ms: f32) {
         let mut settings = self.buffer_settings.lock().unwrap();
         settings.track_eos_ms = track_eos_ms.max(0.0);
@@ -538,6 +561,7 @@ impl Player {
         });
     }
 
+    /// Start playback from a specific timestamp (seconds).
     pub fn play_at(&mut self, ts: f64) {
         let mut timestamp = self.ts.lock().unwrap();
         *timestamp = ts;
@@ -553,6 +577,7 @@ impl Player {
         self.wait_for_audio_heard(Duration::from_secs(5));
     }
 
+    /// Start playback from the current timestamp.
     pub fn play(&mut self) {
         info!("Playing audio");
         let thread_exists = self.playback_thread_exists.load(Ordering::SeqCst);
@@ -567,10 +592,12 @@ impl Player {
         self.wait_for_audio_heard(Duration::from_secs(5));
     }
 
+    /// Pause playback.
     pub fn pause(&self) {
         self.state.lock().unwrap().clone_from(&PlayerState::Pausing);
     }
 
+    /// Resume playback if paused.
     pub fn resume(&self) {
         self.state
             .lock()
@@ -578,6 +605,7 @@ impl Player {
             .clone_from(&PlayerState::Resuming);
     }
 
+    /// Stop the current playback thread without changing state.
     pub fn kill_current(&self) {
         self.state
             .lock()
@@ -596,21 +624,25 @@ impl Player {
         self.state.lock().unwrap().clone_from(&PlayerState::Stopped);
     }
 
+    /// Stop playback and reset timing state.
     pub fn stop(&self) {
         self.kill_current();
         self.ts.lock().unwrap().clone_from(&0.0);
     }
 
+    /// Return true if playback is currently active.
     pub fn is_playing(&self) -> bool {
         let state = self.state.lock().unwrap();
         *state == PlayerState::Playing
     }
 
+    /// Return true if playback is currently paused.
     pub fn is_paused(&self) -> bool {
         let state = self.state.lock().unwrap();
         *state == PlayerState::Paused
     }
 
+    /// Get the current playback time in seconds.
     pub fn get_time(&self) -> f64 {
         let ts = self.ts.lock().unwrap();
         *ts
@@ -621,12 +653,14 @@ impl Player {
         !playback_thread_exists
     }
 
+    /// Return true if playback has reached the end.
     pub fn is_finished(&self) -> bool {
         self.thread_finished()
         // let state = self.state.lock().unwrap();
         // *state == PlayerState::Finished
     }
 
+    /// Block the current thread until playback finishes.
     pub fn sleep_until_end(&self) {
         loop {
             if self.thread_finished() {
@@ -636,11 +670,13 @@ impl Player {
         }
     }
 
+    /// Get the total duration (seconds) of the active selection.
     pub fn get_duration(&self) -> f64 {
         let duration = self.duration.lock().unwrap();
         *duration
     }
 
+    /// Seek to the given timestamp (seconds).
     pub fn seek(&mut self, ts: f64) {
         let mut timestamp = self.ts.lock().unwrap();
         *timestamp = ts;
@@ -662,6 +698,7 @@ impl Player {
         }
     }
 
+    /// Refresh active track selections from the underlying container.
     pub fn refresh_tracks(&mut self) {
         let mut prot = self.prot.lock().unwrap();
         prot.refresh_tracks();
@@ -710,10 +747,12 @@ impl Player {
         }
     }
 
+    /// Shuffle track selections and restart playback.
     pub fn shuffle(&mut self) {
         self.refresh_tracks();
     }
 
+    /// Set the playback volume (0.0-1.0).
     pub fn set_volume(&mut self, new_volume: f32) {
         let sink = self.sink.lock().unwrap();
         sink.set_volume(new_volume);
@@ -724,16 +763,19 @@ impl Player {
         drop(volume);
     }
 
+    /// Get the current playback volume.
     pub fn get_volume(&self) -> f32 {
         *self.volume.lock().unwrap()
     }
 
+    /// Get the track identifiers used for display.
     pub fn get_ids(&self) -> Vec<String> {
         let prot = self.prot.lock().unwrap();
 
         return prot.get_ids();
     }
 
+    /// Enable periodic reporting of playback status for UI consumers.
     pub fn set_reporting(
         &mut self,
         reporting: Arc<Mutex<dyn Fn(Report) + Send>>,

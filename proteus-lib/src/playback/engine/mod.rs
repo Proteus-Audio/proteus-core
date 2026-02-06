@@ -1,3 +1,5 @@
+//! Playback mixing engine and buffer coordination.
+
 use dasp_ring_buffer::Bounded;
 use rodio::buffer::SamplesBuffer;
 use std::collections::HashMap;
@@ -16,6 +18,7 @@ pub use state::{PlaybackBufferSettings, ReverbMetrics, ReverbSettings};
 
 use mix::{spawn_mix_thread, MixThreadArgs};
 
+/// Internal playback engine used by the high-level [`Player`].
 #[derive(Debug, Clone)]
 pub struct PlayerEngine {
     pub finished_tracks: Arc<Mutex<Vec<u16>>>,
@@ -33,6 +36,7 @@ pub struct PlayerEngine {
 }
 
 impl PlayerEngine {
+    /// Create a new engine for the given container and settings.
     pub fn new(
         prot: Arc<Mutex<Prot>>,
         abort_option: Option<Arc<AtomicBool>>,
@@ -81,6 +85,7 @@ impl PlayerEngine {
         }
     }
 
+    /// Start the mixing loop and invoke `f` for each mixed chunk.
     pub fn reception_loop(&mut self, f: &dyn Fn((SamplesBuffer, f64))) {
         let prot = self.prot.lock().unwrap();
         let keys = prot.get_keys();
@@ -93,6 +98,7 @@ impl PlayerEngine {
         }
     }
 
+    /// Start mixing and return a receiver for `(buffer, duration)` chunks.
     pub fn start_receiver(&mut self) -> Receiver<(SamplesBuffer, f64)> {
         let prot = self.prot.lock().unwrap();
         let keys = prot.get_keys();
@@ -123,6 +129,7 @@ impl PlayerEngine {
         })
     }
 
+    /// Get the total duration (seconds) of the active selection.
     pub fn get_duration(&self) -> f64 {
         let prot = self.prot.lock().unwrap();
         *prot.get_duration()
@@ -154,6 +161,7 @@ impl PlayerEngine {
         }
     }
 
+    /// Return true if all tracks have reported end-of-stream.
     pub fn finished_buffering(&self) -> bool {
         let finished_tracks = self.finished_tracks.lock().unwrap();
         let prot = self.prot.lock().unwrap();

@@ -1,3 +1,5 @@
+//! Track decoding and buffering helpers.
+
 use log::{info, warn};
 use std::collections::HashMap;
 use std::sync::atomic::AtomicBool;
@@ -13,6 +15,7 @@ use symphonia::core::units::{Time, TimeBase};
 use crate::audio::buffer::{buffer_remaining_space, TrackBufferMap};
 use crate::tools::tools::open_file;
 
+/// Arguments required to buffer a single track into a ring buffer.
 pub struct TrackArgs {
     pub file_path: String,
     pub track_id: Option<u32>,
@@ -25,6 +28,7 @@ pub struct TrackArgs {
     pub channels: u8,
 }
 
+/// Convert a signed 24-bit sample stored in an `i32` to `f32`.
 pub fn convert_signed_24bit_to_f32(sample: i32) -> f32 {
     // Assuming the 24-bit sample is the least significant bits of a 32-bit integer
     // Shift to get rid of padding/sign-extension if necessary
@@ -36,22 +40,26 @@ pub fn convert_signed_24bit_to_f32(sample: i32) -> f32 {
     normalized_sample
 }
 
+/// Convert an unsigned 24-bit sample stored in a `u32` to `f32`.
 pub fn convert_unsigned_24bit_to_f32(sample: u32) -> f32 {
     let shifted_sample = sample as i32 - 2i32.pow(23);
     let normalized_sample = shifted_sample as f32 / 2f32.powi(23);
     normalized_sample
 }
 
+/// Convert a signed 16-bit sample to `f32`.
 pub fn convert_signed_16bit_to_f32(sample: i16) -> f32 {
     sample as f32 / 2f32.powi(15)
 }
 
+/// Convert an unsigned 16-bit sample to `f32`.
 pub fn convert_unsigned_16bit_to_f32(sample: u16) -> f32 {
     let shifted_sample = sample as i16 - 2i16.pow(15);
     let normalized_sample = shifted_sample as f32 / 2f32.powi(15);
     normalized_sample
 }
 
+/// Extract samples for a single channel from a decoded packet.
 pub fn process_channel(decoded: AudioBufferRef<'_>, channel: usize) -> Vec<f32> {
     match decoded {
         AudioBufferRef::U16(buf) => buf
@@ -91,6 +99,7 @@ pub fn process_channel(decoded: AudioBufferRef<'_>, channel: usize) -> Vec<f32> 
     }
 }
 
+/// Spawn a decoder thread that buffers audio for a single track.
 pub fn buffer_track(args: TrackArgs, abort: Arc<AtomicBool>) -> Arc<Mutex<bool>> {
     let TrackArgs {
         file_path,
@@ -225,6 +234,7 @@ pub fn buffer_track(args: TrackArgs, abort: Arc<AtomicBool>) -> Arc<Mutex<bool>>
     return playing;
 }
 
+/// Arguments required to buffer multiple tracks from a shared container stream.
 pub struct ContainerTrackArgs {
     pub file_path: String,
     pub track_entries: Vec<(u16, u32)>,
@@ -237,6 +247,7 @@ pub struct ContainerTrackArgs {
     pub track_eos_ms: f32,
 }
 
+/// Spawn a decoder thread that buffers multiple container tracks.
 pub fn buffer_container_tracks(
     args: ContainerTrackArgs,
     abort: Arc<AtomicBool>,

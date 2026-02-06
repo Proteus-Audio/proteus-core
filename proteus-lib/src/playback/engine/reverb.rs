@@ -1,3 +1,5 @@
+//! Reverb worker and impulse-response resolution helpers.
+
 use std::path::{Path, PathBuf};
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
@@ -16,6 +18,7 @@ use crate::dsp::reverb::Reverb;
 
 use super::state::{ReverbMetrics, ReverbSettings};
 
+/// Build a [`Reverb`] instance based on an optional impulse response spec.
 pub fn build_reverb_with_impulse_response(
     channels: usize,
     dry_wet: f32,
@@ -99,16 +102,19 @@ fn resolve_impulse_response_path(container_path: Option<&str>, path: &str) -> Pa
     path.to_path_buf()
 }
 
+/// Work item for the reverb worker thread.
 pub struct ReverbJob {
     samples: Vec<f32>,
     channels: u16,
     sample_rate: u32,
 }
 
+/// Result returned from the reverb worker thread.
 pub struct ReverbResult {
     samples: Vec<f32>,
 }
 
+/// Spawn a worker thread to process convolution reverb jobs.
 pub fn spawn_reverb_worker(
     mut reverb: Reverb,
     reverb_settings: Arc<Mutex<ReverbSettings>>,
@@ -237,6 +243,7 @@ pub fn spawn_reverb_worker(
     (job_sender, result_receiver)
 }
 
+/// Submit a reverb job and wait for the processed samples.
 pub fn process_reverb(
     sender: &mpsc::SyncSender<ReverbJob>,
     receiver: &mpsc::Receiver<ReverbResult>,

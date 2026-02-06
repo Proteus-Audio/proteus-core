@@ -1,3 +1,5 @@
+//! Peak extraction utilities for waveform display.
+
 use std::sync::mpsc;
 use std::thread;
 
@@ -45,6 +47,9 @@ fn find_peaks(samples: &[f32], window_size: usize) -> Vec<(f32, f32)> {
         .collect()
 }
 
+/// Decode an audio file and return per-channel peak windows.
+///
+/// If `limited` is true, only a single channel is processed.
 pub fn get_peaks(file_path: &str, limited: bool) -> Vec<Vec<(f32, f32)>> {
     let (mut decoder, mut format) = open_file(file_path);
     // let (sender, receiver) = mpsc::sync_channel::<Peak>(1);

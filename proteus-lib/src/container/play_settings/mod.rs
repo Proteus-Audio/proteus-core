@@ -1,3 +1,5 @@
+//! Serde models for `play_settings.json` with versioned decoding.
+
 use log::{info, warn};
 use serde::{Deserialize, Deserializer};
 
@@ -9,6 +11,7 @@ pub use legacy::{PlaySettingsLegacy, PlaySettingsLegacyFile, PlaySettingsTrackLe
 pub use v1::{PlaySettingsV1, PlaySettingsV1File};
 pub use v2::{PlaySettingsV2, PlaySettingsV2File};
 
+/// Legacy algorithmic reverb configuration.
 #[derive(Debug, Clone, Deserialize)]
 pub struct ReverbSettings {
     pub decay: f32,
@@ -17,6 +20,7 @@ pub struct ReverbSettings {
     pub active: bool,
 }
 
+/// Legacy compressor configuration.
 #[derive(Debug, Clone, Deserialize)]
 pub struct CompressorSettings {
     pub attack: f32,
@@ -27,6 +31,7 @@ pub struct CompressorSettings {
     pub active: bool,
 }
 
+/// Effect settings variants that can appear in the settings file.
 #[derive(Debug, Clone, Deserialize)]
 pub enum EffectSettings {
     ReverbSettings(ReverbSettings),
@@ -34,6 +39,7 @@ pub enum EffectSettings {
     ConvolutionReverbSettings(ConvolutionReverbSettings),
 }
 
+/// Track-level configuration shared by newer settings versions.
 #[derive(Debug, Clone, Deserialize)]
 pub struct SettingsTrack {
     pub level: f32,
@@ -43,6 +49,7 @@ pub struct SettingsTrack {
     pub safe_name: String,
 }
 
+/// Convolution reverb configuration.
 #[derive(Debug, Clone, Deserialize)]
 pub struct ConvolutionReverbSettings {
     pub impulse_response: Option<String>,
@@ -52,6 +59,7 @@ pub struct ConvolutionReverbSettings {
     pub impulse_response_tail: Option<f32>,
 }
 
+/// Wrapper allowing `play_settings` to be nested or flat.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(untagged)]
 pub enum PlaySettingsContainer<T> {
@@ -60,6 +68,7 @@ pub enum PlaySettingsContainer<T> {
 }
 
 impl<T> PlaySettingsContainer<T> {
+    /// Return the inner settings payload, regardless of nesting.
     pub fn inner(&self) -> &T {
         match self {
             PlaySettingsContainer::Nested { play_settings } => play_settings,
@@ -68,6 +77,7 @@ impl<T> PlaySettingsContainer<T> {
     }
 }
 
+/// Versioned settings file representation.
 #[derive(Debug, Clone)]
 pub enum PlaySettingsFile {
     Legacy(PlaySettingsLegacyFile),
@@ -80,6 +90,7 @@ pub enum PlaySettingsFile {
 }
 
 impl PlaySettingsFile {
+    /// Get the encoder version string, if known.
     pub fn encoder_version(&self) -> Option<&str> {
         match self {
             PlaySettingsFile::Legacy(_) => None,

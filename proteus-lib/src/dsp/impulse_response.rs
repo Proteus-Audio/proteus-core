@@ -1,3 +1,5 @@
+//! Load and normalize impulse responses for convolution reverb.
+
 use std::fmt;
 use std::fs::File;
 use std::io::{BufReader, Cursor, Read, Seek};
@@ -7,6 +9,9 @@ use log::warn;
 use matroska::Matroska;
 use rodio::{Decoder, Source};
 
+/// Decoded impulse response audio data.
+///
+/// Samples are stored per-channel, interleaving is handled by consumers.
 #[derive(Debug, Clone)]
 pub struct ImpulseResponse {
     pub sample_rate: u32,
@@ -14,10 +19,15 @@ pub struct ImpulseResponse {
 }
 
 impl ImpulseResponse {
+    /// Return the number of channels contained in the impulse response.
     pub fn channel_count(&self) -> usize {
         self.channels.len()
     }
 
+    /// Select a channel to use for the requested output index.
+    ///
+    /// Multi-channel IRs are wrapped (round-robin). Mono IRs are reused for
+    /// all outputs.
     pub fn channel_for_output(&self, index: usize) -> &[f32] {
         if self.channels.is_empty() {
             return &[];
@@ -32,6 +42,7 @@ impl ImpulseResponse {
     }
 }
 
+/// Errors that can occur while loading or decoding impulse responses.
 #[derive(Debug)]
 pub enum ImpulseResponseError {
     Io(std::io::Error),
@@ -75,12 +86,22 @@ impl From<matroska::Error> for ImpulseResponseError {
     }
 }
 
+/// Load an impulse response from a file path.
+///
+/// # Example
+/// ```no_run
+/// use proteus_lib::dsp::impulse_response::load_impulse_response_from_file;
+///
+/// let ir = load_impulse_response_from_file("ir.wav").unwrap();
+/// assert!(ir.channel_count() > 0);
+/// ```
 pub fn load_impulse_response_from_file(
     path: impl AsRef<Path>,
 ) -> Result<ImpulseResponse, ImpulseResponseError> {
     load_impulse_response_from_file_with_tail(path, Some(-60.0))
 }
 
+/// Load an impulse response from disk and optionally trim its tail in dB.
 pub fn load_impulse_response_from_file_with_tail(
     path: impl AsRef<Path>,
     tail_db: Option<f32>,
@@ -89,12 +110,14 @@ pub fn load_impulse_response_from_file_with_tail(
     decode_impulse_response(BufReader::new(file), tail_db)
 }
 
+/// Load an impulse response from in-memory audio bytes.
 pub fn load_impulse_response_from_bytes(
     bytes: &[u8],
 ) -> Result<ImpulseResponse, ImpulseResponseError> {
     load_impulse_response_from_bytes_with_tail(bytes, Some(-60.0))
 }
 
+/// Load an impulse response from bytes and optionally trim its tail in dB.
 pub fn load_impulse_response_from_bytes_with_tail(
     bytes: &[u8],
     tail_db: Option<f32>,
@@ -102,6 +125,7 @@ pub fn load_impulse_response_from_bytes_with_tail(
     decode_impulse_response(BufReader::new(Cursor::new(bytes.to_vec())), tail_db)
 }
 
+/// Load an impulse response attachment from a `.prot`/`.mka` container.
 pub fn load_impulse_response_from_prot_attachment(
     prot_path: impl AsRef<Path>,
     attachment_name: &str,
@@ -109,6 +133,7 @@ pub fn load_impulse_response_from_prot_attachment(
     load_impulse_response_from_prot_attachment_with_tail(prot_path, attachment_name, Some(-60.0))
 }
 
+/// Load a container attachment and optionally trim its tail in dB.
 pub fn load_impulse_response_from_prot_attachment_with_tail(
     prot_path: impl AsRef<Path>,
     attachment_name: &str,
@@ -158,6 +183,11 @@ where
     })
 }
 
+/// Normalize and optionally trim channels in-place.
+///
+/// Normalization is a two-step process:
+/// 1. Peak normalization to avoid clipping.
+/// 2. Energy normalization (attenuation-only) to keep long IRs controlled.
 pub fn normalize_impulse_response_channels(
     channel_samples: &mut [Vec<f32>],
     tail_db: Option<f32>,

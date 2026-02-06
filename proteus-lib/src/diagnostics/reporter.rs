@@ -1,3 +1,5 @@
+//! Periodic playback state reporter for UI updates.
+
 use std::{
     sync::{Arc, Mutex},
     time::Duration,
@@ -5,6 +7,7 @@ use std::{
 
 use crate::playback::player::Player;
 
+/// Snapshot of playback state sent to UI consumers.
 #[derive(Clone, PartialEq)]
 pub struct Report {
     pub time: f64,
@@ -13,6 +16,7 @@ pub struct Report {
     pub playing: bool,
 }
 
+/// Background reporter that polls the [`Player`] at fixed intervals.
 #[derive(Clone)]
 pub struct Reporter {
     player: Arc<Mutex<Player>>,
@@ -22,7 +26,12 @@ pub struct Reporter {
 }
 
 impl Reporter {
-    pub fn new(player: Arc<Mutex<Player>>, report: Arc<Mutex<dyn Fn(Report) + Send>>, interval: Duration) -> Self {
+    /// Create a new reporter for the given player and callback.
+    pub fn new(
+        player: Arc<Mutex<Player>>,
+        report: Arc<Mutex<dyn Fn(Report) + Send>>,
+        interval: Duration,
+    ) -> Self {
         Self {
             player,
             report,
@@ -68,12 +77,14 @@ impl Reporter {
         }
     }
 
+    /// Start the background reporting thread.
     pub fn start(&self) {
         let this = self.clone();
         Some(std::thread::spawn(move || this.run()));
         *self.finish.lock().unwrap() = false;
     }
 
+    /// Stop the background reporting thread.
     pub fn stop(&self) {
         *self.finish.lock().unwrap() = true;
         // if let Some(child) = self.child.take() {

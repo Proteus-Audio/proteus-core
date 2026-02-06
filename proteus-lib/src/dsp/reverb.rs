@@ -1,3 +1,8 @@
+//! Convolution reverb wrapper built on top of [`Convolver`].
+//!
+//! This module exposes a simple per-channel reverb that mixes dry and wet
+//! signals and reuses internal scratch buffers to reduce allocations.
+
 use std::time::Instant;
 
 use log::debug;
@@ -11,6 +16,10 @@ const FFT_SIZE: usize = 8192;
 // const FFT_SIZE: usize = 16384;
 // const FFT_SIZE: usize = 32768;
 
+/// Stateful convolution reverb processor.
+///
+/// The processor keeps a `Convolver` per output channel and maintains
+/// scratch buffers to minimize per-call allocations.
 pub struct Reverb {
     channels: usize,
     dry_wet: f32,
@@ -21,6 +30,9 @@ pub struct Reverb {
 }
 
 impl Reverb {
+    /// Create a reverb using the built-in normalized spring impulse response.
+    ///
+    /// `dry_wet` is clamped to `[0.0, 1.0]`.
     pub fn new(channels: usize, dry_wet: f32) -> Self {
         let mut convolvers = Vec::with_capacity(channels);
         for _ in 0..channels {
@@ -37,6 +49,10 @@ impl Reverb {
         }
     }
 
+    /// Create a reverb with a custom impulse response.
+    ///
+    /// If the impulse response has fewer channels than the output, channels
+    /// are repeated via `channel_for_output`.
     pub fn new_with_impulse_response(
         channels: usize,
         dry_wet: f32,
@@ -58,6 +74,10 @@ impl Reverb {
         }
     }
 
+    /// Process an interleaved input buffer and return the mixed output.
+    ///
+    /// This allocates a new output buffer each call. For hot paths, prefer
+    /// [`process_into`] to reuse an existing allocation.
     pub fn process(&mut self, input_buffer: &[f32]) -> Vec<f32> {
         if self.dry_wet <= 0.0 {
             return input_buffer.to_vec();
@@ -68,6 +88,10 @@ impl Reverb {
         out
     }
 
+    /// Return the preferred block size in interleaved samples.
+    ///
+    /// This is derived from the underlying convolution FFT size and the
+    /// configured channel count.
     pub fn block_size_samples(&self) -> usize {
         if self.convolvers.is_empty() {
             return 0;
@@ -110,6 +134,9 @@ impl Reverb {
         processed
     }
 
+    /// Process interleaved input into the provided output buffer.
+    ///
+    /// The output buffer is cleared and replaced with the processed samples.
     pub fn process_into(&mut self, input_buffer: &[f32], out: &mut Vec<f32>) {
         if self.dry_wet <= 0.0 {
             out.clear();
@@ -170,16 +197,21 @@ impl Reverb {
         out.extend_from_slice(&self.scratch_mixed);
     }
 
+    /// Update the dry/wet mix, clamped to `[0.0, 1.0]`.
     pub fn set_dry_wet(&mut self, dry_wet: f32) {
         self.dry_wet = dry_wet.clamp(0.0, 1.0);
     }
 
+    /// Clear only the convolution tail state.
     pub fn clear_tail(&mut self) {
         for convolver in &mut self.convolvers {
             convolver.previous_tail.fill(0.0);
         }
     }
 
+    /// Clear all internal state and scratch buffers.
+    ///
+    /// This is useful when seeking or reinitializing playback.
     pub fn clear_state(&mut self) {
         for convolver in &mut self.convolvers {
             convolver.clear_state();

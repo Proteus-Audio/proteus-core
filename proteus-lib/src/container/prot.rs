@@ -1,3 +1,5 @@
+//! Container model and play settings parsing for `.prot`/`.mka`.
+
 use matroska::{Audio, Matroska, Settings};
 use rand::Rng;
 use symphonia::core::audio::Channels;
@@ -9,6 +11,7 @@ use crate::container::play_settings::{
     ConvolutionReverbSettings, EffectSettings, PlaySettingsFile, PlaySettingsLegacy, SettingsTrack,
 };
 
+/// Parsed `.prot` container with resolved tracks and playback metadata.
 #[derive(Debug, Clone)]
 pub struct Prot {
     pub info: Info,
@@ -22,6 +25,7 @@ pub struct Prot {
     impulse_response_tail_db: Option<f32>,
 }
 
+/// Location of an impulse response used for convolution reverb.
 #[derive(Debug, Clone)]
 pub enum ImpulseResponseSpec {
     Attachment(String),
@@ -29,6 +33,7 @@ pub enum ImpulseResponseSpec {
 }
 
 impl Prot {
+    /// Load a single container file and resolve tracks.
     pub fn new(file_path: &String) -> Self {
         let info = Info::new(file_path.clone());
 
@@ -49,6 +54,7 @@ impl Prot {
         this
     }
 
+    /// Build a container from multiple standalone file path sets.
     pub fn new_from_file_paths(file_paths: &Vec<Vec<String>>) -> Self {
         let mut file_paths_dictionary = Vec::new();
         // Add all file paths to file_paths_dictionary
@@ -85,6 +91,7 @@ impl Prot {
     //     let symphonia: Symphonia = Symphonia::open(file).expect("Could not open file");
     // }
 
+    /// Rebuild the active track list (e.g., after shuffle).
     pub fn refresh_tracks(&mut self) {
         let mut longest_duration = 0.0;
         self.impulse_response_spec = None;
@@ -222,26 +229,32 @@ impl Prot {
         // first_audio_settings
     }
 
+    /// Get the convolution impulse response spec, if configured.
     pub fn get_impulse_response_spec(&self) -> Option<ImpulseResponseSpec> {
         self.impulse_response_spec.clone()
     }
 
+    /// Get the configured impulse response tail trim in dB, if any.
     pub fn get_impulse_response_tail_db(&self) -> Option<f32> {
         self.impulse_response_tail_db
     }
 
+    /// Return the container path if this is a `.prot`/`.mka` file.
     pub fn get_container_path(&self) -> Option<String> {
         self.file_path.clone()
     }
 
+    /// Override the impulse response spec at runtime.
     pub fn set_impulse_response_spec(&mut self, spec: ImpulseResponseSpec) {
         self.impulse_response_spec = Some(spec);
     }
 
+    /// Override the impulse response tail trim at runtime.
     pub fn set_impulse_response_tail_db(&mut self, tail_db: f32) {
         self.impulse_response_tail_db = Some(tail_db);
     }
 
+    /// Return per-track keys for UI selection.
     pub fn get_keys(&self) -> Vec<u32> {
         // This should just be a range from 0 to the length of the track_paths or track_ids array
         if let Some(track_paths) = &self.track_paths {
@@ -255,6 +268,7 @@ impl Prot {
         Vec::new()
     }
 
+    /// Return per-track identifiers or file paths for display.
     pub fn get_ids(&self) -> Vec<String> {
         if let Some(track_paths) = &self.track_paths {
             return track_paths.clone();
@@ -267,6 +281,7 @@ impl Prot {
         Vec::new()
     }
 
+    /// Return a list of `(key, path, optional track_id)` for buffering.
     pub fn enumerated_list(&self) -> Vec<(u16, String, Option<u32>)> {
         let mut list: Vec<(u16, String, Option<u32>)> = Vec::new();
         if let Some(track_paths) = &self.track_paths {
@@ -292,6 +307,7 @@ impl Prot {
         list
     }
 
+    /// Return container track entries for shared container streaming.
     pub fn container_track_entries(&self) -> Option<(String, Vec<(u16, u32)>)> {
         let file_path = self.file_path.as_ref()?;
         let track_ids = self.track_ids.as_ref()?;
@@ -302,10 +318,12 @@ impl Prot {
         Some((file_path.clone(), entries))
     }
 
+    /// Get the longest selected duration (seconds).
     pub fn get_duration(&self) -> &f64 {
         &self.duration
     }
 
+    /// Return the number of selected tracks.
     pub fn get_length(&self) -> usize {
         if let Some(file_paths) = &self.file_paths {
             return file_paths.len();
@@ -318,6 +336,7 @@ impl Prot {
         0
     }
 
+    /// Return the unique file paths used for a multi-file container.
     pub fn get_file_paths_dictionary(&self) -> Vec<String> {
         match &self.file_paths_dictionary {
             Some(dictionary) => dictionary.to_vec(),
@@ -382,6 +401,11 @@ fn parse_impulse_response_string_or_struct(
     None
 }
 
+/// Parse an impulse response spec string into a concrete location.
+///
+/// Supported prefixes:
+/// - `attachment:` for container attachments
+/// - `file:` for explicit file paths
 pub fn parse_impulse_response_string(value: &str) -> Option<ImpulseResponseSpec> {
     if let Some(attachment) = value.strip_prefix("attachment:") {
         return Some(ImpulseResponseSpec::Attachment(

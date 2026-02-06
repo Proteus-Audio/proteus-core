@@ -1,3 +1,9 @@
+//! Convolution engine used by reverb and offline processing.
+//!
+//! Two implementations are provided:
+//! - `complex_fft` (default): full complex FFT using `rustfft`.
+//! - `real_fft` (feature `real-fft`): real FFT using `realfft`.
+
 #[cfg(not(feature = "real-fft"))]
 mod complex_fft {
     use std::collections::VecDeque;
@@ -7,6 +13,7 @@ mod complex_fft {
 
     // Taken from https://github.com/BordenJardine/reverb_vst
 
+    /// Overlap-add convolver based on complex FFTs.
     #[derive(Clone)]
     pub struct Convolver {
         pub fft_size: usize,
@@ -19,6 +26,7 @@ mod complex_fft {
     }
 
     impl Convolver {
+        /// Create a new convolver for a single-channel impulse response.
         pub fn new(ir_signal: &[f32], fft_size: usize) -> Self {
             let mut planner = FftPlanner::<f32>::new();
             let fft_processor = planner.plan_fft_forward(fft_size);
@@ -37,6 +45,10 @@ mod complex_fft {
             }
         }
 
+        /// Process a block of input samples and return the convolved output.
+        ///
+        /// The output length matches the input length. Internal tails are
+        /// preserved between calls.
         pub fn process(&mut self, input_buffer: &[f32]) -> Vec<f32> {
             let io_len = input_buffer.len();
             let segment_size = self.fft_size / 2;
@@ -88,6 +100,7 @@ mod complex_fft {
             output
         }
 
+        /// Reset internal FFT history and tail buffers.
         pub fn clear_state(&mut self) {
             for frame in &mut self.previous_frame_q {
                 for sample in frame.iter_mut() {
@@ -112,6 +125,7 @@ mod complex_fft {
         }
     }
 
+    /// Add one spectrum frame into another in-place.
     pub fn add_frames(f1: &mut [Complex<f32>], f2: Vec<Complex<f32>>) {
         for (sample1, sample2) in f1.iter_mut().zip(f2) {
             sample1.re = sample1.re + sample2.re;
@@ -119,6 +133,7 @@ mod complex_fft {
         }
     }
 
+    /// Multiply two spectra element-wise.
     pub fn mult_frames(f1: &[Complex<f32>], f2: &[Complex<f32>]) -> Vec<Complex<f32>> {
         let mut out: Vec<Complex<f32>> = Vec::new();
         for (sample1, sample2) in f1.iter().zip(f2) {
@@ -130,6 +145,7 @@ mod complex_fft {
         out
     }
 
+    /// Initialize a zeroed overlap-add tail of the given size.
     pub fn init_previous_tail(size: usize) -> Vec<f32> {
         let mut tail = Vec::new();
         for _ in 0..size {
@@ -138,6 +154,7 @@ mod complex_fft {
         tail
     }
 
+    /// Segment a time-domain buffer into FFT-sized spectra.
     pub fn segment_buffer(
         buffer: &[f32],
         fft_size: usize,
@@ -166,6 +183,7 @@ mod complex_fft {
         segments
     }
 
+    /// Build a queue of empty spectrum frames for overlap-add history.
     pub fn init_previous_frame_q(
         segment_count: usize,
         fft_size: usize,
@@ -190,6 +208,7 @@ mod real_fft {
     use rustfft::num_complex::Complex;
     use realfft::{ComplexToReal, RealFftPlanner, RealToComplex};
 
+    /// Overlap-add convolver based on real FFTs.
     #[derive(Clone)]
     pub struct Convolver {
         pub fft_size: usize,
@@ -202,6 +221,7 @@ mod real_fft {
     }
 
     impl Convolver {
+        /// Create a new convolver for a single-channel impulse response.
         pub fn new(ir_signal: &[f32], fft_size: usize) -> Self {
             let mut planner = RealFftPlanner::<f32>::new();
             let r2c = planner.plan_fft_forward(fft_size);
@@ -221,6 +241,10 @@ mod real_fft {
             }
         }
 
+        /// Process a block of input samples and return the convolved output.
+        ///
+        /// The output length matches the input length. Internal tails are
+        /// preserved between calls.
         pub fn process(&mut self, input_buffer: &[f32]) -> Vec<f32> {
             let io_len = input_buffer.len();
             let segment_size = self.fft_size / 2;
@@ -282,6 +306,7 @@ mod real_fft {
             output
         }
 
+        /// Reset internal FFT history and tail buffers.
         pub fn clear_state(&mut self) {
             for frame in &mut self.previous_frame_q {
                 for sample in frame.iter_mut() {

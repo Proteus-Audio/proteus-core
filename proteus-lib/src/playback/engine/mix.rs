@@ -1,3 +1,5 @@
+//! Mixing thread for combining buffered tracks and applying effects.
+
 use dasp_ring_buffer::Bounded;
 use log::error;
 use rodio::buffer::SamplesBuffer;
@@ -17,6 +19,7 @@ use crate::track::{buffer_container_tracks, buffer_track, ContainerTrackArgs, Tr
 use super::reverb::build_reverb_with_impulse_response;
 use super::state::{PlaybackBufferSettings, ReverbMetrics, ReverbSettings};
 
+/// Arguments required to spawn the mixing thread.
 pub struct MixThreadArgs {
     pub audio_info: crate::container::info::Info,
     pub buffer_map: Arc<Mutex<HashMap<u16, TrackBuffer>>>,
@@ -33,6 +36,7 @@ pub struct MixThreadArgs {
     pub reverb_metrics: Arc<Mutex<ReverbMetrics>>,
 }
 
+/// Spawn the mixing thread and return a receiver of mixed audio buffers.
 pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer, f64)> {
     let (sender, receiver) = mpsc::sync_channel::<(SamplesBuffer, f64)>(1);
 

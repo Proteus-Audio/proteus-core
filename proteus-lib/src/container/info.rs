@@ -1,3 +1,5 @@
+//! Container metadata helpers and duration probing.
+
 use std::{collections::HashMap, fs::File, path::Path};
 
 use log::debug;
@@ -12,6 +14,7 @@ use symphonia::core::{
     units::TimeBase,
 };
 
+/// Convert Symphonia codec parameters to seconds using time base and frames.
 pub fn get_time_from_frames(codec_params: &CodecParameters) -> f64 {
     let tb = codec_params.time_base.unwrap();
     let dur = codec_params
@@ -23,6 +26,7 @@ pub fn get_time_from_frames(codec_params: &CodecParameters) -> f64 {
     time.seconds as f64 + time.frac
 }
 
+/// Probe a media file (or stdin `-`) and return the Symphonia probe result.
 pub fn get_probe_result_from_string(file_path: &str) -> ProbeResult {
     // Create a hint to help the format registry guess what format reader is appropriate.
     let mut hint = Hint::new();
@@ -67,6 +71,9 @@ pub fn get_probe_result_from_string(file_path: &str) -> ProbeResult {
         .unwrap()
 }
 
+/// Best-effort duration mapping per track using metadata or frame counts.
+///
+/// For container files, this may be approximate if metadata is inaccurate.
 pub fn get_durations(file_path: &str) -> HashMap<u32, f64> {
     let mut probed = get_probe_result_from_string(file_path);
 
@@ -118,6 +125,7 @@ fn get_durations_best_effort(file_path: &str) -> HashMap<u32, f64> {
     get_durations_by_scan(file_path)
 }
 
+/// Scan all packets to compute per-track durations (accurate but slower).
 pub fn get_durations_by_scan(file_path: &str) -> HashMap<u32, f64> {
     let mut probed = get_probe_result_from_string(file_path);
     let mut max_ts: HashMap<u32, u64> = HashMap::new();
@@ -171,6 +179,7 @@ pub fn get_durations_by_scan(file_path: &str) -> HashMap<u32, f64> {
 //     }
 // }
 
+/// Aggregate codec information for a track.
 #[derive(Debug)]
 pub struct TrackInfo {
     pub sample_rate: u32,
@@ -259,6 +268,7 @@ fn gather_track_info_from_file_paths(file_paths: Vec<String>) -> TrackInfo {
     reduce_track_infos(track_infos)
 }
 
+/// Combined container info (track list, durations, sample format).
 #[derive(Debug, Clone)]
 pub struct Info {
     pub file_paths: Vec<String>,
@@ -269,6 +279,7 @@ pub struct Info {
 }
 
 impl Info {
+    /// Build info for a single container file by scanning all packets.
     pub fn new(file_path: String) -> Self {
         let track_info = gather_track_info(&file_path);
 
@@ -281,6 +292,9 @@ impl Info {
         }
     }
 
+    /// Build info for a list of standalone files.
+    ///
+    /// Uses metadata when available and falls back to scanning.
     pub fn new_from_file_paths(file_paths: Vec<String>) -> Self {
         let mut duration_map: HashMap<u32, f64> = HashMap::new();
 
@@ -305,6 +319,7 @@ impl Info {
         }
     }
 
+    /// Get the duration for the given track index, if known.
     pub fn get_duration(&self, index: u32) -> Option<f64> {
         match self.duration_map.get(&index) {
             Some(duration) => Some(*duration),

@@ -1,3 +1,5 @@
+//! Local test data paths used by development helpers.
+
 fn get_double_vec_of_mp3s() -> Vec<Vec<String>> {
     vec![
         vec![
@@ -52,12 +54,16 @@ fn get_double_vec_of_wavs() -> Vec<Vec<String>> {
     ]
 }
 
+/// Convenience wrapper for local test asset paths.
+///
+/// Note: Paths are machine-specific and intended for local development only.
 pub struct TestData {
     pub mp3s: Vec<Vec<String>>,
     pub wavs: Vec<Vec<String>>,   
 }
 
 impl TestData {
+    /// Build a new set of local test asset paths.
     pub fn new() -> Self {
         Self {
             mp3s: get_double_vec_of_mp3s(),

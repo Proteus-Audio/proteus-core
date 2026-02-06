@@ -1,3 +1,6 @@
+//! Shared playback state and metrics structures.
+
+/// Reverb configuration shared across threads.
 #[derive(Debug, Clone, Copy)]
 pub struct ReverbSettings {
     pub enabled: bool,
@@ -6,6 +9,7 @@ pub struct ReverbSettings {
 }
 
 impl ReverbSettings {
+    /// Create a new reverb settings snapshot.
     pub fn new(dry_wet: f32) -> Self {
         Self {
             enabled: true,
@@ -15,6 +19,7 @@ impl ReverbSettings {
     }
 }
 
+/// Buffering configuration for the playback engine.
 #[derive(Debug, Clone, Copy)]
 pub struct PlaybackBufferSettings {
     pub start_buffer_ms: f32,
@@ -22,6 +27,7 @@ pub struct PlaybackBufferSettings {
 }
 
 impl PlaybackBufferSettings {
+    /// Create new buffer settings with a given start buffer size (ms).
     pub fn new(start_buffer_ms: f32) -> Self {
         Self {
             start_buffer_ms: start_buffer_ms.max(0.0),
@@ -30,6 +36,7 @@ impl PlaybackBufferSettings {
     }
 }
 
+/// Aggregated performance metrics used by debug UI.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct ReverbMetrics {
     pub dsp_time_ms: f64,

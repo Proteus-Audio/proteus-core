@@ -1,7 +1,10 @@
+//! Synthetic DSP benchmarks for convolution performance.
+
 use rand::Rng;
 
 use crate::dsp::convolution::Convolver;
 
+/// Configuration parameters for a convolution benchmark run.
 #[derive(Debug, Clone, Copy)]
 pub struct DspBenchConfig {
     pub sample_rate: u32,
@@ -11,6 +14,7 @@ pub struct DspBenchConfig {
     pub iterations: usize,
 }
 
+/// Timing results from a benchmark run.
 #[derive(Debug, Clone, Copy)]
 pub struct DspBenchResult {
     pub avg_ms: f64,
@@ -21,6 +25,7 @@ pub struct DspBenchResult {
     pub ir_segments: usize,
 }
 
+/// Run a benchmark for a single FFT size.
 pub fn bench_convolver(config: DspBenchConfig) -> DspBenchResult {
     let input_len = (config.sample_rate as f32 * config.input_seconds).max(1.0) as usize;
     let ir_len = (config.sample_rate as f32 * config.ir_seconds).max(1.0) as usize;
@@ -67,6 +72,7 @@ pub fn bench_convolver(config: DspBenchConfig) -> DspBenchResult {
     }
 }
 
+/// Run a sweep of FFT sizes using a shared base configuration.
 pub fn bench_convolver_sweep(
     base: DspBenchConfig,
     fft_sizes: &[usize],
