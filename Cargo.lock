@@ -873,6 +873,7 @@ dependencies = [
  "crossterm",
  "dotenv",
  "indicatif",
+ "libc",
  "log",
  "proteus-lib",
  "rand",

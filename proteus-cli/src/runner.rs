@@ -99,6 +99,11 @@ pub fn run(args: &ArgMatches, log_buffer: Arc<Mutex<VecDeque<String>>>) -> Resul
     } else {
         None
     };
+    let _stderr_guard = if terminal.is_some() {
+        logging::capture_stderr(log_buffer.clone())
+    } else {
+        None
+    };
 
     // UI / input loop.
     while !player.is_finished() {
