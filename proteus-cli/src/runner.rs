@@ -16,9 +16,10 @@ use proteus_lib::playback::player;
 use ratatui::{backend::CrosstermBackend, Terminal};
 use symphonia::core::errors::Result;
 
+use crate::logging::LogLine;
 use crate::{cli, controls, logging, ui};
 
-pub fn run(args: &ArgMatches, log_buffer: Arc<Mutex<VecDeque<String>>>) -> Result<i32> {
+pub fn run(args: &ArgMatches, log_buffer: Arc<Mutex<VecDeque<LogLine>>>) -> Result<i32> {
     info!("Starting Proteus CLI");
     // Primary entry for CLI execution; runs benchmarks or playback.
     if let Some(code) = cli::bench::maybe_run_bench(args)? {
@@ -120,7 +121,7 @@ pub fn run(args: &ArgMatches, log_buffer: Arc<Mutex<VecDeque<String>>>) -> Resul
             let buffering_done = player.debug_buffering_done();
             #[cfg(feature = "debug")]
             let (_sink_paused, _sink_empty, sink_len) = player.debug_sink_state();
-            let log_lines = logging::snapshot(&log_buffer);
+            let log_lines = logging::snapshot_lines(&log_buffer);
             let status = controls::status_text(controls::StatusArgs {
                 time,
                 duration,

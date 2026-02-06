@@ -2,6 +2,7 @@ use ratatui::{
     backend::CrosstermBackend,
     layout::{Constraint, Direction, Layout},
     style::{Color, Modifier, Style},
+    text::{Line, Text},
     widgets::{Block, Borders, Paragraph},
     Terminal,
 };
@@ -9,11 +10,12 @@ use std::sync::OnceLock;
 use text_to_ascii_art::{fonts, to_art};
 
 use crate::controls::StatusSnapshot;
+use crate::logging::{LogKind, LogLine};
 
 pub fn draw_status(
     terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>,
     status: &StatusSnapshot,
-    log_lines: &[String],
+    log_lines: &[LogLine],
 ) {
     // Render the controls + status panels.
     let _ = terminal.draw(|f| {
@@ -64,14 +66,29 @@ pub fn draw_status(
         let log_height = chunks[3].height.saturating_sub(2) as usize;
         let start = log_lines.len().saturating_sub(log_height);
         let log_text = if log_lines.is_empty() {
-            "No logs yet.".to_string()
+            Text::from(Line::styled(
+                "No logs yet.",
+                Style::default().fg(Color::DarkGray),
+            ))
         } else {
-            log_lines[start..].join("\n")
+            let lines: Vec<Line> = log_lines[start..]
+                .iter()
+                .map(|line| {
+                    let color = match line.kind {
+                        LogKind::Error | LogKind::Stderr => Color::Red,
+                        LogKind::Warn => Color::Yellow,
+                        LogKind::Info => Color::DarkGray,
+                        LogKind::Debug => Color::Blue,
+                        LogKind::Trace => Color::Magenta,
+                    };
+                    Line::styled(line.text.as_str(), Style::default().fg(color))
+                })
+                .collect();
+            Text::from(lines)
         };
 
-        let log_widget = Paragraph::new(log_text)
-            .style(Style::default().fg(Color::DarkGray))
-            .block(Block::default().borders(Borders::ALL).title("Logs"));
+        let log_widget =
+            Paragraph::new(log_text).block(Block::default().borders(Borders::ALL).title("Logs"));
         f.render_widget(log_widget, chunks[3]);
     });
 }

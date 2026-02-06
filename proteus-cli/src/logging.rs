@@ -7,9 +7,25 @@ use std::thread::JoinHandle;
 
 const LOG_CAPACITY: usize = 500;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LogKind {
+    Error,
+    Stderr,
+    Warn,
+    Info,
+    Debug,
+    Trace,
+}
+
+#[derive(Debug, Clone)]
+pub struct LogLine {
+    pub kind: LogKind,
+    pub text: String,
+}
+
 struct SharedLogger {
     level: LevelFilter,
-    buffer: Arc<Mutex<VecDeque<String>>>,
+    buffer: Arc<Mutex<VecDeque<LogLine>>>,
     echo_stderr: bool,
 }
 
@@ -32,16 +48,23 @@ impl Log for SharedLogger {
         if buffer.len() >= LOG_CAPACITY {
             buffer.pop_front();
         }
-        buffer.push_back(line);
+        let kind = match record.level() {
+            log::Level::Error => LogKind::Error,
+            log::Level::Warn => LogKind::Warn,
+            log::Level::Info => LogKind::Info,
+            log::Level::Debug => LogKind::Debug,
+            log::Level::Trace => LogKind::Trace,
+        };
+        buffer.push_back(LogLine { kind, text: line });
     }
 
     fn flush(&self) {}
 }
 
-static LOG_BUFFER: OnceLock<Arc<Mutex<VecDeque<String>>>> = OnceLock::new();
+static LOG_BUFFER: OnceLock<Arc<Mutex<VecDeque<LogLine>>>> = OnceLock::new();
 static LOGGER: OnceLock<SharedLogger> = OnceLock::new();
 
-pub fn init() -> Arc<Mutex<VecDeque<String>>> {
+pub fn init() -> Arc<Mutex<VecDeque<LogLine>>> {
     let buffer = LOG_BUFFER
         .get_or_init(|| Arc::new(Mutex::new(VecDeque::with_capacity(LOG_CAPACITY))))
         .clone();
@@ -75,7 +98,7 @@ pub fn init() -> Arc<Mutex<VecDeque<String>>> {
     buffer
 }
 
-pub fn snapshot(buffer: &Arc<Mutex<VecDeque<String>>>) -> Vec<String> {
+pub fn snapshot_lines(buffer: &Arc<Mutex<VecDeque<LogLine>>>) -> Vec<LogLine> {
     buffer.lock().unwrap().iter().cloned().collect()
 }
 
@@ -98,7 +121,7 @@ impl Drop for StderrCaptureGuard {
     }
 }
 
-pub fn capture_stderr(buffer: Arc<Mutex<VecDeque<String>>>) -> Option<StderrCaptureGuard> {
+pub fn capture_stderr(buffer: Arc<Mutex<VecDeque<LogLine>>>) -> Option<StderrCaptureGuard> {
     let stderr_fd = std::io::stderr().as_raw_fd();
     let mut fds = [0; 2];
     let pipe_result = unsafe { libc::pipe(fds.as_mut_ptr()) };
@@ -145,7 +168,10 @@ pub fn capture_stderr(buffer: Arc<Mutex<VecDeque<String>>>) -> Option<StderrCapt
             if buffer.len() >= LOG_CAPACITY {
                 buffer.pop_front();
             }
-            buffer.push_back(format!("[STDERR] {}", trimmed));
+            buffer.push_back(LogLine {
+                kind: LogKind::Stderr,
+                text: format!("[STDERR] {}", trimmed),
+            });
         }
     });
 
