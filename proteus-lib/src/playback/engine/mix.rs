@@ -400,11 +400,12 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer<f3
 
                 #[cfg(feature = "debug")]
                 let dsp_start = Instant::now();
+                let chunk_len = current_chunk.min(mix_buffer.len());
                 let samples = if settings.enabled && settings.dry_wet > 0.0 {
                     if reverb_block_samples == 0 {
-                        reverb.process(&mix_buffer[..current_chunk])
+                        reverb.process(&mix_buffer[..chunk_len])
                     } else {
-                        reverb_input_buf.extend_from_slice(&mix_buffer[..current_chunk]);
+                        reverb_input_buf.extend_from_slice(&mix_buffer[..chunk_len]);
                         let batch_samples = reverb_block_samples * REVERB_BATCH_BLOCKS;
                         let should_flush = all_tracks_finished && !reverb_input_buf.is_empty();
                         while reverb_input_buf.len() >= batch_samples || should_flush {
@@ -446,11 +447,11 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer<f3
                                 break;
                             }
                         }
-                        if reverb_output_buf.len() < current_chunk {
+                        if reverb_output_buf.len() < chunk_len {
                             let mut out = reverb_output_buf.clone();
                             #[cfg(feature = "debug")]
                             {
-                                let pad = current_chunk - out.len();
+                                let pad = chunk_len - out.len();
                                 if pad > 0 {
                                     reverb_underflow_events =
                                         reverb_underflow_events.saturating_add(1);
@@ -464,11 +465,11 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer<f3
                             reverb_output_buf.clear();
                             out
                         } else {
-                            reverb_output_buf.drain(0..current_chunk).collect()
+                            reverb_output_buf.drain(0..chunk_len).collect()
                         }
                     }
                 } else {
-                    mix_buffer[..current_chunk].to_vec()
+                    mix_buffer[..chunk_len].to_vec()
                 };
                 #[cfg(feature = "debug")]
                 let dsp_time_ms = dsp_start.elapsed().as_secs_f64() * 1000.0;
@@ -521,14 +522,14 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer<f3
                 let samples_len = samples_for_metrics.len();
                 let samples_buffer = SamplesBuffer::new(input_channels, sample_rate, samples);
 
-                let length_in_seconds = current_chunk as f64
+                let length_in_seconds = chunk_len as f64
                     / audio_info.sample_rate as f64
                     / audio_info.channels as f64;
 
                 #[cfg(feature = "debug")]
                 {
                     if started && !buffer_snapshot.is_empty() {
-                        let total_samples = current_chunk as f64;
+                        let total_samples = chunk_len as f64;
                         let capacity_samples = buffer_snapshot
                             .iter()
                             .map(|(_, buffer)| buffer.lock().unwrap().max_len())
