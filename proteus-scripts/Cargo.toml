@@ -2,6 +2,7 @@
 name = "proteus-scripts"
 version = "0.1.0"
 edition = "2024"
+publish = false
 
 [dependencies]
 proteus-lib = { path = "../proteus-lib" }
