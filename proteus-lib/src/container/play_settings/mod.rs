@@ -5,8 +5,51 @@ pub mod v1;
 pub mod v2;
 
 pub use legacy::{PlaySettingsLegacy, PlaySettingsLegacyFile, PlaySettingsTrackLegacy};
-pub use v1::{PlaySettingsTrackV1, PlaySettingsV1, PlaySettingsV1File};
-pub use v2::{PlaySettingsTrackV2, PlaySettingsV2, PlaySettingsV2File};
+pub use v1::{PlaySettingsV1, PlaySettingsV1File};
+pub use v2::{PlaySettingsV2, PlaySettingsV2File};
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ReverbSettings {
+    pub decay: f32,
+    pub pre_delay: f32,
+    pub mix: f32,
+    pub active: bool,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct CompressorSettings {
+    pub attack: f32,
+    pub knee: f32,
+    pub ratio: f32,
+    pub release: f32,
+    pub threshold: f32,
+    pub active: bool,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub enum EffectSettings {
+    ReverbSettings(ReverbSettings),
+    CompressorSettings(CompressorSettings),
+    ConvolutionReverbSettings(ConvolutionReverbSettings),
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct SettingsTrack {
+    pub level: f32,
+    pub pan: f32,
+    pub ids: Vec<u32>,
+    pub name: String,
+    pub safe_name: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ConvolutionReverbSettings {
+    pub impulse_response: Option<String>,
+    pub impulse_response_attachment: Option<String>,
+    pub impulse_response_path: Option<String>,
+    pub impulse_response_tail_db: Option<f32>,
+    pub impulse_response_tail: Option<f32>,
+}
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(untagged)]

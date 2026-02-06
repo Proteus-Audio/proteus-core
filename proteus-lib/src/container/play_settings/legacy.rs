@@ -12,11 +12,6 @@ pub struct PlaySettingsLegacyFile {
 pub struct PlaySettingsLegacy {
     #[serde(default)]
     pub tracks: Vec<PlaySettingsTrackLegacy>,
-    pub impulse_response: Option<String>,
-    pub impulse_response_attachment: Option<String>,
-    pub impulse_response_path: Option<String>,
-    pub impulse_response_tail_db: Option<f32>,
-    pub impulse_response_tail: Option<f32>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

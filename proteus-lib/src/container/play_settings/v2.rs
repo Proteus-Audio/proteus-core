@@ -1,6 +1,6 @@
 use serde::Deserialize;
 
-use super::PlaySettingsContainer;
+use super::{EffectSettings, PlaySettingsContainer, SettingsTrack};
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct PlaySettingsV2File {
@@ -11,16 +11,7 @@ pub struct PlaySettingsV2File {
 #[derive(Debug, Clone, Deserialize)]
 pub struct PlaySettingsV2 {
     #[serde(default)]
-    pub tracks: Vec<PlaySettingsTrackV2>,
-    pub impulse_response: Option<String>,
-    pub impulse_response_attachment: Option<String>,
-    pub impulse_response_path: Option<String>,
-    pub impulse_response_tail_db: Option<f32>,
-    pub impulse_response_tail: Option<f32>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct PlaySettingsTrackV2 {
+    pub effects: Vec<EffectSettings>,
     #[serde(default)]
-    pub ids: Vec<u32>,
+    pub tracks: Vec<SettingsTrack>,
 }
