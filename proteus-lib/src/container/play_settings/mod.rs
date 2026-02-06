@@ -1,3 +1,4 @@
+use log::{info, warn};
 use serde::{Deserialize, Deserializer};
 
 pub mod legacy;
@@ -99,9 +100,22 @@ impl<'de> Deserialize<'de> for PlaySettingsFile {
         let value = serde_json::Value::deserialize(deserializer)?;
         let encoder_version = value.get("encoder_version").and_then(|raw| match raw {
             serde_json::Value::String(version) => Some(version.clone()),
-            serde_json::Value::Number(number) => Some(number.to_string()),
+            serde_json::Value::Number(number) => number
+                .as_f64()
+                .map(|val| {
+                    if (val - 1.0).abs() < f64::EPSILON {
+                        "1".to_string()
+                    } else if (val - 2.0).abs() < f64::EPSILON {
+                        "2".to_string()
+                    } else {
+                        number.to_string()
+                    }
+                })
+                .or_else(|| Some(number.to_string())),
             _ => None,
         });
+
+        info!("Encoder version: {:?}", encoder_version);
 
         let parsed = match encoder_version.as_deref() {
             None => serde_json::from_value::<PlaySettingsLegacyFile>(value.clone())
@@ -110,7 +124,8 @@ impl<'de> Deserialize<'de> for PlaySettingsFile {
                 .map(PlaySettingsFile::V1),
             Some("2") => serde_json::from_value::<PlaySettingsV2File>(value.clone())
                 .map(PlaySettingsFile::V2),
-            Some(_) => {
+            Some(version) => {
+                warn!("Unknown encoder version: {:?}", version);
                 return Ok(PlaySettingsFile::Unknown {
                     encoder_version,
                     raw: value,

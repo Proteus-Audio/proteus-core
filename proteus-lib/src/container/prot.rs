@@ -2,7 +2,12 @@ use matroska::{Audio, Matroska, Settings};
 use rand::Rng;
 use symphonia::core::audio::Channels;
 
+use log::error;
+
 use crate::container::info::*;
+use crate::container::play_settings::{
+    ConvolutionReverbSettings, EffectSettings, PlaySettingsFile, PlaySettingsLegacy, SettingsTrack,
+};
 
 #[derive(Debug, Clone)]
 pub struct Prot {
@@ -128,53 +133,44 @@ impl Prot {
             // Only print if name is "play_settings.json"
             if attachment.name == "play_settings.json" {
                 // read json data from attachment.data to object
-                let json_data: serde_json::Value =
+                let play_settings: PlaySettingsFile =
                     serde_json::from_slice(&attachment.data).unwrap();
 
-                self.impulse_response_spec = parse_impulse_response_spec(&json_data);
-                self.impulse_response_tail_db = parse_impulse_response_tail_db(&json_data);
+                self.impulse_response_spec = parse_impulse_response_spec(&play_settings);
+                self.impulse_response_tail_db = parse_impulse_response_tail_db(&play_settings);
 
-                let encoder_version = json_data["encoder_version"].as_f64();
-
-                // For each track in json_data, print the track number
-                json_data["play_settings"]["tracks"]
-                    .as_array()
-                    .unwrap()
-                    .iter()
-                    .for_each(|track| {
-                        if let Some(_version) = encoder_version {
-                            let indexes = track["ids"].as_array().unwrap();
-                            if indexes.len() == 0 {
-                                return;
-                            }
-                            let random_number = rand::thread_rng().gen_range(0..indexes.len());
-                            let index = indexes[random_number].to_string().parse::<u32>().unwrap();
-                            if let Some(track_duration) = self.info.get_duration(index) {
-                                if track_duration > longest_duration {
-                                    longest_duration = track_duration;
-                                    self.duration = longest_duration;
-                                }
-                            }
-                            track_index_array.push(index);
-                        } else {
-                            let starting_index =
-                                track["startingIndex"].to_string().parse::<u32>().unwrap() + 1;
-                            let length = track["length"].to_string().parse::<u32>().unwrap();
-
-                            // Get random number between starting_index and starting_index + length
-                            let index = rand::thread_rng()
-                                .gen_range(starting_index..(starting_index + length));
-
-                            if let Some(track_duration) = self.info.get_duration(index) {
-                                if track_duration > longest_duration {
-                                    longest_duration = track_duration;
-                                    self.duration = longest_duration;
-                                }
-                            }
-
-                            track_index_array.push(index);
-                        }
-                    });
+                match &play_settings {
+                    PlaySettingsFile::Legacy(file) => {
+                        collect_legacy_tracks(
+                            file.settings.inner(),
+                            &mut track_index_array,
+                            &mut longest_duration,
+                            &self.info,
+                            &mut self.duration,
+                        );
+                    }
+                    PlaySettingsFile::V1(file) => {
+                        collect_tracks_from_ids(
+                            &file.settings.inner().tracks,
+                            &mut track_index_array,
+                            &mut longest_duration,
+                            &self.info,
+                            &mut self.duration,
+                        );
+                    }
+                    PlaySettingsFile::V2(file) => {
+                        collect_tracks_from_ids(
+                            &file.settings.inner().tracks,
+                            &mut track_index_array,
+                            &mut longest_duration,
+                            &self.info,
+                            &mut self.duration,
+                        );
+                    }
+                    PlaySettingsFile::Unknown { .. } => {
+                        error!("Unknown file format");
+                    }
+                }
             }
         });
 
@@ -330,31 +326,9 @@ impl Prot {
     }
 }
 
-fn parse_impulse_response_spec(json_data: &serde_json::Value) -> Option<ImpulseResponseSpec> {
-    let play_settings = json_data.get("play_settings").unwrap_or(json_data);
-
-    let mut candidates = Vec::new();
-    candidates.push(play_settings.get("impulse_response"));
-    candidates.push(play_settings.get("impulse_response_attachment"));
-    candidates.push(play_settings.get("impulse_response_path"));
-    candidates.push(
-        play_settings
-            .get("reverb")
-            .and_then(|reverb| reverb.get("impulse_response")),
-    );
-    candidates.push(
-        play_settings
-            .get("reverb")
-            .and_then(|reverb| reverb.get("impulse_response_attachment")),
-    );
-    candidates.push(
-        play_settings
-            .get("reverb")
-            .and_then(|reverb| reverb.get("impulse_response_path")),
-    );
-
-    for candidate in candidates.into_iter().flatten() {
-        if let Some(spec) = parse_impulse_response_value(candidate) {
+fn parse_impulse_response_spec(play_settings: &PlaySettingsFile) -> Option<ImpulseResponseSpec> {
+    if let Some(settings) = parse_convolution_settings(play_settings) {
+        if let Some(spec) = parse_impulse_response_string_or_struct(&settings) {
             return Some(spec);
         }
     }
@@ -362,57 +336,57 @@ fn parse_impulse_response_spec(json_data: &serde_json::Value) -> Option<ImpulseR
     None
 }
 
-fn parse_impulse_response_tail_db(json_data: &serde_json::Value) -> Option<f32> {
-    let play_settings = json_data.get("play_settings").unwrap_or(json_data);
-
-    let mut candidates = Vec::new();
-    candidates.push(play_settings.get("impulse_response_tail_db"));
-    candidates.push(play_settings.get("impulse_response_tail"));
-    candidates.push(
-        play_settings
-            .get("reverb")
-            .and_then(|reverb| reverb.get("impulse_response_tail_db")),
-    );
-    candidates.push(
-        play_settings
-            .get("reverb")
-            .and_then(|reverb| reverb.get("impulse_response_tail")),
-    );
-
-    for candidate in candidates.into_iter().flatten() {
-        if let Some(value) = candidate.as_f64() {
-            return Some(value as f32);
+fn parse_impulse_response_tail_db(play_settings: &PlaySettingsFile) -> Option<f32> {
+    if let Some(settings) = parse_convolution_settings(play_settings) {
+        if let Some(value) = settings.impulse_response_tail_db {
+            return Some(value);
         }
-        if let Some(text) = candidate.as_str() {
-            if let Ok(value) = text.parse::<f32>() {
-                return Some(value);
-            }
+        if let Some(value) = settings.impulse_response_tail {
+            return Some(value);
         }
     }
 
     None
 }
 
-fn parse_impulse_response_value(value: &serde_json::Value) -> Option<ImpulseResponseSpec> {
-    if let Some(text) = value.as_str() {
-        return parse_impulse_response_string(text);
+fn parse_convolution_settings(
+    play_settings: &PlaySettingsFile,
+) -> Option<ConvolutionReverbSettings> {
+    let effects = match play_settings {
+        PlaySettingsFile::V1(file) => &file.settings.inner().effects,
+        PlaySettingsFile::V2(file) => &file.settings.inner().effects,
+        _ => return None,
+    };
+
+    for effect in effects {
+        if let EffectSettings::ConvolutionReverbSettings(settings) = effect {
+            return Some(settings.clone());
+        }
     }
 
-    let obj = value.as_object()?;
-    if let Some(attachment) = obj.get("attachment").and_then(|val| val.as_str()) {
-        return Some(ImpulseResponseSpec::Attachment(attachment.to_string()));
-    }
+    None
+}
 
-    if let Some(path) = obj.get("path").and_then(|val| val.as_str()) {
-        return Some(ImpulseResponseSpec::FilePath(path.to_string()));
+fn parse_impulse_response_string_or_struct(
+    settings: &ConvolutionReverbSettings,
+) -> Option<ImpulseResponseSpec> {
+    if let Some(value) = settings.impulse_response.as_deref() {
+        return parse_impulse_response_string(value);
     }
-
+    if let Some(value) = settings.impulse_response_attachment.as_deref() {
+        return parse_impulse_response_string(value);
+    }
+    if let Some(value) = settings.impulse_response_path.as_deref() {
+        return parse_impulse_response_string(value);
+    }
     None
 }
 
 pub fn parse_impulse_response_string(value: &str) -> Option<ImpulseResponseSpec> {
     if let Some(attachment) = value.strip_prefix("attachment:") {
-        return Some(ImpulseResponseSpec::Attachment(attachment.trim().to_string()));
+        return Some(ImpulseResponseSpec::Attachment(
+            attachment.trim().to_string(),
+        ));
     }
 
     if let Some(path) = value.strip_prefix("file:") {
@@ -420,4 +394,50 @@ pub fn parse_impulse_response_string(value: &str) -> Option<ImpulseResponseSpec>
     }
 
     Some(ImpulseResponseSpec::FilePath(value.trim().to_string()))
+}
+
+fn collect_tracks_from_ids(
+    tracks: &[SettingsTrack],
+    track_index_array: &mut Vec<u32>,
+    longest_duration: &mut f64,
+    info: &Info,
+    total_duration: &mut f64,
+) {
+    for track in tracks {
+        if track.ids.is_empty() {
+            continue;
+        }
+        let random_number = rand::thread_rng().gen_range(0..track.ids.len());
+        let index = track.ids[random_number];
+        if let Some(track_duration) = info.get_duration(index) {
+            if track_duration > *longest_duration {
+                *longest_duration = track_duration;
+                *total_duration = *longest_duration;
+            }
+        }
+        track_index_array.push(index);
+    }
+}
+
+fn collect_legacy_tracks(
+    settings: &PlaySettingsLegacy,
+    track_index_array: &mut Vec<u32>,
+    longest_duration: &mut f64,
+    info: &Info,
+    total_duration: &mut f64,
+) {
+    for track in &settings.tracks {
+        let (Some(starting_index), Some(length)) = (track.starting_index, track.length) else {
+            continue;
+        };
+        let starting_index = starting_index + 1;
+        let index = rand::thread_rng().gen_range(starting_index..(starting_index + length));
+        if let Some(track_duration) = info.get_duration(index) {
+            if track_duration > *longest_duration {
+                *longest_duration = track_duration;
+                *total_duration = *longest_duration;
+            }
+        }
+        track_index_array.push(index);
+    }
 }
