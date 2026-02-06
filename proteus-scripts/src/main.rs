@@ -3,7 +3,7 @@ use std::fs;
 use std::path::PathBuf;
 
 use proteus_lib::dsp::impulse_response::normalize_impulse_response_channels;
-use proteus_lib::dsp::spring_impulse_response::SPRING_IMPULSE_RESPONSE;
+use proteus_lib::dsp::normalized_spring_impulse_response::SPRING_IMPULSE_RESPONSE;
 
 fn main() {
     let mut args = env::args().skip(1);
