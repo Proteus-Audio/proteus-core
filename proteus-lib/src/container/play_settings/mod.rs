@@ -1,7 +1,7 @@
 //! Serde models for `play_settings.json` with versioned decoding.
 
 use log::{info, warn};
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 pub mod legacy;
 pub mod v1;
@@ -150,5 +150,46 @@ impl<'de> Deserialize<'de> for PlaySettingsFile {
                 raw: value,
             })
         })
+    }
+}
+
+impl Serialize for PlaySettingsFile {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        fn with_version<T, S>(payload: &T, version: &str, serializer: S) -> Result<S::Ok, S::Error>
+        where
+            T: Serialize,
+            S: Serializer,
+        {
+            let mut value =
+                serde_json::to_value(payload).map_err(serde::ser::Error::custom)?;
+            match value {
+                serde_json::Value::Object(ref mut map) => {
+                    map.insert(
+                        "encoder_version".to_string(),
+                        serde_json::Value::String(version.to_string()),
+                    );
+                }
+                other => {
+                    let mut map = serde_json::Map::new();
+                    map.insert(
+                        "encoder_version".to_string(),
+                        serde_json::Value::String(version.to_string()),
+                    );
+                    map.insert("play_settings".to_string(), other);
+                    value = serde_json::Value::Object(map);
+                }
+            }
+            value.serialize(serializer)
+        }
+
+        match self {
+            PlaySettingsFile::Legacy(file) => file.serialize(serializer),
+            PlaySettingsFile::V1(file) => with_version(file, "1", serializer),
+            PlaySettingsFile::V2(file) => with_version(file, "2", serializer),
+            PlaySettingsFile::Unknown { raw, .. } => raw.serialize(serializer),
+        }
     }
 }
