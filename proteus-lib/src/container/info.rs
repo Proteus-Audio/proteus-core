@@ -5,29 +5,34 @@ use std::{collections::HashMap, fs::File, path::Path};
 use log::debug;
 
 use symphonia::core::{
-    audio::{Channels, Layout},
-    codecs::CodecParameters,
+    audio::{AudioBufferRef, Channels, Layout},
+    codecs::{CodecParameters, DecoderOptions, CODEC_TYPE_NULL},
+    errors::Error,
     formats::{FormatOptions, Track},
     io::{MediaSource, MediaSourceStream, ReadOnlySource},
     meta::MetadataOptions,
     probe::{Hint, ProbeResult},
     units::TimeBase,
 };
+use symphonia::core::sample::SampleFormat;
 
 /// Convert Symphonia codec parameters to seconds using time base and frames.
 pub fn get_time_from_frames(codec_params: &CodecParameters) -> f64 {
-    let tb = codec_params.time_base.unwrap();
-    let dur = codec_params
-        .n_frames
-        .map(|frames| codec_params.start_ts + frames)
-        .unwrap();
+    let tb = match codec_params.time_base {
+        Some(tb) => tb,
+        None => return 0.0,
+    };
+    let dur = match codec_params.n_frames {
+        Some(frames) => codec_params.start_ts + frames,
+        None => return 0.0,
+    };
     let time = tb.calc_time(dur);
 
     time.seconds as f64 + time.frac
 }
 
 /// Probe a media file (or stdin `-`) and return the Symphonia probe result.
-pub fn get_probe_result_from_string(file_path: &str) -> ProbeResult {
+pub fn get_probe_result_from_string(file_path: &str) -> Result<ProbeResult, Error> {
     // Create a hint to help the format registry guess what format reader is appropriate.
     let mut hint = Hint::new();
 
@@ -66,16 +71,17 @@ pub fn get_probe_result_from_string(file_path: &str) -> ProbeResult {
     //     _ => None,
     // };
 
-    symphonia::default::get_probe()
-        .format(&hint, mss, &format_opts, &metadata_opts)
-        .unwrap()
+    symphonia::default::get_probe().format(&hint, mss, &format_opts, &metadata_opts)
 }
 
 /// Best-effort duration mapping per track using metadata or frame counts.
 ///
 /// For container files, this may be approximate if metadata is inaccurate.
 pub fn get_durations(file_path: &str) -> HashMap<u32, f64> {
-    let mut probed = get_probe_result_from_string(file_path);
+    let mut probed = match get_probe_result_from_string(file_path) {
+        Ok(probed) => probed,
+        Err(_) => return HashMap::new(),
+    };
 
     let mut durations: Vec<f64> = Vec::new();
 
@@ -84,14 +90,14 @@ pub fn get_durations(file_path: &str) -> HashMap<u32, f64> {
             if tag.key == "DURATION" {
                 // Convert duration of type 01:12:37.227000000 to 4337.227
                 let duration = tag.value.to_string().clone();
-                let duration_parts = duration.split(":").collect::<Vec<&str>>();
-                let hours = duration_parts[0].parse::<f64>().unwrap();
-                let minutes = duration_parts[1].parse::<f64>().unwrap();
-                let seconds = duration_parts[2].parse::<f64>().unwrap();
-                // let milliseconds = duration_parts[3].parse::<f64>().unwrap();
-                let duration_in_seconds = (hours * 3600.0) + (minutes * 60.0) + seconds;
-
-                durations.push(duration_in_seconds);
+                let duration_parts = duration.split(':').collect::<Vec<&str>>();
+                if duration_parts.len() >= 3 {
+                    let hours = duration_parts[0].parse::<f64>().unwrap_or(0.0);
+                    let minutes = duration_parts[1].parse::<f64>().unwrap_or(0.0);
+                    let seconds = duration_parts[2].parse::<f64>().unwrap_or(0.0);
+                    let duration_in_seconds = (hours * 3600.0) + (minutes * 60.0) + seconds;
+                    durations.push(duration_in_seconds);
+                }
             }
         });
     }
@@ -127,7 +133,10 @@ fn get_durations_best_effort(file_path: &str) -> HashMap<u32, f64> {
 
 /// Scan all packets to compute per-track durations (accurate but slower).
 pub fn get_durations_by_scan(file_path: &str) -> HashMap<u32, f64> {
-    let mut probed = get_probe_result_from_string(file_path);
+    let mut probed = match get_probe_result_from_string(file_path) {
+        Ok(probed) => probed,
+        Err(_) => return HashMap::new(),
+    };
     let mut max_ts: HashMap<u32, u64> = HashMap::new();
     let mut time_bases: HashMap<u32, Option<TimeBase>> = HashMap::new();
     let mut sample_rates: HashMap<u32, Option<u32>> = HashMap::new();
@@ -189,8 +198,10 @@ pub struct TrackInfo {
 
 fn get_track_info(track: &Track) -> TrackInfo {
     let codec_params = &track.codec_params;
-    let sample_rate = codec_params.sample_rate.unwrap();
-    let bits_per_sample = codec_params.bits_per_sample.unwrap();
+    let sample_rate = codec_params.sample_rate.unwrap_or(0);
+    let bits_per_sample = codec_params
+        .bits_per_sample
+        .unwrap_or_else(|| bits_from_sample_format(codec_params.sample_format));
 
     let mut channel_count = match codec_params.channel_layout {
         Some(Layout::Mono) => 1,
@@ -215,27 +226,125 @@ fn get_track_info(track: &Track) -> TrackInfo {
     }
 }
 
+fn bits_from_sample_format(sample_format: Option<SampleFormat>) -> u32 {
+    match sample_format {
+        Some(SampleFormat::U8 | SampleFormat::S8) => 8,
+        Some(SampleFormat::U16 | SampleFormat::S16) => 16,
+        Some(SampleFormat::U24 | SampleFormat::S24) => 24,
+        Some(SampleFormat::U32 | SampleFormat::S32 | SampleFormat::F32) => 32,
+        Some(SampleFormat::F64) => 64,
+        None => 0,
+    }
+}
+
+fn bits_from_decode(file_path: &str) -> u32 {
+    let mut probed = match get_probe_result_from_string(file_path) {
+        Ok(probed) => probed,
+        Err(_) => return 0,
+    };
+
+    let (track_id, codec_params) = match probed
+        .format
+        .tracks()
+        .iter()
+        .find(|t| t.codec_params.codec != CODEC_TYPE_NULL)
+    {
+        Some(track) => (track.id, track.codec_params.clone()),
+        None => return 0,
+    };
+
+    let dec_opts: DecoderOptions = Default::default();
+    let mut decoder = match symphonia::default::get_codecs().make(&codec_params, &dec_opts)
+    {
+        Ok(decoder) => decoder,
+        Err(_) => return 0,
+    };
+
+    loop {
+        let packet = match probed.format.next_packet() {
+            Ok(packet) => packet,
+            Err(_) => return 0,
+        };
+
+        if packet.track_id() != track_id {
+            continue;
+        }
+
+        match decoder.decode(&packet) {
+            Ok(decoded) => {
+                return match decoded {
+                    AudioBufferRef::U8(_) => 8,
+                    AudioBufferRef::S8(_) => 8,
+                    AudioBufferRef::U16(_) => 16,
+                    AudioBufferRef::S16(_) => 16,
+                    AudioBufferRef::U24(_) => 24,
+                    AudioBufferRef::S24(_) => 24,
+                    AudioBufferRef::U32(_) => 32,
+                    AudioBufferRef::S32(_) => 32,
+                    AudioBufferRef::F32(_) => 32,
+                    AudioBufferRef::F64(_) => 64,
+                };
+            }
+            Err(Error::DecodeError(_)) => continue,
+            Err(_) => return 0,
+        }
+    }
+}
+
 fn reduce_track_infos(track_infos: Vec<TrackInfo>) -> TrackInfo {
+    if track_infos.is_empty() {
+        return TrackInfo {
+            sample_rate: 0,
+            channel_count: 0,
+            bits_per_sample: 0,
+        };
+    }
+
     let info = track_infos
         .into_iter()
         .fold(None, |acc: Option<TrackInfo>, track_info| match acc {
             Some(acc) => {
-                if acc.sample_rate != track_info.sample_rate {
+                if acc.sample_rate != 0
+                    && track_info.sample_rate != 0
+                    && acc.sample_rate != track_info.sample_rate
+                {
                     panic!("Sample rates do not match");
                 }
 
-                if acc.channel_count != track_info.channel_count {
+                if acc.channel_count != 0
+                    && track_info.channel_count != 0
+                    && acc.channel_count != track_info.channel_count
+                {
                     panic!(
                         "Channel layouts do not match {} != {}",
                         acc.channel_count, track_info.channel_count
                     );
                 }
 
-                if acc.bits_per_sample != track_info.bits_per_sample {
+                if acc.bits_per_sample != 0
+                    && track_info.bits_per_sample != 0
+                    && acc.bits_per_sample != track_info.bits_per_sample
+                {
                     panic!("Bits per sample do not match");
                 }
 
-                Some(acc)
+                Some(TrackInfo {
+                    sample_rate: if acc.sample_rate == 0 {
+                        track_info.sample_rate
+                    } else {
+                        acc.sample_rate
+                    },
+                    channel_count: if acc.channel_count == 0 {
+                        track_info.channel_count
+                    } else {
+                        acc.channel_count
+                    },
+                    bits_per_sample: if acc.bits_per_sample == 0 {
+                        track_info.bits_per_sample
+                    } else {
+                        acc.bits_per_sample
+                    },
+                })
             }
             None => Some(track_info),
         });
@@ -244,7 +353,16 @@ fn reduce_track_infos(track_infos: Vec<TrackInfo>) -> TrackInfo {
 }
 
 fn gather_track_info(file_path: &str) -> TrackInfo {
-    let probed = get_probe_result_from_string(file_path);
+    let probed = match get_probe_result_from_string(file_path) {
+        Ok(probed) => probed,
+        Err(_) => {
+            return TrackInfo {
+                sample_rate: 0,
+                channel_count: 0,
+                bits_per_sample: 0,
+            }
+        }
+    };
 
     let tracks = probed.format.tracks();
     let mut track_infos: Vec<TrackInfo> = Vec::new();
@@ -253,7 +371,14 @@ fn gather_track_info(file_path: &str) -> TrackInfo {
         track_infos.push(track_info);
     }
 
-    reduce_track_infos(track_infos)
+    let mut info = reduce_track_infos(track_infos);
+    if info.bits_per_sample == 0 {
+        let decoded_bits = bits_from_decode(file_path);
+        if decoded_bits > 0 {
+            info.bits_per_sample = decoded_bits;
+        }
+    }
+    info
 }
 
 fn gather_track_info_from_file_paths(file_paths: Vec<String>) -> TrackInfo {
