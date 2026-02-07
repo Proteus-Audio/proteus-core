@@ -30,7 +30,8 @@ pub fn run(args: &ArgMatches, log_buffer: Arc<Mutex<VecDeque<LogLine>>>) -> Resu
         let code = match subcommand {
             "info" => {
                 let file_path = sub_args.get_one::<String>("INPUT").unwrap();
-                run_info(file_path)
+                let print = sub_args.get_flag("print");
+                run_info(file_path, print)
             }
             "peaks" => {
                 let file_path = sub_args.get_one::<String>("INPUT").unwrap();
@@ -321,8 +322,29 @@ fn run_peaks(file_path: &str, limited: bool) -> i32 {
     }
 }
 
-fn run_info(file_path: &str) -> i32 {
+fn run_info(file_path: &str, print: bool) -> i32 {
     let info = proteus_lib::container::info::Info::new(file_path.to_string());
+    if print {
+        println!("File: {}", file_path);
+        println!("Tracks: {}", info.duration_map.len());
+        println!("Channels: {}", info.channels);
+        println!("Sample rate: {} Hz", info.sample_rate);
+        println!("Bits per sample: {}", info.bits_per_sample);
+
+        let mut track_items: Vec<(u32, f64)> =
+            info.duration_map.iter().map(|(k, v)| (*k, *v)).collect();
+        track_items.sort_by(|a, b| a.0.cmp(&b.0));
+        if track_items.is_empty() {
+            println!("No track durations available.");
+        } else {
+            for (track_id, seconds) in track_items {
+                println!("Track {}: {:.3}s", track_id, seconds);
+            }
+        }
+
+        return 0;
+    }
+
     let _raw_mode = RawModeGuard::enable().ok();
     let mut stdout = io::stdout();
     let _ = execute!(stdout, EnterAlternateScreen, cursor::Hide);

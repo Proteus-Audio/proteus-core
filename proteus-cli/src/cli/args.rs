@@ -163,6 +163,12 @@ pub fn build_cli() -> Command {
                         .help("The input file path, or - to use standard input")
                         .required(true)
                         .index(1),
+                )
+                .arg(
+                    Arg::new("print")
+                        .long("print")
+                        .action(ArgAction::SetTrue)
+                        .help("Print info to stdout instead of opening the TUI"),
                 ),
         )
         .subcommand(
