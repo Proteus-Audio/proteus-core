@@ -1,6 +1,11 @@
 //! Container metadata helpers and duration probing.
 
-use std::{collections::HashMap, fs::File, path::Path};
+use std::{
+    collections::HashMap,
+    fs::File,
+    io::{Read, Seek, SeekFrom},
+    path::Path,
+};
 
 use log::debug;
 
@@ -33,43 +38,59 @@ pub fn get_time_from_frames(codec_params: &CodecParameters) -> f64 {
 
 /// Probe a media file (or stdin `-`) and return the Symphonia probe result.
 pub fn get_probe_result_from_string(file_path: &str) -> Result<ProbeResult, Error> {
-    // Create a hint to help the format registry guess what format reader is appropriate.
-    let mut hint = Hint::new();
-
     // If the path string is '-' then read from standard input.
-    let source = if file_path == "-" {
-        Box::new(ReadOnlySource::new(std::io::stdin())) as Box<dyn MediaSource>
-    } else {
-        // Othwerise, get a Path from the path string.
-        let path = Path::new(file_path);
+    if file_path == "-" {
+        let source = Box::new(ReadOnlySource::new(std::io::stdin())) as Box<dyn MediaSource>;
+        return probe_with_hint(source, None);
+    }
 
-        // Provide the file extension as a hint.
-        if let Some(extension) = path.extension() {
-            if let Some(extension_str) = extension.to_str() {
-                hint.with_extension(extension_str);
-            }
+    let path = Path::new(file_path);
+    let ext = path.extension().and_then(|ext| ext.to_str()).map(|ext| ext.to_string());
+    let mut hints: Vec<Option<String>> = Vec::new();
+
+    if let Some(ext) = ext.clone() {
+        let ext_lc = ext.to_lowercase();
+        if ext_lc == "prot" {
+            hints.push(Some("mka".to_string()));
         }
+        if ext_lc == "aiff" {
+            hints.push(Some("aiff".to_string()));
+            hints.push(Some("aif".to_string()));
+        } else {
+            hints.push(Some(ext_lc));
+        }
+    }
 
-        Box::new(File::open(path).expect("failed to open media file")) as Box<dyn MediaSource>
-    };
+    // Always try without a hint as a fallback.
+    hints.push(None);
 
-    // Create the media source stream using the boxed media source from above.
+    for hint in hints {
+        let source = Box::new(File::open(path).expect("failed to open media file")) as Box<dyn MediaSource>;
+        if let Ok(probed) = probe_with_hint(source, hint.as_deref()) {
+            return Ok(probed);
+        }
+    }
+
+    Err(Error::IoError(std::io::Error::new(
+        std::io::ErrorKind::Other,
+        "Failed to probe media file",
+    )))
+}
+
+fn probe_with_hint(
+    source: Box<dyn MediaSource>,
+    extension_hint: Option<&str>,
+) -> Result<ProbeResult, Error> {
+    let mut hint = Hint::new();
+    if let Some(extension_str) = extension_hint {
+        hint.with_extension(extension_str);
+    }
+
     let mss = MediaSourceStream::new(source, Default::default());
-
-    // Use the default options for format readers other than for gapless playback.
     let format_opts = FormatOptions {
-        // enable_gapless: !args.is_present("no-gapless"),
         ..Default::default()
     };
-
-    // Use the default options for metadata readers.
     let metadata_opts: MetadataOptions = Default::default();
-
-    // Get the value of the track option, if provided.
-    // let track = match args.value_of("track") {
-    //     Some(track_str) => track_str.parse::<usize>().ok(),
-    //     _ => None,
-    // };
 
     symphonia::default::get_probe().format(&hint, mss, &format_opts, &metadata_opts)
 }
@@ -80,7 +101,7 @@ pub fn get_probe_result_from_string(file_path: &str) -> Result<ProbeResult, Erro
 pub fn get_durations(file_path: &str) -> HashMap<u32, f64> {
     let mut probed = match get_probe_result_from_string(file_path) {
         Ok(probed) => probed,
-        Err(_) => return HashMap::new(),
+        Err(_) => return fallback_durations(file_path),
     };
 
     let mut durations: Vec<f64> = Vec::new();
@@ -104,6 +125,10 @@ pub fn get_durations(file_path: &str) -> HashMap<u32, f64> {
 
     // Convert durations to HashMap with key as index and value as duration
     let mut duration_map: HashMap<u32, f64> = HashMap::new();
+
+    if probed.format.tracks().is_empty() {
+        return fallback_durations(file_path);
+    }
 
     for (index, track) in probed.format.tracks().iter().enumerate() {
         if let Some(real_duration) = durations.get(index) {
@@ -135,8 +160,11 @@ fn get_durations_best_effort(file_path: &str) -> HashMap<u32, f64> {
 pub fn get_durations_by_scan(file_path: &str) -> HashMap<u32, f64> {
     let mut probed = match get_probe_result_from_string(file_path) {
         Ok(probed) => probed,
-        Err(_) => return HashMap::new(),
+        Err(_) => return fallback_durations(file_path),
     };
+    if probed.format.tracks().is_empty() {
+        return fallback_durations(file_path);
+    }
     let mut max_ts: HashMap<u32, u64> = HashMap::new();
     let mut time_bases: HashMap<u32, Option<TimeBase>> = HashMap::new();
     let mut sample_rates: HashMap<u32, Option<u32>> = HashMap::new();
@@ -291,6 +319,127 @@ fn bits_from_decode(file_path: &str) -> u32 {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+struct AiffInfo {
+    channels: u16,
+    sample_rate: f64,
+    bits_per_sample: u16,
+    sample_frames: u32,
+}
+
+fn fallback_track_info(file_path: &str) -> TrackInfo {
+    if let Some(info) = parse_aiff_info(file_path) {
+        return TrackInfo {
+            sample_rate: info.sample_rate.round() as u32,
+            channel_count: info.channels as u32,
+            bits_per_sample: info.bits_per_sample as u32,
+        };
+    }
+
+    TrackInfo {
+        sample_rate: 0,
+        channel_count: 0,
+        bits_per_sample: 0,
+    }
+}
+
+fn fallback_durations(file_path: &str) -> HashMap<u32, f64> {
+    if let Some(info) = parse_aiff_info(file_path) {
+        let duration = if info.sample_rate > 0.0 {
+            info.sample_frames as f64 / info.sample_rate
+        } else {
+            0.0
+        };
+        let mut map = HashMap::new();
+        map.insert(0, duration);
+        return map;
+    }
+
+    HashMap::new()
+}
+
+fn parse_aiff_info(file_path: &str) -> Option<AiffInfo> {
+    let path = Path::new(file_path);
+    let ext = path.extension().and_then(|ext| ext.to_str())?.to_lowercase();
+    if ext != "aiff" && ext != "aif" && ext != "aifc" {
+        return None;
+    }
+
+    let mut file = File::open(path).ok()?;
+    let mut header = [0u8; 12];
+    file.read_exact(&mut header).ok()?;
+    if &header[0..4] != b"FORM" {
+        return None;
+    }
+    let form_type = &header[8..12];
+    if form_type != b"AIFF" && form_type != b"AIFC" {
+        return None;
+    }
+
+    loop {
+        let mut chunk_header = [0u8; 8];
+        if file.read_exact(&mut chunk_header).is_err() {
+            break;
+        }
+        let chunk_id = &chunk_header[0..4];
+        let chunk_size = u32::from_be_bytes([
+            chunk_header[4],
+            chunk_header[5],
+            chunk_header[6],
+            chunk_header[7],
+        ]) as u64;
+
+        if chunk_id == b"COMM" {
+            if chunk_size < 18 {
+                return None;
+            }
+            let mut comm = vec![0u8; chunk_size as usize];
+            file.read_exact(&mut comm).ok()?;
+            let channels = u16::from_be_bytes([comm[0], comm[1]]);
+            let sample_frames = u32::from_be_bytes([comm[2], comm[3], comm[4], comm[5]]);
+            let bits_per_sample = u16::from_be_bytes([comm[6], comm[7]]);
+            let mut rate_bytes = [0u8; 10];
+            rate_bytes.copy_from_slice(&comm[8..18]);
+            let sample_rate = extended_80_to_f64(rate_bytes);
+
+            return Some(AiffInfo {
+                channels,
+                sample_rate,
+                bits_per_sample,
+                sample_frames,
+            });
+        }
+
+        let skip = chunk_size + (chunk_size % 2);
+        if file.seek(SeekFrom::Current(skip as i64)).is_err() {
+            break;
+        }
+    }
+
+    None
+}
+
+fn extended_80_to_f64(bytes: [u8; 10]) -> f64 {
+    let sign = (bytes[0] & 0x80) != 0;
+    let exponent = (((bytes[0] & 0x7F) as u16) << 8) | bytes[1] as u16;
+    let mut mantissa: u64 = 0;
+    for i in 0..8 {
+        mantissa = (mantissa << 8) | bytes[2 + i] as u64;
+    }
+
+    if exponent == 0 && mantissa == 0 {
+        return 0.0;
+    }
+    if exponent == 0x7FFF {
+        return f64::NAN;
+    }
+
+    let exp = exponent as i32 - 16383;
+    let fraction = mantissa as f64 / (1u64 << 63) as f64;
+    let value = 2f64.powi(exp) * fraction;
+    if sign { -value } else { value }
+}
+
 fn reduce_track_infos(track_infos: Vec<TrackInfo>) -> TrackInfo {
     if track_infos.is_empty() {
         return TrackInfo {
@@ -355,16 +504,13 @@ fn reduce_track_infos(track_infos: Vec<TrackInfo>) -> TrackInfo {
 fn gather_track_info(file_path: &str) -> TrackInfo {
     let probed = match get_probe_result_from_string(file_path) {
         Ok(probed) => probed,
-        Err(_) => {
-            return TrackInfo {
-                sample_rate: 0,
-                channel_count: 0,
-                bits_per_sample: 0,
-            }
-        }
+        Err(_) => return fallback_track_info(file_path),
     };
 
     let tracks = probed.format.tracks();
+    if tracks.is_empty() {
+        return fallback_track_info(file_path);
+    }
     let mut track_infos: Vec<TrackInfo> = Vec::new();
     for track in tracks {
         let track_info = get_track_info(track);
@@ -377,6 +523,9 @@ fn gather_track_info(file_path: &str) -> TrackInfo {
         if decoded_bits > 0 {
             info.bits_per_sample = decoded_bits;
         }
+    }
+    if info.sample_rate == 0 && info.channel_count == 0 && info.bits_per_sample == 0 {
+        return fallback_track_info(file_path);
     }
     info
 }
