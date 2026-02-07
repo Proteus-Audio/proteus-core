@@ -9,6 +9,7 @@ pub fn build_cli() -> Command {
         .version("1.0")
         .author("Adam Howard <adam.thomas.howard@gmail.com>")
         .about("Play Prot audio")
+        .arg_required_else_help(true)
         .arg(
             Arg::new("seek")
                 .long("seek")
@@ -151,7 +152,33 @@ pub fn build_cli() -> Command {
         .arg(
             Arg::new("INPUT")
                 .help("The input file path, or - to use standard input")
-                .required_unless_present_any(["bench-dsp", "bench-sweep"])
+                .required(false)
                 .index(1),
+        )
+        .subcommand(
+            Command::new("info")
+                .about("Display container info in a TUI")
+                .arg(
+                    Arg::new("INPUT")
+                        .help("The input file path, or - to use standard input")
+                        .required(true)
+                        .index(1),
+                ),
+        )
+        .subcommand(
+            Command::new("peaks")
+                .about("Output per-channel waveform peaks as JSON")
+                .arg(
+                    Arg::new("INPUT")
+                        .help("The input file path, or - to use standard input")
+                        .required(true)
+                        .index(1),
+                )
+                .arg(
+                    Arg::new("limited")
+                        .long("limited")
+                        .action(ArgAction::SetTrue)
+                        .help("Only process a single channel"),
+                ),
         )
 }

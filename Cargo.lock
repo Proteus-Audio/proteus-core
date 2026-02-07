@@ -878,6 +878,8 @@ dependencies = [
  "proteus-lib",
  "rand",
  "ratatui",
+ "serde",
+ "serde_json",
  "symphonia",
  "text-to-ascii-art",
 ]

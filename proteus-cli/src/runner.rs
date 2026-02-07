@@ -10,12 +10,13 @@ use std::{
 
 use clap::ArgMatches;
 use crossterm::{
-    cursor, execute,
+    cursor, event, execute,
     terminal::{self, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use log::{error, info};
 use proteus_lib::playback::player;
 use ratatui::{backend::CrosstermBackend, Terminal};
+use serde::Serialize;
 use symphonia::core::errors::Result;
 
 use crate::logging::LogLine;
@@ -25,11 +26,35 @@ use crate::{cli, controls, logging, ui};
 pub fn run(args: &ArgMatches, log_buffer: Arc<Mutex<VecDeque<LogLine>>>) -> Result<i32> {
     info!("Starting Proteus CLI");
     // Primary entry for CLI execution; runs benchmarks or playback.
+    if let Some((subcommand, sub_args)) = args.subcommand() {
+        let code = match subcommand {
+            "info" => {
+                let file_path = sub_args.get_one::<String>("INPUT").unwrap();
+                run_info(file_path)
+            }
+            "peaks" => {
+                let file_path = sub_args.get_one::<String>("INPUT").unwrap();
+                let limited = sub_args.get_flag("limited");
+                run_peaks(file_path, limited)
+            }
+            _ => {
+                error!("Unknown subcommand");
+                -1
+            }
+        };
+        return Ok(code);
+    }
     if let Some(code) = cli::bench::maybe_run_bench(args)? {
         return Ok(code);
     }
 
-    let file_path = args.get_one::<String>("INPUT").unwrap().clone();
+    let file_path = match args.get_one::<String>("INPUT") {
+        Some(path) => path.clone(),
+        None => {
+            error!("Missing input file path");
+            return Ok(-1);
+        }
+    };
     if args.get_flag("scan-durations") {
         let start = std::time::Instant::now();
         let durations = proteus_lib::container::info::get_durations_by_scan(&file_path);
@@ -254,6 +279,83 @@ pub fn run(args: &ArgMatches, log_buffer: Arc<Mutex<VecDeque<LogLine>>>) -> Resu
     }
 
     Ok(0)
+}
+
+#[derive(Serialize)]
+struct PeakWindow {
+    max: f32,
+    min: f32,
+}
+
+#[derive(Serialize)]
+struct PeaksChannel {
+    peaks: Vec<PeakWindow>,
+}
+
+#[derive(Serialize)]
+struct PeaksOutput {
+    channels: Vec<PeaksChannel>,
+}
+
+fn run_peaks(file_path: &str, limited: bool) -> i32 {
+    let peaks = proteus_lib::peaks::get_peaks(file_path, limited);
+    let channels = peaks
+        .into_iter()
+        .map(|channel| PeaksChannel {
+            peaks: channel
+                .into_iter()
+                .map(|(max, min)| PeakWindow { max, min })
+                .collect(),
+        })
+        .collect();
+    let output = PeaksOutput { channels };
+    match serde_json::to_string_pretty(&output) {
+        Ok(json) => {
+            println!("{}", json);
+            0
+        }
+        Err(err) => {
+            error!("Failed to serialize peaks: {}", err);
+            -1
+        }
+    }
+}
+
+fn run_info(file_path: &str) -> i32 {
+    let info = proteus_lib::container::info::Info::new(file_path.to_string());
+    let _raw_mode = RawModeGuard::enable().ok();
+    let mut stdout = io::stdout();
+    let _ = execute!(stdout, EnterAlternateScreen, cursor::Hide);
+    let backend = CrosstermBackend::new(stdout);
+    let mut terminal = match Terminal::new(backend) {
+        Ok(terminal) => terminal,
+        Err(err) => {
+            error!("Failed to create terminal: {}", err);
+            let mut stdout = io::stdout();
+            let _ = execute!(stdout, LeaveAlternateScreen, cursor::Show);
+            return -1;
+        }
+    };
+
+    loop {
+        ui::draw_info(&mut terminal, &info, file_path);
+        if let Ok(true) = event::poll(Duration::from_millis(200)) {
+            if let Ok(event::Event::Key(key)) = event::read() {
+                match key.code {
+                    event::KeyCode::Char('q')
+                    | event::KeyCode::Esc
+                    | event::KeyCode::Enter => break,
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    let _ = terminal.show_cursor();
+    let stdout = terminal.backend_mut();
+    let _ = crossterm::execute!(stdout, LeaveAlternateScreen, cursor::Show);
+
+    0
 }
 
 /// RAII guard for terminal raw mode.
