@@ -15,7 +15,10 @@ use crossterm::{
     terminal::{self, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use log::{error, info};
-use proteus_lib::dsp::effects::{AudioEffect, BasicReverbEffect, ConvolutionReverbEffect};
+use proteus_lib::dsp::effects::{
+    AudioEffect, BasicReverbEffect, ConvolutionReverbEffect, DistortionEffect,
+    HighPassFilterEffect, LowPassFilterEffect,
+};
 use proteus_lib::playback::player;
 use ratatui::{backend::CrosstermBackend, Terminal};
 use serde::Serialize;
@@ -297,6 +300,9 @@ fn default_effects_chain() -> Vec<AudioEffect> {
     vec![
         AudioEffect::ConvolutionReverb(ConvolutionReverbEffect::default()),
         AudioEffect::BasicReverb(BasicReverbEffect::default()),
+        AudioEffect::LowPassFilter(LowPassFilterEffect::default()),
+        AudioEffect::HighPassFilter(HighPassFilterEffect::default()),
+        AudioEffect::Distortion(DistortionEffect::default()),
     ]
 }
 

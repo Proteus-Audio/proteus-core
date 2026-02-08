@@ -1,0 +1,42 @@
+[
+	{
+		"ConvolutionReverbSettings": {
+			"enabled": false,
+			"dry_wet": 0.000001,
+			"impulse_response": null,
+			"impulse_response_attachment": null,
+			"impulse_response_path": null,
+			"impulse_response_tail_db": null,
+			"impulse_response_tail": null
+		}
+	},
+	{
+		"BasicReverbSettings": {
+			"enabled": false,
+			"mix": 0.0,
+			"duration_ms": 100,
+			"amplitude": 0.7
+		}
+	},
+	{
+		"LowPassFilterSettings": {
+			"enabled": false,
+			"freq_hz": 500,
+			"q": 0.5
+		}
+	},
+	{
+		"HighPassFilterSettings": {
+			"enabled": false,
+			"freq_hz": 400,
+			"q": 0.5
+		}
+	},
+	{
+		"DistortionSettings": {
+			"enabled": true,
+			"gain": 1.0,
+			"threshold": 0.1
+		}
+	}
+]

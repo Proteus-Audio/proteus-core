@@ -239,6 +239,9 @@ impl Player {
             .map(|effect| match effect {
                 AudioEffect::BasicReverb(_) => "BasicReverb".to_string(),
                 AudioEffect::ConvolutionReverb(_) => "ConvolutionReverb".to_string(),
+                AudioEffect::LowPassFilter(_) => "LowPassFilter".to_string(),
+                AudioEffect::HighPassFilter(_) => "HighPassFilter".to_string(),
+                AudioEffect::Distortion(_) => "Distortion".to_string(),
             })
             .collect()
     }

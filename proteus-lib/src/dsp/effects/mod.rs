@@ -6,9 +6,16 @@ use crate::dsp::effects::convolution_reverb::ImpulseResponseSpec;
 
 pub mod convolution_reverb;
 pub mod basic_reverb;
+pub mod distortion;
+pub mod high_pass;
+pub mod low_pass;
+mod biquad;
 
 pub use basic_reverb::{BasicReverbEffect, BasicReverbSettings};
 pub use convolution_reverb::{ConvolutionReverbEffect, ConvolutionReverbSettings};
+pub use distortion::{DistortionEffect, DistortionSettings};
+pub use high_pass::{HighPassFilterEffect, HighPassFilterSettings};
+pub use low_pass::{LowPassFilterEffect, LowPassFilterSettings};
 
 /// Shared context for preparing and running DSP effects.
 #[derive(Debug, Clone)]
@@ -27,6 +34,12 @@ pub enum AudioEffect {
     BasicReverb(BasicReverbEffect),
     #[serde(rename = "ConvolutionReverbSettings")]
     ConvolutionReverb(ConvolutionReverbEffect),
+    #[serde(rename = "LowPassFilterSettings")]
+    LowPassFilter(LowPassFilterEffect),
+    #[serde(rename = "HighPassFilterSettings")]
+    HighPassFilter(HighPassFilterEffect),
+    #[serde(rename = "DistortionSettings")]
+    Distortion(DistortionEffect),
 }
 
 impl AudioEffect {
@@ -48,6 +61,9 @@ impl AudioEffect {
         match self {
             AudioEffect::BasicReverb(effect) => effect.process(samples, context, drain),
             AudioEffect::ConvolutionReverb(effect) => effect.process(samples, context, drain),
+            AudioEffect::LowPassFilter(effect) => effect.process(samples, context, drain),
+            AudioEffect::HighPassFilter(effect) => effect.process(samples, context, drain),
+            AudioEffect::Distortion(effect) => effect.process(samples, context, drain),
         }
     }
 
@@ -56,6 +72,9 @@ impl AudioEffect {
         match self {
             AudioEffect::BasicReverb(effect) => effect.reset_state(),
             AudioEffect::ConvolutionReverb(effect) => effect.reset_state(),
+            AudioEffect::LowPassFilter(effect) => effect.reset_state(),
+            AudioEffect::HighPassFilter(effect) => effect.reset_state(),
+            AudioEffect::Distortion(effect) => effect.reset_state(),
         }
     }
 
