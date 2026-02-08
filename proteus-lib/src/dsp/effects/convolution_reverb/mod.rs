@@ -144,7 +144,7 @@ impl ConvolutionReverbEffect {
             config.tail_db,
         );
 
-        self.state = Some(ConvolutionReverbState::new(reverb));
+        self.state = reverb.map(ConvolutionReverbState::new);
         self.resolved_config = Some(config);
     }
 
@@ -272,11 +272,8 @@ fn build_reverb_with_impulse_response(
     impulse_spec: Option<ImpulseResponseSpec>,
     container_path: Option<&str>,
     tail_db: f32,
-) -> Reverb {
-    let impulse_spec = match impulse_spec {
-        Some(spec) => spec,
-        None => return Reverb::new(channels, dry_wet),
-    };
+) -> Option<Reverb> {
+    let impulse_spec = impulse_spec?;
 
     let result = match impulse_spec {
         ImpulseResponseSpec::Attachment(name) => container_path
@@ -321,15 +318,17 @@ fn build_reverb_with_impulse_response(
     };
 
     match result {
-        Ok(impulse_response) => {
-            Reverb::new_with_impulse_response(channels, dry_wet, &impulse_response)
-        }
+        Ok(impulse_response) => Some(Reverb::new_with_impulse_response(
+            channels,
+            dry_wet,
+            &impulse_response,
+        )),
         Err(err) => {
             warn!(
-                "Failed to load impulse response ({}); falling back to default reverb.",
+                "Failed to load impulse response ({}); skipping convolution reverb.",
                 err
             );
-            Reverb::new(channels, dry_wet)
+            None
         }
     }
 }

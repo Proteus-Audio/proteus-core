@@ -3,7 +3,7 @@
 use log::{info, warn};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-pub use crate::dsp::effects::ConvolutionReverbSettings;
+pub use crate::dsp::effects::{BasicReverbSettings, ConvolutionReverbSettings};
 use crate::dsp::effects::AudioEffect;
 
 pub mod legacy;

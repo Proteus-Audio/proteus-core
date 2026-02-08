@@ -5,7 +5,9 @@ use serde::{Deserialize, Serialize};
 use crate::container::prot::ImpulseResponseSpec;
 
 pub mod convolution_reverb;
+pub mod basic_reverb;
 
+pub use basic_reverb::{BasicReverbEffect, BasicReverbSettings};
 pub use convolution_reverb::{ConvolutionReverbEffect, ConvolutionReverbSettings};
 
 /// Shared context for preparing and running DSP effects.
@@ -21,6 +23,8 @@ pub struct EffectContext {
 /// Configured audio effect that can process interleaved samples.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum AudioEffect {
+    #[serde(rename = "BasicReverbSettings")]
+    BasicReverb(BasicReverbEffect),
     #[serde(rename = "ConvolutionReverbSettings")]
     ConvolutionReverb(ConvolutionReverbEffect),
 }
@@ -42,6 +46,7 @@ impl AudioEffect {
         drain: bool,
     ) -> Vec<f32> {
         match self {
+            AudioEffect::BasicReverb(effect) => effect.process(samples, context, drain),
             AudioEffect::ConvolutionReverb(effect) => effect.process(samples, context, drain),
         }
     }
@@ -49,6 +54,7 @@ impl AudioEffect {
     /// Reset any internal state maintained by the effect.
     pub fn reset_state(&mut self) {
         match self {
+            AudioEffect::BasicReverb(effect) => effect.reset_state(),
             AudioEffect::ConvolutionReverb(effect) => effect.reset_state(),
         }
     }
@@ -57,6 +63,7 @@ impl AudioEffect {
     pub fn as_convolution_reverb_mut(&mut self) -> Option<&mut ConvolutionReverbEffect> {
         match self {
             AudioEffect::ConvolutionReverb(effect) => Some(effect),
+            _ => None,
         }
     }
 
@@ -64,6 +71,23 @@ impl AudioEffect {
     pub fn as_convolution_reverb(&self) -> Option<&ConvolutionReverbEffect> {
         match self {
             AudioEffect::ConvolutionReverb(effect) => Some(effect),
+            _ => None,
+        }
+    }
+
+    /// Mutable access to the basic reverb effect, if present.
+    pub fn as_basic_reverb_mut(&mut self) -> Option<&mut BasicReverbEffect> {
+        match self {
+            AudioEffect::BasicReverb(effect) => Some(effect),
+            _ => None,
+        }
+    }
+
+    /// Immutable access to the basic reverb effect, if present.
+    pub fn as_basic_reverb(&self) -> Option<&BasicReverbEffect> {
+        match self {
+            AudioEffect::BasicReverb(effect) => Some(effect),
+            _ => None,
         }
     }
 }

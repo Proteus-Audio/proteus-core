@@ -9,7 +9,8 @@ use log::debug;
 
 use crate::dsp::convolution::Convolver;
 use crate::dsp::impulse_response::ImpulseResponse;
-use crate::dsp::normalized_spring_impulse_response::SPRING_IMPULSE_RESPONSE;
+
+const IDENTITY_IMPULSE_RESPONSE: &[f32] = &[1.0];
 
 //   1. Power‑of‑two FFT size (e.g., 8192 or 16384).
 const FFT_SIZE: usize = 8192;
@@ -31,13 +32,13 @@ pub struct Reverb {
 }
 
 impl Reverb {
-    /// Create a reverb using the built-in normalized spring impulse response.
+    /// Create a reverb using a neutral impulse response.
     ///
     /// `dry_wet` is clamped to `[0.0, 1.0]`.
     pub fn new(channels: usize, dry_wet: f32) -> Self {
         let mut convolvers = Vec::with_capacity(channels);
         for _ in 0..channels {
-            convolvers.push(Convolver::new(SPRING_IMPULSE_RESPONSE, FFT_SIZE));
+            convolvers.push(Convolver::new(IDENTITY_IMPULSE_RESPONSE, FFT_SIZE));
         }
 
         Self {

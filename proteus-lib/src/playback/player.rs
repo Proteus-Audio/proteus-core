@@ -15,7 +15,7 @@ use crate::diagnostics::reporter::{Report, Reporter};
 use crate::tools::timer;
 use crate::{
     container::info::Info,
-    dsp::effects::{AudioEffect, ConvolutionReverbEffect},
+    dsp::effects::{AudioEffect, BasicReverbEffect, ConvolutionReverbEffect},
     playback::engine::{DspChainMetrics, PlaybackBufferSettings, PlayerEngine},
 };
 
@@ -119,9 +119,10 @@ impl Player {
             prot,
             reporter: None,
             buffer_settings: Arc::new(Mutex::new(PlaybackBufferSettings::new(20.0))),
-            effects: Arc::new(Mutex::new(vec![AudioEffect::ConvolutionReverb(
-                ConvolutionReverbEffect::new(0.000001),
-            )])),
+            effects: Arc::new(Mutex::new(vec![
+                AudioEffect::ConvolutionReverb(ConvolutionReverbEffect::new(0.000001)),
+                AudioEffect::BasicReverb(BasicReverbEffect::new(0.000001)),
+            ])),
             dsp_metrics: Arc::new(Mutex::new(DspChainMetrics::default())),
             effects_reset: Arc::new(AtomicU64::new(0)),
             buffering_done: Arc::new(AtomicBool::new(false)),
@@ -168,6 +169,12 @@ impl Player {
         {
             effect.enabled = enabled;
         }
+        if let Some(effect) = effects
+            .iter_mut()
+            .find_map(|effect| effect.as_basic_reverb_mut())
+        {
+            effect.enabled = enabled;
+        }
     }
 
     /// Set the reverb wet/dry mix (clamped to `[0.0, 1.0]`).
@@ -178,6 +185,12 @@ impl Player {
             .find_map(|effect| effect.as_convolution_reverb_mut())
         {
             effect.dry_wet = dry_wet.clamp(0.0, 1.0);
+        }
+        if let Some(effect) = effects
+            .iter_mut()
+            .find_map(|effect| effect.as_basic_reverb_mut())
+        {
+            effect.mix = dry_wet.clamp(0.0, 1.0);
         }
     }
 
@@ -191,6 +204,12 @@ impl Player {
             return ReverbSettingsSnapshot {
                 enabled: effect.enabled,
                 dry_wet: effect.dry_wet,
+            };
+        }
+        if let Some(effect) = effects.iter().find_map(|effect| effect.as_basic_reverb()) {
+            return ReverbSettingsSnapshot {
+                enabled: effect.enabled,
+                dry_wet: effect.mix,
             };
         }
         ReverbSettingsSnapshot {
