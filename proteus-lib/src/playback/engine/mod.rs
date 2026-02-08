@@ -11,10 +11,9 @@ use crate::audio::buffer::{init_buffer_map, TrackBuffer};
 use crate::container::prot::Prot;
 
 mod mix;
-mod reverb;
 mod state;
 
-pub use state::{PlaybackBufferSettings, ReverbMetrics, ReverbSettings};
+pub use state::{DspChainMetrics, PlaybackBufferSettings};
 
 use mix::{spawn_mix_thread, MixThreadArgs};
 
@@ -28,11 +27,11 @@ pub struct PlayerEngine {
     buffer_notify: Arc<Condvar>,
     effects_buffer: Arc<Mutex<Bounded<Vec<f32>>>>,
     track_weights: Arc<Mutex<HashMap<u16, f32>>>,
-    reverb_reset: Arc<AtomicU64>,
+    effects_reset: Arc<AtomicU64>,
     prot: Arc<Mutex<Prot>>,
     buffer_settings: Arc<Mutex<PlaybackBufferSettings>>,
-    reverb_settings: Arc<Mutex<ReverbSettings>>,
-    reverb_metrics: Arc<Mutex<ReverbMetrics>>,
+    effects: Arc<Mutex<Vec<crate::dsp::effects::AudioEffect>>>,
+    dsp_metrics: Arc<Mutex<DspChainMetrics>>,
 }
 
 impl PlayerEngine {
@@ -42,9 +41,9 @@ impl PlayerEngine {
         abort_option: Option<Arc<AtomicBool>>,
         start_time: f64,
         buffer_settings: Arc<Mutex<PlaybackBufferSettings>>,
-        reverb_settings: Arc<Mutex<ReverbSettings>>,
-        reverb_metrics: Arc<Mutex<ReverbMetrics>>,
-        reverb_reset: Arc<AtomicU64>,
+        effects: Arc<Mutex<Vec<crate::dsp::effects::AudioEffect>>>,
+        dsp_metrics: Arc<Mutex<DspChainMetrics>>,
+        effects_reset: Arc<AtomicU64>,
     ) -> Self {
         let buffer_map = init_buffer_map();
         let buffer_notify = Arc::new(Condvar::new());
@@ -76,12 +75,12 @@ impl PlayerEngine {
             buffer_notify,
             effects_buffer,
             track_weights,
-            reverb_reset,
+            effects_reset,
             abort,
             prot,
             buffer_settings,
-            reverb_settings,
-            reverb_metrics,
+            effects,
+            dsp_metrics,
         }
     }
 
@@ -118,14 +117,14 @@ impl PlayerEngine {
             buffer_notify: self.buffer_notify.clone(),
             effects_buffer: self.effects_buffer.clone(),
             track_weights: self.track_weights.clone(),
-            reverb_reset: self.reverb_reset.clone(),
+            effects_reset: self.effects_reset.clone(),
             finished_tracks: self.finished_tracks.clone(),
             prot: self.prot.clone(),
             abort: self.abort.clone(),
             start_time: self.start_time,
             buffer_settings: self.buffer_settings.clone(),
-            reverb_settings: self.reverb_settings.clone(),
-            reverb_metrics: self.reverb_metrics.clone(),
+            effects: self.effects.clone(),
+            dsp_metrics: self.dsp_metrics.clone(),
         })
     }
 

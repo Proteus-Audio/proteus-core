@@ -14,10 +14,10 @@ use std::time::Instant;
 
 use crate::audio::buffer::TrackBuffer;
 use crate::container::prot::Prot;
+use crate::dsp::effects::{AudioEffect, EffectContext};
 use crate::track::{buffer_container_tracks, buffer_track, ContainerTrackArgs, TrackArgs};
 
-use super::reverb::build_reverb_with_impulse_response;
-use super::state::{PlaybackBufferSettings, ReverbMetrics, ReverbSettings};
+use super::state::{DspChainMetrics, PlaybackBufferSettings};
 
 /// Arguments required to spawn the mixing thread.
 pub struct MixThreadArgs {
@@ -26,14 +26,14 @@ pub struct MixThreadArgs {
     pub buffer_notify: Arc<std::sync::Condvar>,
     pub effects_buffer: Arc<Mutex<Bounded<Vec<f32>>>>,
     pub track_weights: Arc<Mutex<HashMap<u16, f32>>>,
-    pub reverb_reset: Arc<AtomicU64>,
+    pub effects_reset: Arc<AtomicU64>,
     pub finished_tracks: Arc<Mutex<Vec<u16>>>,
     pub prot: Arc<Mutex<Prot>>,
     pub abort: Arc<AtomicBool>,
     pub start_time: f64,
     pub buffer_settings: Arc<Mutex<PlaybackBufferSettings>>,
-    pub reverb_settings: Arc<Mutex<ReverbSettings>>,
-    pub reverb_metrics: Arc<Mutex<ReverbMetrics>>,
+    pub effects: Arc<Mutex<Vec<AudioEffect>>>,
+    pub dsp_metrics: Arc<Mutex<DspChainMetrics>>,
 }
 
 /// Spawn the mixing thread and return a receiver of mixed audio buffers.
@@ -46,46 +46,36 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer, f
         buffer_notify,
         effects_buffer,
         track_weights,
-        reverb_reset,
+        effects_reset,
         finished_tracks,
         prot,
         abort,
         start_time,
         buffer_settings,
-        reverb_settings,
-        reverb_metrics,
+        effects,
+        dsp_metrics,
     } = args;
 
     thread::spawn(move || {
         const MIN_MIX_MS: f32 = 300.0;
         #[cfg(feature = "debug")]
-        let mut avg_buffer_fill = 0.0_f64;
+        let mut avg_dsp_ms = 0.0_f64;
         #[cfg(feature = "debug")]
-        let mut min_buffer_fill = f64::INFINITY;
+        let mut avg_audio_ms = 0.0_f64;
         #[cfg(feature = "debug")]
-        let mut max_buffer_fill = 0.0_f64;
+        let mut avg_rt_factor = 0.0_f64;
         #[cfg(feature = "debug")]
-        let alpha_buf = 0.1_f64;
+        let mut min_rt_factor = f64::INFINITY;
         #[cfg(feature = "debug")]
-        let mut last_send = Instant::now();
+        let mut max_rt_factor = 0.0_f64;
         #[cfg(feature = "debug")]
-        let mut avg_chain_time_ms = 0.0_f64;
+        let mut avg_chain_ksps = 0.0_f64;
         #[cfg(feature = "debug")]
-        let mut min_chain_time_ms = f64::INFINITY;
+        let mut min_chain_ksps = f64::INFINITY;
         #[cfg(feature = "debug")]
-        let mut max_chain_time_ms = 0.0_f64;
+        let mut max_chain_ksps = 0.0_f64;
         #[cfg(feature = "debug")]
-        let mut avg_out_interval_ms = 0.0_f64;
-        #[cfg(feature = "debug")]
-        let mut min_out_interval_ms = f64::INFINITY;
-        #[cfg(feature = "debug")]
-        let mut max_out_interval_ms = 0.0_f64;
-        #[cfg(feature = "debug")]
-        let alpha_chain = 0.1_f64;
-        #[cfg(feature = "debug")]
-        let mut wake_total: u64 = 0;
-        #[cfg(feature = "debug")]
-        let mut wake_idle: u64 = 0;
+        let alpha = 0.1_f64;
 
         let prot_locked = prot.clone();
 
@@ -98,6 +88,9 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer, f
         };
         let prot_key_count = prot.get_keys().len();
         drop(prot);
+
+        #[cfg(not(feature = "debug"))]
+        let _ = &dsp_metrics;
 
         if let Some((file_path, track_entries)) = container_tracks {
             buffer_container_tracks(
@@ -135,56 +128,18 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer, f
 
         let hash_buffer_copy = buffer_map.clone();
 
-        let (impulse_spec, container_path, output_channels, tail_db) = {
+        let mut effect_context = {
             let prot = prot_locked.lock().unwrap();
-            (
-                prot.get_impulse_response_spec(),
-                prot.get_container_path(),
-                prot.info.channels as usize,
-                prot.get_impulse_response_tail_db().unwrap_or(-60.0),
-            )
+            EffectContext {
+                sample_rate: prot.info.sample_rate,
+                channels: prot.info.channels as usize,
+                container_path: prot.get_container_path(),
+                impulse_response_spec: prot.get_impulse_response_spec(),
+                impulse_response_tail_db: prot.get_impulse_response_tail_db().unwrap_or(-60.0),
+            }
         };
 
-        let mut reverb = build_reverb_with_impulse_response(
-            output_channels,
-            0.000001,
-            impulse_spec.clone(),
-            container_path.as_deref(),
-            tail_db,
-        );
-        let mut current_dry_wet = 0.000001_f32;
-        let mut reverb_input_buf: Vec<f32> = Vec::new();
-        let mut reverb_output_buf: Vec<f32> = Vec::new();
-        let mut reverb_block_samples = reverb.block_size_samples();
-        const REVERB_BATCH_BLOCKS: usize = 2;
-        let mut reverb_block_out: Vec<f32> = Vec::new();
-        let mut last_reverb_reset = reverb_reset.load(std::sync::atomic::Ordering::SeqCst);
-        #[cfg(feature = "debug")]
-        let mut reverb_out_rms: f64 = 0.0;
-        #[cfg(feature = "debug")]
-        let mut reverb_out_peak: f64 = 0.0;
-        #[cfg(feature = "debug")]
-        let mut avg_dsp_ms = 0.0_f64;
-        #[cfg(feature = "debug")]
-        let mut avg_audio_ms = 0.0_f64;
-        #[cfg(feature = "debug")]
-        let mut avg_rt_factor = 0.0_f64;
-        #[cfg(feature = "debug")]
-        let mut min_rt_factor = f64::INFINITY;
-        #[cfg(feature = "debug")]
-        let mut max_rt_factor = 0.0_f64;
-        #[cfg(feature = "debug")]
-        let alpha = 0.1_f64;
-        #[cfg(feature = "debug")]
-        let mut reverb_underflow_events: u64 = 0;
-        #[cfg(feature = "debug")]
-        let mut reverb_underflow_samples: u64 = 0;
-        #[cfg(feature = "debug")]
-        let mut reverb_pad_events: u64 = 0;
-        #[cfg(feature = "debug")]
-        let mut reverb_pad_samples: u64 = 0;
-        #[cfg(feature = "debug")]
-        let mut reverb_partial_drain_events: u64 = 0;
+        let mut last_effects_reset = effects_reset.load(std::sync::atomic::Ordering::SeqCst);
 
         let start_buffer_ms = buffer_settings.lock().unwrap().start_buffer_ms;
         let start_samples = ((audio_info.sample_rate as f32 * start_buffer_ms) / 1000.0) as usize
@@ -208,10 +163,6 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer, f
                 weights.clone()
             };
             let mut removable_tracks: Vec<u16> = Vec::new();
-            #[cfg(feature = "debug")]
-            {
-                wake_total = wake_total.saturating_add(1);
-            }
 
             let finished_snapshot = finished_tracks.lock().unwrap().clone();
             let mut all_buffers_full = true;
@@ -246,13 +197,6 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer, f
                 if ready {
                     started = true;
                 } else {
-                    #[cfg(feature = "debug")]
-                    {
-                        wake_idle = wake_idle.saturating_add(1);
-                        let mut metrics = reverb_metrics.lock().unwrap();
-                        metrics.wake_total = wake_total;
-                        metrics.wake_idle = wake_idle;
-                    }
                     let (guard, _) = buffer_notify
                         .wait_timeout(hash_buffer_copy.lock().unwrap(), Duration::from_millis(20))
                         .unwrap();
@@ -261,20 +205,30 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer, f
                 }
             }
 
-            let effects_len = effects_buffer.lock().unwrap().len();
             let mut did_work = false;
-            let min_len = if buffer_snapshot.is_empty() {
-                0
-            } else {
-                buffer_snapshot
-                    .iter()
-                    .map(|(_, buffer)| buffer.lock().unwrap().len())
-                    .min()
-                    .unwrap_or(0)
-            };
-            let all_tracks_finished = buffer_snapshot
-                .iter()
-                .all(|(track_key, _)| finished_snapshot.contains(track_key));
+            let current_reset = effects_reset.load(std::sync::atomic::Ordering::SeqCst);
+            if current_reset != last_effects_reset {
+                let mut effects_guard = effects.lock().unwrap();
+                for effect in effects_guard.iter_mut() {
+                    effect.reset_state();
+                }
+                let mut tail_buffer = effects_buffer.lock().unwrap();
+                while tail_buffer.pop().is_some() {}
+                effect_context = {
+                    let prot = prot_locked.lock().unwrap();
+                    EffectContext {
+                        sample_rate: prot.info.sample_rate,
+                        channels: prot.info.channels as usize,
+                        container_path: prot.get_container_path(),
+                        impulse_response_spec: prot.get_impulse_response_spec(),
+                        impulse_response_tail_db: prot.get_impulse_response_tail_db().unwrap_or(-60.0),
+                    }
+                };
+                last_effects_reset = current_reset;
+            }
+
+            let effects_len = effects_buffer.lock().unwrap().len();
+            let all_tracks_finished = finished_snapshot.len() >= prot_key_count;
             let active_min_len = buffer_snapshot
                 .iter()
                 .filter(|(track_key, _)| !finished_snapshot.contains(track_key))
@@ -287,419 +241,193 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer, f
                 .map(|(_, buffer)| buffer.lock().unwrap().len())
                 .min()
                 .unwrap_or(0);
-            let should_mix_tracks = !buffer_snapshot.is_empty()
+            let has_tail = effects_len > 0;
+            let should_output_tail = has_tail;
+            let should_mix_tracks = !has_tail
+                && !buffer_snapshot.is_empty()
                 && ((!all_tracks_finished && active_min_len >= min_mix_samples)
                     || (all_tracks_finished && finished_min_len > 0));
-            let should_mix_effects = buffer_snapshot.is_empty()
-                && (effects_len >= min_mix_samples || (all_tracks_finished && effects_len > 0));
 
-            if should_mix_tracks || should_mix_effects {
-                #[cfg(feature = "debug")]
-                let chain_start = Instant::now();
+            if buffer_snapshot.is_empty() && effects_len == 0 && all_tracks_finished {
+                let mut drained = Vec::new();
+                {
+                    let mut effects_guard = effects.lock().unwrap();
+                    let mut current = Vec::new();
+                    for effect in effects_guard.iter_mut() {
+                        current = effect.process(&current, &effect_context, true);
+                    }
+                    drained = current;
+                }
+                if !drained.is_empty() {
+                    let mut tail_buffer = effects_buffer.lock().unwrap();
+                    for sample in drained {
+                        let _ = tail_buffer.push(sample);
+                    }
+                    continue;
+                }
+                break;
+            }
 
-                let mut effects_buffer_unlocked = effects_buffer.lock().unwrap();
-                let current_chunk = if !buffer_snapshot.is_empty() {
-                    if !all_tracks_finished && active_min_len >= min_mix_samples {
+            if should_mix_tracks || should_output_tail {
+                let input_channels = audio_info.channels as u16;
+                let sample_rate = audio_info.sample_rate as u32;
+
+                let mut samples = if should_mix_tracks {
+                    let current_chunk = if !all_tracks_finished && active_min_len >= min_mix_samples {
                         min_mix_samples
                     } else if all_tracks_finished && finished_min_len > 0 {
                         finished_min_len
                     } else {
                         0
-                    }
-                } else if effects_buffer_unlocked.len() >= min_mix_samples {
-                    min_mix_samples
-                } else if all_tracks_finished && effects_buffer_unlocked.len() > 0 {
-                    effects_buffer_unlocked.len()
-                } else {
-                    0
-                };
+                    };
+                    let current_chunk = current_chunk.min(mix_buffer.len());
 
-                if current_chunk == 0 {
-                    drop(effects_buffer_unlocked);
-                    if !all_buffers_full && effects_len == 0 {
+                    if current_chunk == 0 {
+                        Vec::new()
+                    } else {
+                        mix_buffer.fill(0.0);
+                        for (track_key, buffer) in buffer_snapshot.iter() {
+                            let weight = weights_snapshot.get(track_key).copied().unwrap_or(1.0);
+                            let mut buffer = buffer.lock().unwrap();
+                            let take = buffer.len().min(current_chunk);
+                            for sample in mix_buffer.iter_mut().take(take) {
+                                if let Some(value) = buffer.pop() {
+                                    *sample += value * weight;
+                                }
+                            }
+                        }
+
                         #[cfg(feature = "debug")]
-                        if !did_work {
-                            wake_idle = wake_idle.saturating_add(1);
-                            let mut metrics = reverb_metrics.lock().unwrap();
-                            metrics.wake_total = wake_total;
-                            metrics.wake_idle = wake_idle;
-                        }
-                        let (guard, _) = buffer_notify
-                            .wait_timeout(
-                                hash_buffer_copy.lock().unwrap(),
-                                Duration::from_millis(20),
-                            )
-                            .unwrap();
-                        drop(guard);
-                    } else {
-                        drop(buffer_snapshot);
-                    }
-                    continue;
-                }
+                        let audio_time_ms = if input_channels > 0 && sample_rate > 0 {
+                            let frames = current_chunk as f64 / input_channels as f64;
+                            (frames / sample_rate as f64) * 1000.0
+                        } else {
+                            0.0
+                        };
 
-                mix_buffer.fill(0.0);
+                        #[cfg(feature = "debug")]
+                        let dsp_start = Instant::now();
 
-                if !buffer_snapshot.is_empty() {
-                    for (track_key, buffer) in buffer_snapshot.iter() {
-                        let weight = weights_snapshot.get(track_key).copied().unwrap_or(1.0);
-                        let mut buffer = buffer.lock().unwrap();
-                        let take = buffer.len().min(current_chunk);
-                        for sample in mix_buffer.iter_mut().take(take) {
-                            if let Some(value) = buffer.pop() {
-                                *sample += value * weight;
+                        let drain_effects = all_tracks_finished;
+                        let mut processed = mix_buffer[..current_chunk].to_vec();
+                        {
+                            let mut effects_guard = effects.lock().unwrap();
+                            for effect in effects_guard.iter_mut() {
+                                processed = effect.process(&processed, &effect_context, drain_effects);
                             }
                         }
-                    }
-                }
 
-                if effects_buffer_unlocked.len() > 0 {
-                    let effects_take = effects_buffer_unlocked.len().min(current_chunk);
-                    for sample in mix_buffer.iter_mut().take(effects_take) {
-                        *sample += effects_buffer_unlocked.pop().unwrap();
-                    }
-                }
+                        if processed.len() < current_chunk {
+                            processed.resize(current_chunk, 0.0);
+                        } else if processed.len() > current_chunk {
+                            let extra = processed.split_off(current_chunk);
+                            let mut tail_buffer = effects_buffer.lock().unwrap();
+                            for sample in extra {
+                                let _ = tail_buffer.push(sample);
+                            }
+                        }
 
-                drop(effects_buffer_unlocked);
-
-                let input_channels = audio_info.channels as u16;
-                let sample_rate = audio_info.sample_rate as u32;
-                let current_reset = reverb_reset.load(std::sync::atomic::Ordering::SeqCst);
-                if current_reset != last_reverb_reset {
-                    reverb = build_reverb_with_impulse_response(
-                        output_channels,
-                        0.000001,
-                        impulse_spec.clone(),
-                        container_path.as_deref(),
-                        tail_db,
-                    );
-                    reverb_block_samples = reverb.block_size_samples();
-                    reverb_input_buf.clear();
-                    reverb_output_buf.clear();
-                    reverb_block_out.clear();
-                    #[cfg(feature = "debug")]
-                    {
-                        reverb_out_rms = 0.0;
-                        reverb_out_peak = 0.0;
-                        reverb_underflow_events = 0;
-                        reverb_underflow_samples = 0;
-                        reverb_pad_events = 0;
-                        reverb_pad_samples = 0;
-                        reverb_partial_drain_events = 0;
-                    }
-                    current_dry_wet = f32::NAN;
-                    last_reverb_reset = current_reset;
-                }
-                let settings = *reverb_settings.lock().unwrap();
-                if (settings.dry_wet - current_dry_wet).abs() > f32::EPSILON {
-                    reverb.set_dry_wet(settings.dry_wet);
-                    current_dry_wet = settings.dry_wet;
-                }
-
-                #[cfg(feature = "debug")]
-                let audio_time_ms = if input_channels > 0 && sample_rate > 0 {
-                    let frames = current_chunk as f64 / input_channels as f64;
-                    (frames / sample_rate as f64) * 1000.0
-                } else {
-                    0.0
-                };
-
-                #[cfg(feature = "debug")]
-                let dsp_start = Instant::now();
-                let chunk_len = current_chunk.min(mix_buffer.len());
-                let samples = if settings.enabled && settings.dry_wet > 0.0 {
-                    if reverb_block_samples == 0 {
-                        reverb.process(&mix_buffer[..chunk_len])
-                    } else {
-                        reverb_input_buf.extend_from_slice(&mix_buffer[..chunk_len]);
-                        let batch_samples = reverb_block_samples * REVERB_BATCH_BLOCKS;
-                        let should_flush = all_tracks_finished && !reverb_input_buf.is_empty();
-                        while reverb_input_buf.len() >= batch_samples || should_flush {
-                            let take = if reverb_input_buf.len() >= batch_samples {
-                                batch_samples
+                        #[cfg(feature = "debug")]
+                        {
+                            let dsp_time_ms = dsp_start.elapsed().as_secs_f64() * 1000.0;
+                            let rt_factor = if audio_time_ms > 0.0 {
+                                dsp_time_ms / audio_time_ms
                             } else {
-                                reverb_input_buf.len()
+                                0.0
                             };
-                            #[cfg(feature = "debug")]
-                            if take < batch_samples {
-                                reverb_partial_drain_events =
-                                    reverb_partial_drain_events.saturating_add(1);
+                            let chain_ksps = if dsp_time_ms > 0.0 {
+                                (processed.len() as f64 / (dsp_time_ms / 1000.0)) / 1000.0
+                            } else {
+                                0.0
+                            };
+
+                            avg_dsp_ms = if avg_dsp_ms == 0.0 {
+                                dsp_time_ms
+                            } else {
+                                (avg_dsp_ms * (1.0 - alpha)) + (dsp_time_ms * alpha)
+                            };
+                            avg_audio_ms = if avg_audio_ms == 0.0 {
+                                audio_time_ms
+                            } else {
+                                (avg_audio_ms * (1.0 - alpha)) + (audio_time_ms * alpha)
+                            };
+                            avg_rt_factor = if avg_rt_factor == 0.0 {
+                                rt_factor
+                            } else {
+                                (avg_rt_factor * (1.0 - alpha)) + (rt_factor * alpha)
+                            };
+                            avg_chain_ksps = if avg_chain_ksps == 0.0 {
+                                chain_ksps
+                            } else {
+                                (avg_chain_ksps * (1.0 - alpha)) + (chain_ksps * alpha)
+                            };
+
+                            if rt_factor > 0.0 {
+                                min_rt_factor = min_rt_factor.min(rt_factor);
+                                max_rt_factor = max_rt_factor.max(rt_factor);
                             }
-                            let block: Vec<f32> = reverb_input_buf.drain(0..take).collect();
-                            reverb.process_into(&block, &mut reverb_block_out);
-                            #[cfg(feature = "debug")]
-                            {
-                                if !reverb_block_out.is_empty() {
-                                    let mut sum_sq = 0.0_f64;
-                                    let mut peak = 0.0_f64;
-                                    for sample in &reverb_block_out {
-                                        let v = *sample as f64;
-                                        sum_sq += v * v;
-                                        let abs = v.abs();
-                                        if abs > peak {
-                                            peak = abs;
-                                        }
-                                    }
-                                    let rms = (sum_sq / reverb_block_out.len() as f64).sqrt();
-                                    reverb_out_rms = rms;
-                                    reverb_out_peak = peak;
-                                    let mut metrics = reverb_metrics.lock().unwrap();
-                                    metrics.wet_rms = rms;
-                                    metrics.wet_peak = peak;
-                                }
+                            if chain_ksps > 0.0 {
+                                min_chain_ksps = min_chain_ksps.min(chain_ksps);
+                                max_chain_ksps = max_chain_ksps.max(chain_ksps);
                             }
-                            reverb_output_buf.extend_from_slice(&reverb_block_out);
-                            if take < batch_samples {
-                                break;
-                            }
+
+                            let mut metrics = dsp_metrics.lock().unwrap();
+                            metrics.dsp_time_ms = dsp_time_ms;
+                            metrics.audio_time_ms = audio_time_ms;
+                            metrics.rt_factor = rt_factor;
+                            metrics.avg_dsp_ms = avg_dsp_ms;
+                            metrics.avg_audio_ms = avg_audio_ms;
+                            metrics.avg_rt_factor = avg_rt_factor;
+                            metrics.min_rt_factor = if min_rt_factor.is_finite() {
+                                min_rt_factor
+                            } else {
+                                0.0
+                            };
+                            metrics.max_rt_factor = max_rt_factor;
+                            metrics.chain_ksps = chain_ksps;
+                            metrics.avg_chain_ksps = avg_chain_ksps;
+                            metrics.min_chain_ksps = if min_chain_ksps.is_finite() {
+                                min_chain_ksps
+                            } else {
+                                0.0
+                            };
+                            metrics.max_chain_ksps = max_chain_ksps;
+                            metrics.track_key_count = buffer_snapshot.len();
+                            metrics.finished_track_count = finished_snapshot.len();
+                            metrics.prot_key_count = prot_key_count;
                         }
-                        if reverb_output_buf.len() < chunk_len {
-                            let mut out = reverb_output_buf.clone();
-                            #[cfg(feature = "debug")]
-                            {
-                                let pad = chunk_len - out.len();
-                                if pad > 0 {
-                                    reverb_underflow_events =
-                                        reverb_underflow_events.saturating_add(1);
-                                    reverb_underflow_samples =
-                                        reverb_underflow_samples.saturating_add(pad as u64);
-                                    reverb_pad_events = reverb_pad_events.saturating_add(1);
-                                    reverb_pad_samples =
-                                        reverb_pad_samples.saturating_add(pad as u64);
-                                }
-                            }
-                            reverb_output_buf.clear();
-                            out
-                        } else {
-                            reverb_output_buf.drain(0..chunk_len).collect()
-                        }
+
+                        processed
                     }
                 } else {
-                    mix_buffer[..chunk_len].to_vec()
-                };
-                #[cfg(feature = "debug")]
-                let dsp_time_ms = dsp_start.elapsed().as_secs_f64() * 1000.0;
-                #[cfg(feature = "debug")]
-                let rt_factor = if audio_time_ms > 0.0 {
-                    dsp_time_ms / audio_time_ms
-                } else {
-                    0.0
-                };
-
-                #[cfg(feature = "debug")]
-                {
-                    avg_dsp_ms = if avg_dsp_ms == 0.0 {
-                        dsp_time_ms
-                    } else {
-                        (avg_dsp_ms * (1.0 - alpha)) + (dsp_time_ms * alpha)
-                    };
-                    avg_audio_ms = if avg_audio_ms == 0.0 {
-                        audio_time_ms
-                    } else {
-                        (avg_audio_ms * (1.0 - alpha)) + (audio_time_ms * alpha)
-                    };
-                    avg_rt_factor = if avg_rt_factor == 0.0 {
-                        rt_factor
-                    } else {
-                        (avg_rt_factor * (1.0 - alpha)) + (rt_factor * alpha)
-                    };
-
-                    if rt_factor > 0.0 {
-                        min_rt_factor = min_rt_factor.min(rt_factor);
-                        max_rt_factor = max_rt_factor.max(rt_factor);
-                    }
-
-                    let mut metrics = reverb_metrics.lock().unwrap();
-                    metrics.dsp_time_ms = dsp_time_ms;
-                    metrics.audio_time_ms = audio_time_ms;
-                    metrics.rt_factor = rt_factor;
-                    metrics.avg_dsp_ms = avg_dsp_ms;
-                    metrics.avg_audio_ms = avg_audio_ms;
-                    metrics.avg_rt_factor = avg_rt_factor;
-                    metrics.min_rt_factor = if min_rt_factor.is_finite() {
-                        min_rt_factor
-                    } else {
-                        0.0
-                    };
-                    metrics.max_rt_factor = max_rt_factor;
-                }
-
-                let samples_for_metrics = samples.clone();
-                let samples_len = samples_for_metrics.len();
-                let samples_buffer = SamplesBuffer::new(input_channels, sample_rate, samples);
-
-                let length_in_seconds =
-                    chunk_len as f64 / audio_info.sample_rate as f64 / audio_info.channels as f64;
-
-                #[cfg(feature = "debug")]
-                {
-                    if started && !buffer_snapshot.is_empty() {
-                        let total_samples = chunk_len as f64;
-                        let capacity_samples = buffer_snapshot
-                            .iter()
-                            .map(|(_, buffer)| buffer.lock().unwrap().max_len())
-                            .min()
-                            .unwrap_or(0) as f64;
-                        let fill = if capacity_samples > 0.0 {
-                            total_samples / capacity_samples
-                        } else {
-                            0.0
-                        };
-
-                        avg_buffer_fill = if avg_buffer_fill == 0.0 {
-                            fill
-                        } else {
-                            (avg_buffer_fill * (1.0 - alpha_buf)) + (fill * alpha_buf)
-                        };
-                        min_buffer_fill = min_buffer_fill.min(fill);
-                        max_buffer_fill = max_buffer_fill.max(fill);
-
-                        let mut metrics = reverb_metrics.lock().unwrap();
-                        metrics.buffer_fill = fill;
-                        metrics.avg_buffer_fill = avg_buffer_fill;
-                        metrics.min_buffer_fill = if min_buffer_fill.is_finite() {
-                            min_buffer_fill
-                        } else {
-                            0.0
-                        };
-                        metrics.max_buffer_fill = max_buffer_fill;
-                    }
-                }
-
-                #[cfg(feature = "debug")]
-                {
-                    let mut dry_sum_sq = 0.0_f64;
-                    let mut dry_peak = 0.0_f64;
-                    for sample in mix_buffer.iter().take(current_chunk) {
-                        let v = *sample as f64;
-                        dry_sum_sq += v * v;
-                        let abs = v.abs();
-                        if abs > dry_peak {
-                            dry_peak = abs;
+                    let mut tail_buffer = effects_buffer.lock().unwrap();
+                    let take = tail_buffer.len().min(min_mix_samples).max(1);
+                    let mut out = Vec::with_capacity(take);
+                    for _ in 0..take {
+                        if let Some(sample) = tail_buffer.pop() {
+                            out.push(sample);
                         }
                     }
-                    let dry_rms = if current_chunk > 0 {
-                        (dry_sum_sq / current_chunk as f64).sqrt()
-                    } else {
-                        0.0
-                    };
+                    out
+                };
 
-                    let mut mix_sum_sq = 0.0_f64;
-                    let mut mix_peak = 0.0_f64;
-                    for sample in samples_for_metrics.iter() {
-                        let v = *sample as f64;
-                        mix_sum_sq += v * v;
-                        let abs = v.abs();
-                        if abs > mix_peak {
-                            mix_peak = abs;
+                if !samples.is_empty() {
+                    let length_in_seconds = samples.len() as f64
+                        / audio_info.sample_rate as f64
+                        / audio_info.channels as f64;
+                    let samples_buffer = SamplesBuffer::new(input_channels, sample_rate, samples);
+
+                    match sender.send((samples_buffer, length_in_seconds)) {
+                        Ok(_) => (),
+                        Err(e) => {
+                            error!("Failed to send samples: {}", e);
                         }
                     }
-                    let mix_rms = if samples_len > 0 {
-                        (mix_sum_sq / samples_len as f64).sqrt()
-                    } else {
-                        0.0
-                    };
-
-                    let wet_rms = reverb_out_rms;
-                    let wet_peak = reverb_out_peak;
-                    let wet_to_dry_db = if dry_rms > 0.0 && wet_rms > 0.0 {
-                        20.0 * (wet_rms / dry_rms).log10()
-                    } else {
-                        0.0
-                    };
-
-                    let chain_time_ms = chain_start.elapsed().as_secs_f64() * 1000.0;
-                    let out_interval_ms = last_send.elapsed().as_secs_f64() * 1000.0;
-                    let append_gap_ms = out_interval_ms;
-
-                    avg_chain_time_ms = if avg_chain_time_ms == 0.0 {
-                        chain_time_ms
-                    } else {
-                        (avg_chain_time_ms * (1.0 - alpha_chain)) + (chain_time_ms * alpha_chain)
-                    };
-                    min_chain_time_ms = min_chain_time_ms.min(chain_time_ms);
-                    max_chain_time_ms = max_chain_time_ms.max(chain_time_ms);
-
-                    avg_out_interval_ms = if avg_out_interval_ms == 0.0 {
-                        out_interval_ms
-                    } else {
-                        (avg_out_interval_ms * (1.0 - alpha_chain))
-                            + (out_interval_ms * alpha_chain)
-                    };
-                    min_out_interval_ms = min_out_interval_ms.min(out_interval_ms);
-                    max_out_interval_ms = max_out_interval_ms.max(out_interval_ms);
-
-                    let mut metrics = reverb_metrics.lock().unwrap();
-                    metrics.append_gap_ms = append_gap_ms;
-                    metrics.avg_append_gap_ms = if metrics.avg_append_gap_ms == 0.0 {
-                        append_gap_ms
-                    } else {
-                        (metrics.avg_append_gap_ms * (1.0 - alpha_chain))
-                            + (append_gap_ms * alpha_chain)
-                    };
-                    metrics.min_append_gap_ms = if metrics.min_append_gap_ms == 0.0 {
-                        append_gap_ms
-                    } else {
-                        metrics.min_append_gap_ms.min(append_gap_ms)
-                    };
-                    metrics.max_append_gap_ms = metrics.max_append_gap_ms.max(append_gap_ms);
-                    metrics.chain_time_ms = chain_time_ms;
-                    metrics.avg_chain_time_ms = avg_chain_time_ms;
-                    metrics.min_chain_time_ms = if min_chain_time_ms.is_finite() {
-                        min_chain_time_ms
-                    } else {
-                        0.0
-                    };
-                    metrics.max_chain_time_ms = max_chain_time_ms;
-                    metrics.out_interval_ms = out_interval_ms;
-                    metrics.avg_out_interval_ms = avg_out_interval_ms;
-                    metrics.min_out_interval_ms = if min_out_interval_ms.is_finite() {
-                        min_out_interval_ms
-                    } else {
-                        0.0
-                    };
-                    metrics.max_out_interval_ms = max_out_interval_ms;
-                    metrics.dry_rms = dry_rms;
-                    metrics.wet_rms = wet_rms;
-                    metrics.mix_rms = mix_rms;
-                    metrics.dry_peak = dry_peak;
-                    metrics.wet_peak = wet_peak;
-                    metrics.mix_peak = mix_peak;
-                    metrics.wet_to_dry_db = wet_to_dry_db;
-                    metrics.reverb_in_len = reverb_input_buf.len();
-                    metrics.reverb_out_len = reverb_output_buf.len();
-                    metrics.reverb_reset_gen = current_reset;
-                    metrics.reverb_block_samples = reverb_block_samples;
-                    metrics.reverb_underflow_events = reverb_underflow_events;
-                    metrics.reverb_underflow_samples = reverb_underflow_samples;
-                    metrics.reverb_pad_events = reverb_pad_events;
-                    metrics.reverb_pad_samples = reverb_pad_samples;
-                    metrics.reverb_partial_drain_events = reverb_partial_drain_events;
-                    metrics.track_key_count = buffer_snapshot.len();
-                    metrics.finished_track_count = finished_snapshot.len();
-                    metrics.prot_key_count = prot_key_count;
+                    did_work = true;
                 }
-
-                match sender.send((samples_buffer, length_in_seconds)) {
-                    Ok(_) => (),
-                    Err(e) => {
-                        error!("Failed to send samples: {}", e);
-                    }
-                }
-                #[cfg(feature = "debug")]
-                {
-                    last_send = Instant::now();
-                }
-                did_work = true;
             }
 
-            if !all_buffers_full && effects_len == 0 {
-                #[cfg(feature = "debug")]
-                if !did_work {
-                    wake_idle = wake_idle.saturating_add(1);
-                    let mut metrics = reverb_metrics.lock().unwrap();
-                    metrics.wake_total = wake_total;
-                    metrics.wake_idle = wake_idle;
-                }
+            if !all_buffers_full && effects_buffer.lock().unwrap().len() == 0 {
                 let (guard, _) = buffer_notify
                     .wait_timeout(hash_buffer_copy.lock().unwrap(), Duration::from_millis(20))
                     .unwrap();

@@ -15,7 +15,8 @@ use crate::diagnostics::reporter::{Report, Reporter};
 use crate::tools::timer;
 use crate::{
     container::info::Info,
-    playback::engine::{PlaybackBufferSettings, PlayerEngine, ReverbMetrics, ReverbSettings},
+    dsp::effects::{AudioEffect, ConvolutionReverbEffect},
+    playback::engine::{DspChainMetrics, PlaybackBufferSettings, PlayerEngine},
 };
 
 /// High-level playback state for the player.
@@ -29,6 +30,13 @@ pub enum PlayerState {
     Stopping,
     Stopped,
     Finished,
+}
+
+/// Snapshot of convolution reverb settings for UI consumers.
+#[derive(Debug, Clone, Copy)]
+pub struct ReverbSettingsSnapshot {
+    pub enabled: bool,
+    pub dry_wet: f32,
 }
 
 /// Primary playback controller.
@@ -52,9 +60,9 @@ pub struct Player {
     audition_source: Arc<Mutex<Option<SamplesBuffer>>>,
     reporter: Option<Arc<Mutex<Reporter>>>,
     buffer_settings: Arc<Mutex<PlaybackBufferSettings>>,
-    reverb_settings: Arc<Mutex<ReverbSettings>>,
-    reverb_metrics: Arc<Mutex<ReverbMetrics>>,
-    reverb_reset: Arc<AtomicU64>,
+    effects: Arc<Mutex<Vec<AudioEffect>>>,
+    dsp_metrics: Arc<Mutex<DspChainMetrics>>,
+    effects_reset: Arc<AtomicU64>,
     buffering_done: Arc<AtomicBool>,
     last_chunk_ms: Arc<AtomicU64>,
     last_time_update_ms: Arc<AtomicU64>,
@@ -111,9 +119,11 @@ impl Player {
             prot,
             reporter: None,
             buffer_settings: Arc::new(Mutex::new(PlaybackBufferSettings::new(20.0))),
-            reverb_settings: Arc::new(Mutex::new(ReverbSettings::new(0.000001))),
-            reverb_metrics: Arc::new(Mutex::new(ReverbMetrics::default())),
-            reverb_reset: Arc::new(AtomicU64::new(0)),
+            effects: Arc::new(Mutex::new(vec![AudioEffect::ConvolutionReverb(
+                ConvolutionReverbEffect::new(0.000001),
+            )])),
+            dsp_metrics: Arc::new(Mutex::new(DspChainMetrics::default())),
+            effects_reset: Arc::new(AtomicU64::new(0)),
             buffering_done: Arc::new(AtomicBool::new(false)),
             last_chunk_ms: Arc::new(AtomicU64::new(0)),
             last_time_update_ms: Arc::new(AtomicU64::new(0)),
@@ -131,7 +141,7 @@ impl Player {
         self.impulse_response_override = Some(spec.clone());
         let mut prot = self.prot.lock().unwrap();
         prot.set_impulse_response_spec(spec);
-        self.request_reverb_reset();
+        self.request_effects_reset();
     }
 
     /// Parse and apply an impulse response spec string.
@@ -146,31 +156,52 @@ impl Player {
         self.impulse_response_tail_override = Some(tail_db);
         let mut prot = self.prot.lock().unwrap();
         prot.set_impulse_response_tail_db(tail_db);
-        self.request_reverb_reset();
+        self.request_effects_reset();
     }
 
     /// Enable or disable convolution reverb.
     pub fn set_reverb_enabled(&self, enabled: bool) {
-        let mut settings = self.reverb_settings.lock().unwrap();
-        settings.enabled = enabled;
-        settings.reset_pending = true;
+        let mut effects = self.effects.lock().unwrap();
+        if let Some(effect) = effects
+            .iter_mut()
+            .find_map(|effect| effect.as_convolution_reverb_mut())
+        {
+            effect.enabled = enabled;
+        }
     }
 
     /// Set the reverb wet/dry mix (clamped to `[0.0, 1.0]`).
     pub fn set_reverb_mix(&self, dry_wet: f32) {
-        let mut settings = self.reverb_settings.lock().unwrap();
-        settings.dry_wet = dry_wet.clamp(0.0, 1.0);
-        settings.reset_pending = true;
+        let mut effects = self.effects.lock().unwrap();
+        if let Some(effect) = effects
+            .iter_mut()
+            .find_map(|effect| effect.as_convolution_reverb_mut())
+        {
+            effect.dry_wet = dry_wet.clamp(0.0, 1.0);
+        }
     }
 
     /// Retrieve the current reverb settings snapshot.
-    pub fn get_reverb_settings(&self) -> ReverbSettings {
-        *self.reverb_settings.lock().unwrap()
+    pub fn get_reverb_settings(&self) -> ReverbSettingsSnapshot {
+        let effects = self.effects.lock().unwrap();
+        if let Some(effect) = effects
+            .iter()
+            .find_map(|effect| effect.as_convolution_reverb())
+        {
+            return ReverbSettingsSnapshot {
+                enabled: effect.enabled,
+                dry_wet: effect.dry_wet,
+            };
+        }
+        ReverbSettingsSnapshot {
+            enabled: false,
+            dry_wet: 0.0,
+        }
     }
 
-    /// Retrieve the latest reverb performance metrics.
-    pub fn get_reverb_metrics(&self) -> ReverbMetrics {
-        *self.reverb_metrics.lock().unwrap()
+    /// Retrieve the latest DSP chain performance metrics.
+    pub fn get_dsp_metrics(&self) -> DspChainMetrics {
+        *self.dsp_metrics.lock().unwrap()
     }
 
     /// Debug helper returning thread alive, state, and audio heard flags.
@@ -204,8 +235,8 @@ impl Player {
         (paused, empty, len)
     }
 
-    fn request_reverb_reset(&self) {
-        self.reverb_reset.fetch_add(1, Ordering::SeqCst);
+    fn request_effects_reset(&self) {
+        self.effects_reset.fetch_add(1, Ordering::SeqCst);
     }
 
     /// Configure the minimum buffered audio (ms) before playback starts.
@@ -270,15 +301,14 @@ impl Player {
         let duration = self.duration.clone();
         let prot = self.prot.clone();
         let buffer_settings = self.buffer_settings.clone();
-        let reverb_settings = self.reverb_settings.clone();
-        let reverb_metrics = self.reverb_metrics.clone();
-        let reverb_reset = self.reverb_reset.clone();
+        let effects = self.effects.clone();
+        let dsp_metrics = self.dsp_metrics.clone();
+        let effects_reset = self.effects_reset.clone();
 
         let audio_heard = self.audio_heard.clone();
         let volume = self.volume.clone();
         let sink_mutex = self.sink.clone();
         let audition_source_mutex = self.audition_source.clone();
-        let channels = 1.0 * self.info.channels as f64;
         let buffer_done_thread_flag = self.buffering_done.clone();
         let last_chunk_ms = self.last_chunk_ms.clone();
         let last_time_update_ms = self.last_time_update_ms.clone();
@@ -309,9 +339,9 @@ impl Player {
                 Some(abort.clone()),
                 start_time,
                 buffer_settings,
-                reverb_settings,
-                reverb_metrics,
-                reverb_reset,
+                effects,
+                dsp_metrics,
+                effects_reset,
             );
             let _stream = OutputStreamBuilder::open_default_stream().unwrap();
             let mixer = _stream.mixer().clone();
@@ -569,7 +599,7 @@ impl Player {
         *timestamp = ts;
         drop(timestamp);
 
-        self.request_reverb_reset();
+        self.request_effects_reset();
         self.kill_current();
         // self.stop.store(false, Ordering::SeqCst);
         self.initialize_thread(Some(ts));
@@ -684,7 +714,7 @@ impl Player {
         *timestamp = ts;
         drop(timestamp);
 
-        self.request_reverb_reset();
+        self.request_effects_reset();
         let state = self.state.lock().unwrap().clone();
 
         self.kill_current();
@@ -712,7 +742,7 @@ impl Player {
         }
         drop(prot);
 
-        self.request_reverb_reset();
+        self.request_effects_reset();
         // If stopped, return
         if self.thread_finished() {
             return;

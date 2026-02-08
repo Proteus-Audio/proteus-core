@@ -168,7 +168,10 @@ mod complex_fft {
             let mut new_segment: Vec<Complex<f32>> = Vec::new();
             for i in index..index + segment_size {
                 match buffer.get(i) {
-                    Some(sample) => new_segment.push(Complex { re: *sample, im: 0.0 }),
+                    Some(sample) => new_segment.push(Complex {
+                        re: *sample,
+                        im: 0.0,
+                    }),
                     None => continue,
                 }
             }
@@ -205,8 +208,8 @@ mod real_fft {
     use std::collections::VecDeque;
     use std::sync::Arc;
 
-    use rustfft::num_complex::Complex;
     use realfft::{ComplexToReal, RealFftPlanner, RealToComplex};
+    use rustfft::num_complex::Complex;
 
     /// Overlap-add convolver based on real FFTs.
     #[derive(Clone)]
@@ -353,18 +356,12 @@ mod real_fft {
         let mut index = 0;
         while index < buffer.len() {
             let mut time_domain = vec![0.0_f32; fft_size];
-            for (offset, sample) in buffer
-                .iter()
-                .skip(index)
-                .take(segment_size)
-                .enumerate()
-            {
+            for (offset, sample) in buffer.iter().skip(index).take(segment_size).enumerate() {
                 time_domain[offset] = *sample;
             }
 
             let mut spectrum = vec![Complex { re: 0.0, im: 0.0 }; spectrum_len];
-            r2c
-                .process(&mut time_domain, &mut spectrum)
+            r2c.process(&mut time_domain, &mut spectrum)
                 .expect("real FFT failed");
             segments.push(spectrum);
             index += segment_size;

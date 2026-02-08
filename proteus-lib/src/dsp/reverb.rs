@@ -20,6 +20,7 @@ const FFT_SIZE: usize = 8192;
 ///
 /// The processor keeps a `Convolver` per output channel and maintains
 /// scratch buffers to minimize per-call allocations.
+#[derive(Clone)]
 pub struct Reverb {
     channels: usize,
     dry_wet: f32,

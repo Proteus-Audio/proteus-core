@@ -27,7 +27,7 @@ pub struct Prot {
 }
 
 /// Location of an impulse response used for convolution reverb.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ImpulseResponseSpec {
     Attachment(String),
     FilePath(String),
@@ -400,8 +400,8 @@ fn parse_convolution_settings(
     };
 
     for effect in effects {
-        if let EffectSettings::ConvolutionReverbSettings(settings) = effect {
-            return Some(settings.clone());
+        if let EffectSettings::ConvolutionReverb(effect) = effect {
+            return Some(effect.settings.clone());
         }
     }
 

@@ -143,7 +143,7 @@ pub fn run(args: &ArgMatches, log_buffer: Arc<Mutex<VecDeque<LogLine>>>) -> Resu
             let playing = player.is_playing();
             let reverb_settings = player.get_reverb_settings();
             #[cfg(feature = "debug")]
-            let reverb_metrics = player.get_reverb_metrics();
+            let dsp_metrics = player.get_dsp_metrics();
             #[cfg(feature = "debug")]
             let (thread_exists, state, audio_heard) = player.debug_playback_state();
             #[cfg(feature = "debug")]
@@ -162,95 +162,25 @@ pub fn run(args: &ArgMatches, log_buffer: Arc<Mutex<VecDeque<LogLine>>>) -> Resu
                 #[cfg(feature = "debug")]
                 channels: player.info.channels,
                 #[cfg(feature = "debug")]
-                dsp_time_ms: reverb_metrics.dsp_time_ms,
+                dsp_time_ms: dsp_metrics.dsp_time_ms,
                 #[cfg(feature = "debug")]
-                audio_time_ms: reverb_metrics.audio_time_ms,
+                audio_time_ms: dsp_metrics.audio_time_ms,
                 #[cfg(feature = "debug")]
-                rt_factor: reverb_metrics.rt_factor,
+                rt_factor: dsp_metrics.rt_factor,
                 #[cfg(feature = "debug")]
-                avg_dsp_ms: reverb_metrics.avg_dsp_ms,
+                chain_ksps: dsp_metrics.chain_ksps,
                 #[cfg(feature = "debug")]
-                avg_audio_ms: reverb_metrics.avg_audio_ms,
+                avg_chain_ksps: dsp_metrics.avg_chain_ksps,
                 #[cfg(feature = "debug")]
-                avg_rt_factor: reverb_metrics.avg_rt_factor,
+                min_chain_ksps: dsp_metrics.min_chain_ksps,
                 #[cfg(feature = "debug")]
-                min_rt_factor: reverb_metrics.min_rt_factor,
+                max_chain_ksps: dsp_metrics.max_chain_ksps,
                 #[cfg(feature = "debug")]
-                max_rt_factor: reverb_metrics.max_rt_factor,
+                track_key_count: dsp_metrics.track_key_count,
                 #[cfg(feature = "debug")]
-                buffer_fill: reverb_metrics.buffer_fill,
+                finished_track_count: dsp_metrics.finished_track_count,
                 #[cfg(feature = "debug")]
-                avg_buffer_fill: reverb_metrics.avg_buffer_fill,
-                #[cfg(feature = "debug")]
-                min_buffer_fill: reverb_metrics.min_buffer_fill,
-                #[cfg(feature = "debug")]
-                max_buffer_fill: reverb_metrics.max_buffer_fill,
-                #[cfg(feature = "debug")]
-                chain_time_ms: reverb_metrics.chain_time_ms,
-                #[cfg(feature = "debug")]
-                avg_chain_time_ms: reverb_metrics.avg_chain_time_ms,
-                #[cfg(feature = "debug")]
-                min_chain_time_ms: reverb_metrics.min_chain_time_ms,
-                #[cfg(feature = "debug")]
-                max_chain_time_ms: reverb_metrics.max_chain_time_ms,
-                #[cfg(feature = "debug")]
-                out_interval_ms: reverb_metrics.out_interval_ms,
-                #[cfg(feature = "debug")]
-                avg_out_interval_ms: reverb_metrics.avg_out_interval_ms,
-                #[cfg(feature = "debug")]
-                min_out_interval_ms: reverb_metrics.min_out_interval_ms,
-                #[cfg(feature = "debug")]
-                max_out_interval_ms: reverb_metrics.max_out_interval_ms,
-                #[cfg(feature = "debug")]
-                wake_total: reverb_metrics.wake_total,
-                #[cfg(feature = "debug")]
-                wake_idle: reverb_metrics.wake_idle,
-                #[cfg(feature = "debug")]
-                dry_rms: reverb_metrics.dry_rms,
-                #[cfg(feature = "debug")]
-                wet_rms: reverb_metrics.wet_rms,
-                #[cfg(feature = "debug")]
-                mix_rms: reverb_metrics.mix_rms,
-                #[cfg(feature = "debug")]
-                dry_peak: reverb_metrics.dry_peak,
-                #[cfg(feature = "debug")]
-                wet_peak: reverb_metrics.wet_peak,
-                #[cfg(feature = "debug")]
-                mix_peak: reverb_metrics.mix_peak,
-                #[cfg(feature = "debug")]
-                wet_to_dry_db: reverb_metrics.wet_to_dry_db,
-                #[cfg(feature = "debug")]
-                reverb_in_len: reverb_metrics.reverb_in_len,
-                #[cfg(feature = "debug")]
-                reverb_out_len: reverb_metrics.reverb_out_len,
-                #[cfg(feature = "debug")]
-                reverb_reset_gen: reverb_metrics.reverb_reset_gen,
-                #[cfg(feature = "debug")]
-                reverb_block_samples: reverb_metrics.reverb_block_samples,
-                #[cfg(feature = "debug")]
-                reverb_underflow_events: reverb_metrics.reverb_underflow_events,
-                #[cfg(feature = "debug")]
-                reverb_underflow_samples: reverb_metrics.reverb_underflow_samples,
-                #[cfg(feature = "debug")]
-                reverb_pad_events: reverb_metrics.reverb_pad_events,
-                #[cfg(feature = "debug")]
-                reverb_pad_samples: reverb_metrics.reverb_pad_samples,
-                #[cfg(feature = "debug")]
-                reverb_partial_drain_events: reverb_metrics.reverb_partial_drain_events,
-                #[cfg(feature = "debug")]
-                append_gap_ms: reverb_metrics.append_gap_ms,
-                #[cfg(feature = "debug")]
-                avg_append_gap_ms: reverb_metrics.avg_append_gap_ms,
-                #[cfg(feature = "debug")]
-                min_append_gap_ms: reverb_metrics.min_append_gap_ms,
-                #[cfg(feature = "debug")]
-                max_append_gap_ms: reverb_metrics.max_append_gap_ms,
-                #[cfg(feature = "debug")]
-                track_key_count: reverb_metrics.track_key_count,
-                #[cfg(feature = "debug")]
-                finished_track_count: reverb_metrics.finished_track_count,
-                #[cfg(feature = "debug")]
-                prot_key_count: reverb_metrics.prot_key_count,
+                prot_key_count: dsp_metrics.prot_key_count,
                 #[cfg(feature = "debug")]
                 thread_exists,
                 #[cfg(feature = "debug")]
