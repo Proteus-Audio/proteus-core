@@ -166,7 +166,10 @@ pub fn run(args: &ArgMatches, log_buffer: Arc<Mutex<VecDeque<LogLine>>>) -> Resu
             let duration = player.get_duration();
             let playing = player.is_playing();
             let effect_names = player.get_effect_names();
+            #[cfg(feature = "output-meter")]
             let levels = player.get_levels();
+            #[cfg(not(feature = "output-meter"))]
+            let levels: Vec<f32> = Vec::new();
             #[cfg(feature = "debug")]
             let dsp_metrics = player.get_dsp_metrics();
             #[cfg(feature = "debug")]

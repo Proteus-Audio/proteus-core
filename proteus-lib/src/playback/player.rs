@@ -2,6 +2,7 @@
 
 use rodio::buffer::SamplesBuffer;
 use rodio::{OutputStreamBuilder, Sink};
+use std::cell::Cell;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc::RecvTimeoutError, Arc, Mutex};
 use std::thread;
@@ -40,6 +41,8 @@ pub struct ReverbSettingsSnapshot {
     pub enabled: bool,
     pub dry_wet: f32,
 }
+
+const OUTPUT_METER_REFRESH_HZ: f32 = 30.0;
 
 /// Primary playback controller.
 ///
@@ -107,6 +110,7 @@ impl Player {
         let sink: Arc<Mutex<Sink>> = Arc::new(Mutex::new(sink));
 
         let channels = info.channels as usize;
+        let sample_rate = info.sample_rate;
         let mut this = Self {
             info,
             finished_tracks: Arc::new(Mutex::new(Vec::new())),
@@ -129,7 +133,11 @@ impl Player {
             ])),
             dsp_metrics: Arc::new(Mutex::new(DspChainMetrics::default())),
             effects_reset: Arc::new(AtomicU64::new(0)),
-            output_meter: Arc::new(Mutex::new(OutputMeter::new(channels))),
+            output_meter: Arc::new(Mutex::new(OutputMeter::new(
+                channels,
+                sample_rate,
+                OUTPUT_METER_REFRESH_HZ,
+            ))),
             buffering_done: Arc::new(AtomicBool::new(false)),
             last_chunk_ms: Arc::new(AtomicU64::new(0)),
             last_time_update_ms: Arc::new(AtomicU64::new(0)),
@@ -250,6 +258,16 @@ impl Player {
     /// Retrieve the most recent per-channel peak levels.
     pub fn get_levels(&self) -> Vec<f32> {
         self.output_meter.lock().unwrap().levels()
+    }
+
+    /// Retrieve the most recent per-channel average levels.
+    pub fn get_levels_avg(&self) -> Vec<f32> {
+        self.output_meter.lock().unwrap().averages()
+    }
+
+    /// Set the output meter refresh rate (frames per second).
+    pub fn set_output_meter_refresh_hz(&self, hz: f32) {
+        self.output_meter.lock().unwrap().set_refresh_hz(hz);
     }
 
     /// Debug helper returning thread alive, state, and audio heard flags.
@@ -489,6 +507,7 @@ impl Player {
             timer.start();
             drop(timer);
 
+            let last_meter_time = Cell::new(0.0_f64);
             let update_chunk_lengths = || {
                 if abort.load(Ordering::SeqCst) {
                     return;
@@ -500,10 +519,6 @@ impl Player {
                 let mut timer = timer_mut.lock().unwrap();
                 last_time_update_ms.store(now_ms(), Ordering::Relaxed);
                 let sink = sink_mutex.lock().unwrap();
-                {
-                    let mut meter = output_meter.lock().unwrap();
-                    meter.update_from_sink_len(sink.len());
-                }
                 if !buffering_done.load(Ordering::Relaxed) {
                     // Check how many chunks have been played (chunk_lengths.len() - sink.len())
                     // since the last time this function was called and add that to time_passed.
@@ -522,7 +537,15 @@ impl Player {
                     timer.un_pause();
                 }
 
-                *time_passed_unlocked = *time_chunks_passed + timer.get_time().as_secs_f64();
+                let current_audio_time = *time_chunks_passed + timer.get_time().as_secs_f64();
+                let delta = (current_audio_time - last_meter_time.get()).max(0.0);
+                last_meter_time.set(current_audio_time);
+                {
+                    let mut meter = output_meter.lock().unwrap();
+                    meter.advance(delta);
+                }
+
+                *time_passed_unlocked = current_audio_time;
 
                 drop(sink);
                 drop(chunk_lengths);

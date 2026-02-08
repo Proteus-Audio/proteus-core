@@ -59,60 +59,75 @@ pub fn draw_status(
         f.render_widget(controls, chunks[1]);
 
         let status_area = chunks[2];
-        let meter_mode = pick_meter_mode(status_area.width, status_area.height);
-        match meter_mode {
-            MeterMode::Hidden => {
-                let status_widget = Paragraph::new(status.text.as_str())
-                    .style(
-                        Style::default()
-                            .fg(Color::Green)
-                            .add_modifier(Modifier::BOLD),
-                    )
-                    .block(Block::default().borders(Borders::ALL).title("Playback"));
-                f.render_widget(status_widget, status_area);
+        #[cfg(feature = "output-meter")]
+        {
+            let meter_mode = pick_meter_mode(status_area.width, status_area.height);
+            match meter_mode {
+                MeterMode::Hidden => {
+                    let status_widget = Paragraph::new(status.text.as_str())
+                        .style(
+                            Style::default()
+                                .fg(Color::Green)
+                                .add_modifier(Modifier::BOLD),
+                        )
+                        .block(Block::default().borders(Borders::ALL).title("Playback"));
+                    f.render_widget(status_widget, status_area);
+                }
+                MeterMode::Vertical => {
+                    let cols = Layout::default()
+                        .direction(Direction::Horizontal)
+                        .constraints([Constraint::Min(0), Constraint::Length(10)])
+                        .split(status_area);
+
+                    let status_widget = Paragraph::new(status.text.as_str())
+                        .style(
+                            Style::default()
+                                .fg(Color::Green)
+                                .add_modifier(Modifier::BOLD),
+                        )
+                        .block(Block::default().borders(Borders::ALL).title("Playback"));
+                    f.render_widget(status_widget, cols[0]);
+
+                    let meter_text = vertical_meter_text(levels, cols[1].height.saturating_sub(2));
+                    let meter_widget = Paragraph::new(meter_text)
+                        .style(Style::default().fg(Color::Cyan))
+                        .block(Block::default().borders(Borders::ALL).title("Levels"));
+                    f.render_widget(meter_widget, cols[1]);
+                }
+                MeterMode::Horizontal => {
+                    let rows = Layout::default()
+                        .direction(Direction::Vertical)
+                        .constraints([Constraint::Min(0), Constraint::Length(4)])
+                        .split(status_area);
+
+                    let status_widget = Paragraph::new(status.text.as_str())
+                        .style(
+                            Style::default()
+                                .fg(Color::Green)
+                                .add_modifier(Modifier::BOLD),
+                        )
+                        .block(Block::default().borders(Borders::ALL).title("Playback"));
+                    f.render_widget(status_widget, rows[0]);
+
+                    let meter_text = horizontal_meter_text(levels, rows[1].width.saturating_sub(2));
+                    let meter_widget = Paragraph::new(meter_text)
+                        .style(Style::default().fg(Color::Cyan))
+                        .block(Block::default().borders(Borders::ALL).title("Levels"));
+                    f.render_widget(meter_widget, rows[1]);
+                }
             }
-            MeterMode::Vertical => {
-                let cols = Layout::default()
-                    .direction(Direction::Horizontal)
-                    .constraints([Constraint::Min(0), Constraint::Length(10)])
-                    .split(status_area);
-
-                let status_widget = Paragraph::new(status.text.as_str())
-                    .style(
-                        Style::default()
-                            .fg(Color::Green)
-                            .add_modifier(Modifier::BOLD),
-                    )
-                    .block(Block::default().borders(Borders::ALL).title("Playback"));
-                f.render_widget(status_widget, cols[0]);
-
-                let meter_text = vertical_meter_text(levels, cols[1].height.saturating_sub(2));
-                let meter_widget = Paragraph::new(meter_text)
-                    .style(Style::default().fg(Color::Cyan))
-                    .block(Block::default().borders(Borders::ALL).title("Levels"));
-                f.render_widget(meter_widget, cols[1]);
-            }
-            MeterMode::Horizontal => {
-                let rows = Layout::default()
-                    .direction(Direction::Vertical)
-                    .constraints([Constraint::Min(0), Constraint::Length(4)])
-                    .split(status_area);
-
-                let status_widget = Paragraph::new(status.text.as_str())
-                    .style(
-                        Style::default()
-                            .fg(Color::Green)
-                            .add_modifier(Modifier::BOLD),
-                    )
-                    .block(Block::default().borders(Borders::ALL).title("Playback"));
-                f.render_widget(status_widget, rows[0]);
-
-                let meter_text = horizontal_meter_text(levels, rows[1].width.saturating_sub(2));
-                let meter_widget = Paragraph::new(meter_text)
-                    .style(Style::default().fg(Color::Cyan))
-                    .block(Block::default().borders(Borders::ALL).title("Levels"));
-                f.render_widget(meter_widget, rows[1]);
-            }
+        }
+        #[cfg(not(feature = "output-meter"))]
+        {
+            let _ = levels;
+            let status_widget = Paragraph::new(status.text.as_str())
+                .style(
+                    Style::default()
+                        .fg(Color::Green)
+                        .add_modifier(Modifier::BOLD),
+                )
+                .block(Block::default().borders(Borders::ALL).title("Playback"));
+            f.render_widget(status_widget, status_area);
         }
 
         let log_height = chunks[3].height.saturating_sub(2) as usize;
@@ -145,6 +160,7 @@ pub fn draw_status(
     });
 }
 
+#[cfg(feature = "output-meter")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum MeterMode {
     Hidden,
@@ -152,6 +168,7 @@ enum MeterMode {
     Horizontal,
 }
 
+#[cfg(feature = "output-meter")]
 fn pick_meter_mode(width: u16, height: u16) -> MeterMode {
     if width >= 70 && height >= 8 {
         return MeterMode::Vertical;
@@ -162,6 +179,7 @@ fn pick_meter_mode(width: u16, height: u16) -> MeterMode {
     MeterMode::Hidden
 }
 
+#[cfg(feature = "output-meter")]
 fn vertical_meter_text(levels: &[f32], height: u16) -> Text<'static> {
     let display = pick_levels(levels);
     let mut lines: Vec<Line> = Vec::new();
@@ -181,6 +199,7 @@ fn vertical_meter_text(levels: &[f32], height: u16) -> Text<'static> {
     Text::from(lines)
 }
 
+#[cfg(feature = "output-meter")]
 fn horizontal_meter_text(levels: &[f32], width: u16) -> Text<'static> {
     let display = pick_levels(levels);
     let bar_width = width.saturating_sub(6).max(4) as usize;
@@ -199,6 +218,7 @@ fn horizontal_meter_text(levels: &[f32], width: u16) -> Text<'static> {
     Text::from(lines)
 }
 
+#[cfg(feature = "output-meter")]
 fn render_bar(level: f32, width: usize) -> String {
     let clamped = level.clamp(0.0, 1.0);
     let filled = (clamped * width as f32).round() as usize;
@@ -209,12 +229,14 @@ fn render_bar(level: f32, width: usize) -> String {
     out
 }
 
+#[cfg(feature = "output-meter")]
 struct LevelDisplay {
     left: f32,
     right: f32,
     has_right: bool,
 }
 
+#[cfg(feature = "output-meter")]
 fn pick_levels(levels: &[f32]) -> LevelDisplay {
     if levels.len() >= 2 {
         LevelDisplay {
