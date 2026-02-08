@@ -221,6 +221,18 @@ impl Player {
         }
     }
 
+    /// Snapshot the active effect chain names.
+    pub fn get_effect_names(&self) -> Vec<String> {
+        let effects = self.effects.lock().unwrap();
+        effects
+            .iter()
+            .map(|effect| match effect {
+                AudioEffect::BasicReverb(_) => "BasicReverb".to_string(),
+                AudioEffect::ConvolutionReverb(_) => "ConvolutionReverb".to_string(),
+            })
+            .collect()
+    }
+
     /// Replace the active DSP effects chain.
     pub fn set_effects(&self, effects: Vec<AudioEffect>) {
         let mut guard = self.effects.lock().unwrap();

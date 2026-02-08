@@ -159,7 +159,7 @@ pub fn run(args: &ArgMatches, log_buffer: Arc<Mutex<VecDeque<LogLine>>>) -> Resu
             let time = player.get_time();
             let duration = player.get_duration();
             let playing = player.is_playing();
-            let reverb_settings = player.get_reverb_settings();
+            let effect_names = player.get_effect_names();
             #[cfg(feature = "debug")]
             let dsp_metrics = player.get_dsp_metrics();
             #[cfg(feature = "debug")]
@@ -173,8 +173,7 @@ pub fn run(args: &ArgMatches, log_buffer: Arc<Mutex<VecDeque<LogLine>>>) -> Resu
                 time,
                 duration,
                 playing,
-                reverb_state: reverb_settings.enabled,
-                reverb_mix: reverb_settings.dry_wet,
+                effects: effect_names,
                 #[cfg(feature = "debug")]
                 sample_rate: player.info.sample_rate,
                 #[cfg(feature = "debug")]

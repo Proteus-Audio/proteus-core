@@ -16,8 +16,7 @@ pub struct StatusArgs {
     pub time: f64,
     pub duration: f64,
     pub playing: bool,
-    pub reverb_state: bool,
-    pub reverb_mix: f32,
+    pub effects: Vec<String>,
     #[cfg(feature = "debug")]
     pub sample_rate: u32,
     #[cfg(feature = "debug")]
@@ -69,17 +68,20 @@ pub fn status_text(args: StatusArgs) -> StatusSnapshot {
     } else {
         0.0
     };
-    let reverb_state = if args.reverb_state { "on" } else { "off" };
+    let effects_label = if args.effects.is_empty() {
+        "none".to_string()
+    } else {
+        args.effects.join(", ")
+    };
 
     #[cfg(feature = "debug")]
     let text = format!(
-        "{}   {} / {}   ({:>5.1}%)\nReverb: {} | mix: {:.2}\nDSP: {:>6.2}ms audio {:>6.2}ms ({:>4.2}x)\nCHAIN: {:>6.2} ksps (avg {:>6.2} min {:>6.2} max {:>6.2})\nTRK: {}/{} (buf {})\nDBG: thread={} state={} heard={} buf_done={} sink_len={}",
+        "{}   {} / {}   ({:>5.1}%)\nEffects: {}\nDSP: {:>6.2}ms audio {:>6.2}ms ({:>4.2}x)\nCHAIN: {:>6.2} ksps (avg {:>6.2} min {:>6.2} max {:>6.2})\nTRK: {}/{} (buf {})\nDBG: thread={} state={} heard={} buf_done={} sink_len={}",
         state,
         current,
         total,
         percent,
-        reverb_state,
-        args.reverb_mix,
+        effects_label,
         args.dsp_time_ms,
         args.audio_time_ms,
         args.rt_factor,
@@ -99,8 +101,8 @@ pub fn status_text(args: StatusArgs) -> StatusSnapshot {
 
     #[cfg(not(feature = "debug"))]
     let text = format!(
-        "{}   {} / {}   ({:>5.1}%)\nReverb: {} | mix: {:.2}",
-        state, current, total, percent, reverb_state, args.reverb_mix
+        "{}   {} / {}   ({:>5.1}%)\nEffects: {}",
+        state, current, total, percent, effects_label
     );
 
     StatusSnapshot { text }
