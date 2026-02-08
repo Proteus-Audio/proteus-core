@@ -214,8 +214,7 @@ mod real_fft {
     use std::collections::VecDeque;
     use std::sync::Arc;
 
-    use realfft::{ComplexToReal, RealFftPlanner, RealToComplex};
-    use rustfft::num_complex::Complex;
+    use realfft::{num_complex::Complex, ComplexToReal, RealFftPlanner, RealToComplex};
 
     /// Overlap-add convolver based on real FFTs.
     #[derive(Clone)]

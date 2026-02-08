@@ -21,7 +21,7 @@ log = "0.4.20"
 matroska = "0.26.0"
 rand = "0.8.5"
 rodio = "0.21.1"
-rustfft = "6.1.0"
+rustfft = { version = "6.1.0", optional = true }
 realfft = { version = "3.3.0", optional = true }
 serde_json = "1.0.108"
 serde = { version = "1.0.197", features = ["derive"] }
@@ -30,7 +30,7 @@ symphonia = "0.5.5"
 [features]
 default = ["real-fft"]
 real-fft = ["realfft"]
-complex-fft = []
+complex-fft = ["rustfft"]
 bench = []
 debug = []
 output-meter = []
