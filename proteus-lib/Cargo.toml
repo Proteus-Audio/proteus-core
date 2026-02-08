@@ -28,7 +28,9 @@ serde = { version = "1.0.197", features = ["derive"] }
 symphonia = "0.5.5"
 
 [features]
+default = ["real-fft"]
 real-fft = ["realfft"]
+complex-fft = []
 bench = []
 debug = []
 output-meter = []

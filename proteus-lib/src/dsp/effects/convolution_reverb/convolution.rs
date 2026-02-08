@@ -4,7 +4,13 @@
 //! - `complex_fft` (default): full complex FFT using `rustfft`.
 //! - `real_fft` (feature `real-fft`): real FFT using `realfft`.
 
-#[cfg(not(feature = "real-fft"))]
+#[cfg(all(feature = "real-fft", feature = "complex-fft"))]
+compile_error!("Enable only one of: real-fft or complex-fft.");
+
+#[cfg(not(any(feature = "real-fft", feature = "complex-fft")))]
+compile_error!("Enable one of: real-fft or complex-fft.");
+
+#[cfg(feature = "complex-fft")]
 mod complex_fft {
     use std::collections::VecDeque;
     use std::sync::Arc;
@@ -382,7 +388,7 @@ mod real_fft {
     }
 }
 
-#[cfg(not(feature = "real-fft"))]
+#[cfg(feature = "complex-fft")]
 pub use complex_fft::Convolver;
 
 #[cfg(feature = "real-fft")]
