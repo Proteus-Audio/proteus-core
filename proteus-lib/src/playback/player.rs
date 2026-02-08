@@ -221,6 +221,13 @@ impl Player {
         }
     }
 
+    /// Replace the active DSP effects chain.
+    pub fn set_effects(&self, effects: Vec<AudioEffect>) {
+        let mut guard = self.effects.lock().unwrap();
+        *guard = effects;
+        self.request_effects_reset();
+    }
+
     /// Retrieve the latest DSP chain performance metrics.
     pub fn get_dsp_metrics(&self) -> DspChainMetrics {
         *self.dsp_metrics.lock().unwrap()

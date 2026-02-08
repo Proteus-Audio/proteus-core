@@ -42,6 +42,12 @@ pub fn build_cli() -> Command {
                 .help("The reverb wet/dry mix (0.0-1.0)"),
         )
         .arg(
+            Arg::new("effects-json")
+                .long("effects-json")
+                .value_name("PATH")
+                .help("Path to JSON file containing Vec<AudioEffect>"),
+        )
+        .arg(
             Arg::new("bench-dsp")
                 .long("bench-dsp")
                 .action(ArgAction::SetTrue)
@@ -185,6 +191,14 @@ pub fn build_cli() -> Command {
                         .long("limited")
                         .action(ArgAction::SetTrue)
                         .help("Only process a single channel"),
+                ),
+        )
+        .subcommand(
+            Command::new("create")
+                .about("Emit default JSON payloads")
+                .subcommand(
+                    Command::new("effects-json")
+                        .about("Print a default Vec<AudioEffect> JSON payload"),
                 ),
         )
 }

@@ -2,6 +2,7 @@
 
 use std::{
     collections::VecDeque,
+    fs,
     io,
     sync::{Arc, Mutex},
     thread::sleep,
@@ -14,6 +15,7 @@ use crossterm::{
     terminal::{self, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use log::{error, info};
+use proteus_lib::dsp::effects::{AudioEffect, BasicReverbEffect, ConvolutionReverbEffect};
 use proteus_lib::playback::player;
 use ratatui::{backend::CrosstermBackend, Terminal};
 use serde::Serialize;
@@ -38,6 +40,13 @@ pub fn run(args: &ArgMatches, log_buffer: Arc<Mutex<VecDeque<LogLine>>>) -> Resu
                 let limited = sub_args.get_flag("limited");
                 run_peaks(file_path, limited)
             }
+            "create" => match sub_args.subcommand() {
+                Some(("effects-json", _)) => run_create_effects_json(),
+                _ => {
+                    error!("Unknown create subcommand");
+                    -1
+                }
+            },
             _ => {
                 error!("Unknown subcommand");
                 -1
@@ -105,6 +114,15 @@ pub fn run(args: &ArgMatches, log_buffer: Arc<Mutex<VecDeque<LogLine>>>) -> Resu
         .parse::<f32>()
         .unwrap();
     player.set_track_eos_ms(track_eos_ms);
+    if let Some(path) = args.get_one::<String>("effects-json") {
+        match load_effects_json(path) {
+            Ok(effects) => player.set_effects(effects),
+            Err(err) => {
+                error!("Failed to load effects json: {}", err);
+                return Ok(-1);
+            }
+        }
+    }
     if let Some(impulse_response) = args.get_one::<String>("impulse-response") {
         player.set_impulse_response_from_string(impulse_response);
     }
@@ -250,6 +268,33 @@ fn run_peaks(file_path: &str, limited: bool) -> i32 {
             -1
         }
     }
+}
+
+fn run_create_effects_json() -> i32 {
+    let effects = default_effects_chain();
+    match serde_json::to_string_pretty(&effects) {
+        Ok(json) => {
+            println!("{}", json);
+            0
+        }
+        Err(err) => {
+            error!("Failed to serialize effects: {}", err);
+            -1
+        }
+    }
+}
+
+fn default_effects_chain() -> Vec<AudioEffect> {
+    vec![
+        AudioEffect::ConvolutionReverb(ConvolutionReverbEffect::default()),
+        AudioEffect::BasicReverb(BasicReverbEffect::default()),
+    ]
+}
+
+fn load_effects_json(path: &str) -> std::result::Result<Vec<AudioEffect>, String> {
+    let raw = fs::read_to_string(path)
+        .map_err(|err| format!("failed to read {}: {}", path, err))?;
+    serde_json::from_str(&raw).map_err(|err| format!("failed to parse json: {}", err))
 }
 
 fn run_info(file_path: &str, print: bool) -> i32 {

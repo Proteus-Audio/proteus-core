@@ -23,6 +23,7 @@
 - `cargo fmt` formats Rust sources.
 - `cargo clippy -- -D warnings` runs the lints used by this codebase.
 - `cargo test` runs tests (none are currently defined today).
+- `cargo check` should pass before finishing any task.
 
 ## Coding Style & Naming Conventions
 - Follow Rust 2021 conventions: `snake_case` for functions/modules, `CamelCase` for types, `SCREAMING_SNAKE_CASE` for constants.
