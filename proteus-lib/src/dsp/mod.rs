@@ -1,6 +1,3 @@
-//! DSP components: convolution, effects, reverb, and impulse-response utilities.
+//! DSP components: effects, mixing, and reverb utilities.
 
-pub mod convolution;
 pub mod effects;
-pub mod impulse_response;
-pub mod reverb;

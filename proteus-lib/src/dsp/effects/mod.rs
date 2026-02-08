@@ -2,7 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::container::prot::ImpulseResponseSpec;
+use crate::dsp::effects::convolution_reverb::ImpulseResponseSpec;
 
 pub mod convolution_reverb;
 pub mod basic_reverb;

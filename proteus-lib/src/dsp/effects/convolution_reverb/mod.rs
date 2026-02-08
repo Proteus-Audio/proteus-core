@@ -5,13 +5,15 @@ use std::path::{Path, PathBuf};
 use log::{info, warn};
 use serde::{Deserialize, Serialize};
 
-use crate::container::prot::{parse_impulse_response_string, ImpulseResponseSpec};
-use crate::dsp::impulse_response::{
-    load_impulse_response_from_file_with_tail, load_impulse_response_from_prot_attachment_with_tail,
-};
-use crate::dsp::reverb::Reverb;
-
 use super::EffectContext;
+
+pub mod convolution;
+pub mod impulse_response;
+pub mod reverb;
+mod spec;
+
+pub use spec::{parse_impulse_response_string, ImpulseResponseSpec};
+pub(crate) use spec::{parse_impulse_response_spec, parse_impulse_response_tail_db};
 
 const DEFAULT_DRY_WET: f32 = 0.000001;
 const DEFAULT_TAIL_DB: f32 = -60.0;
@@ -193,7 +195,7 @@ struct ResolvedConfig {
 
 #[derive(Clone)]
 struct ConvolutionReverbState {
-    reverb: Reverb,
+    reverb: reverb::Reverb,
     input_buffer: Vec<f32>,
     output_buffer: Vec<f32>,
     block_out: Vec<f32>,
@@ -201,7 +203,7 @@ struct ConvolutionReverbState {
 }
 
 impl ConvolutionReverbState {
-    fn new(mut reverb: Reverb) -> Self {
+    fn new(mut reverb: reverb::Reverb) -> Self {
         info!("Using Convolution Reverb!");
         let block_samples = reverb.block_size_samples();
         reverb.set_dry_wet(DEFAULT_DRY_WET);
@@ -273,8 +275,13 @@ fn build_reverb_with_impulse_response(
     impulse_spec: Option<ImpulseResponseSpec>,
     container_path: Option<&str>,
     tail_db: f32,
-) -> Option<Reverb> {
+) -> Option<reverb::Reverb> {
     let impulse_spec = impulse_spec?;
+
+    use self::impulse_response::{
+        load_impulse_response_from_file_with_tail,
+        load_impulse_response_from_prot_attachment_with_tail,
+    };
 
     let result = match impulse_spec {
         ImpulseResponseSpec::Attachment(name) => container_path
@@ -319,7 +326,7 @@ fn build_reverb_with_impulse_response(
     };
 
     match result {
-        Ok(impulse_response) => Some(Reverb::new_with_impulse_response(
+        Ok(impulse_response) => Some(reverb::Reverb::new_with_impulse_response(
             channels,
             dry_wet,
             &impulse_response,

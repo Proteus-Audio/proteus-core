@@ -7,8 +7,8 @@ use std::time::Instant;
 
 use log::debug;
 
-use crate::dsp::convolution::Convolver;
-use crate::dsp::impulse_response::ImpulseResponse;
+use super::convolution::Convolver;
+use super::impulse_response::ImpulseResponse;
 
 const IDENTITY_IMPULSE_RESPONSE: &[f32] = &[1.0];
 

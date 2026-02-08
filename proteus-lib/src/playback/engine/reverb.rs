@@ -10,11 +10,11 @@ use std::time::Instant;
 use log::info;
 use log::warn;
 
-use crate::container::prot::ImpulseResponseSpec;
-use crate::dsp::impulse_response::{
+use crate::dsp::effects::convolution_reverb::impulse_response::{
     load_impulse_response_from_file_with_tail, load_impulse_response_from_prot_attachment_with_tail,
 };
-use crate::dsp::reverb::Reverb;
+use crate::dsp::effects::convolution_reverb::reverb::Reverb;
+use crate::dsp::effects::convolution_reverb::ImpulseResponseSpec;
 
 use super::state::{ReverbMetrics, ReverbSettings};
 

@@ -10,7 +10,10 @@ use std::time::{Duration, Instant};
 use log::{info, warn};
 
 use crate::audio::samples::clone_samples_buffer;
-use crate::container::prot::{parse_impulse_response_string, ImpulseResponseSpec, Prot};
+use crate::container::prot::Prot;
+use crate::dsp::effects::convolution_reverb::{
+    parse_impulse_response_string, ImpulseResponseSpec,
+};
 use crate::diagnostics::reporter::{Report, Reporter};
 use crate::tools::timer;
 use crate::{

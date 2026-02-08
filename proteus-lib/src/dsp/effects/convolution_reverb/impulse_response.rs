@@ -90,7 +90,7 @@ impl From<matroska::Error> for ImpulseResponseError {
 ///
 /// # Example
 /// ```no_run
-/// use proteus_lib::dsp::impulse_response::load_impulse_response_from_file;
+/// use proteus_lib::dsp::effects::convolution_reverb::impulse_response::load_impulse_response_from_file;
 ///
 /// let ir = load_impulse_response_from_file("ir.wav").unwrap();
 /// assert!(ir.channel_count() > 0);

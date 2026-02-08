@@ -2,7 +2,7 @@
 
 use rand::Rng;
 
-use crate::dsp::convolution::Convolver;
+use crate::dsp::effects::convolution_reverb::convolution::Convolver;
 
 /// Configuration parameters for a convolution benchmark run.
 #[derive(Debug, Clone, Copy)]
