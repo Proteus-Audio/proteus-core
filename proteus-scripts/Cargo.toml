@@ -5,4 +5,5 @@ edition = "2024"
 publish = false
 
 [dependencies]
+hound = "3.5"
 proteus-lib = { path = "../proteus-lib" }
