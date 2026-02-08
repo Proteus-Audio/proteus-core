@@ -166,6 +166,7 @@ pub fn run(args: &ArgMatches, log_buffer: Arc<Mutex<VecDeque<LogLine>>>) -> Resu
             let duration = player.get_duration();
             let playing = player.is_playing();
             let effect_names = player.get_effect_names();
+            let levels = player.get_levels();
             #[cfg(feature = "debug")]
             let dsp_metrics = player.get_dsp_metrics();
             #[cfg(feature = "debug")]
@@ -215,7 +216,7 @@ pub fn run(args: &ArgMatches, log_buffer: Arc<Mutex<VecDeque<LogLine>>>) -> Resu
                 #[cfg(feature = "debug")]
                 sink_len,
             });
-            ui::draw_status(term, &status, &log_lines);
+            ui::draw_status(term, &status, &log_lines, &levels);
         }
 
         if !controls::handle_key_event(&mut player) {

@@ -19,6 +19,7 @@ pub fn draw_status(
     terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>,
     status: &StatusSnapshot,
     log_lines: &[LogLine],
+    levels: &[f32],
 ) {
     // Render the controls + status panels.
     let _ = terminal.draw(|f| {
@@ -57,14 +58,62 @@ pub fn draw_status(
         .style(Style::default().fg(Color::Blue));
         f.render_widget(controls, chunks[1]);
 
-        let status_widget = Paragraph::new(status.text.as_str())
-            .style(
-                Style::default()
-                    .fg(Color::Green)
-                    .add_modifier(Modifier::BOLD),
-            )
-            .block(Block::default().borders(Borders::ALL).title("Playback"));
-        f.render_widget(status_widget, chunks[2]);
+        let status_area = chunks[2];
+        let meter_mode = pick_meter_mode(status_area.width, status_area.height);
+        match meter_mode {
+            MeterMode::Hidden => {
+                let status_widget = Paragraph::new(status.text.as_str())
+                    .style(
+                        Style::default()
+                            .fg(Color::Green)
+                            .add_modifier(Modifier::BOLD),
+                    )
+                    .block(Block::default().borders(Borders::ALL).title("Playback"));
+                f.render_widget(status_widget, status_area);
+            }
+            MeterMode::Vertical => {
+                let cols = Layout::default()
+                    .direction(Direction::Horizontal)
+                    .constraints([Constraint::Min(0), Constraint::Length(10)])
+                    .split(status_area);
+
+                let status_widget = Paragraph::new(status.text.as_str())
+                    .style(
+                        Style::default()
+                            .fg(Color::Green)
+                            .add_modifier(Modifier::BOLD),
+                    )
+                    .block(Block::default().borders(Borders::ALL).title("Playback"));
+                f.render_widget(status_widget, cols[0]);
+
+                let meter_text = vertical_meter_text(levels, cols[1].height.saturating_sub(2));
+                let meter_widget = Paragraph::new(meter_text)
+                    .style(Style::default().fg(Color::Cyan))
+                    .block(Block::default().borders(Borders::ALL).title("Levels"));
+                f.render_widget(meter_widget, cols[1]);
+            }
+            MeterMode::Horizontal => {
+                let rows = Layout::default()
+                    .direction(Direction::Vertical)
+                    .constraints([Constraint::Min(0), Constraint::Length(4)])
+                    .split(status_area);
+
+                let status_widget = Paragraph::new(status.text.as_str())
+                    .style(
+                        Style::default()
+                            .fg(Color::Green)
+                            .add_modifier(Modifier::BOLD),
+                    )
+                    .block(Block::default().borders(Borders::ALL).title("Playback"));
+                f.render_widget(status_widget, rows[0]);
+
+                let meter_text = horizontal_meter_text(levels, rows[1].width.saturating_sub(2));
+                let meter_widget = Paragraph::new(meter_text)
+                    .style(Style::default().fg(Color::Cyan))
+                    .block(Block::default().borders(Borders::ALL).title("Levels"));
+                f.render_widget(meter_widget, rows[1]);
+            }
+        }
 
         let log_height = chunks[3].height.saturating_sub(2) as usize;
         let start = log_lines.len().saturating_sub(log_height);
@@ -94,6 +143,98 @@ pub fn draw_status(
             Paragraph::new(log_text).block(Block::default().borders(Borders::ALL).title("Logs"));
         f.render_widget(log_widget, chunks[3]);
     });
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MeterMode {
+    Hidden,
+    Vertical,
+    Horizontal,
+}
+
+fn pick_meter_mode(width: u16, height: u16) -> MeterMode {
+    if width >= 70 && height >= 8 {
+        return MeterMode::Vertical;
+    }
+    if width >= 46 && height >= 6 {
+        return MeterMode::Horizontal;
+    }
+    MeterMode::Hidden
+}
+
+fn vertical_meter_text(levels: &[f32], height: u16) -> Text<'static> {
+    let display = pick_levels(levels);
+    let mut lines: Vec<Line> = Vec::new();
+    let h = height.max(1) as usize;
+    let l_fill = (display.left * h as f32).ceil() as usize;
+    let r_fill = (display.right * h as f32).ceil() as usize;
+
+    for row in (0..h).rev() {
+        let l_on = row < l_fill;
+        let r_on = row < r_fill;
+        let line = format!(" {} {}", if l_on { "#" } else { " " }, if r_on { "#" } else { " " });
+        lines.push(Line::from(line));
+    }
+
+    let label = if display.has_right { " L R" } else { "  M" };
+    lines.push(Line::from(label));
+    Text::from(lines)
+}
+
+fn horizontal_meter_text(levels: &[f32], width: u16) -> Text<'static> {
+    let display = pick_levels(levels);
+    let bar_width = width.saturating_sub(6).max(4) as usize;
+
+    let left = render_bar(display.left, bar_width);
+    let mut lines = vec![Line::from(format!("L [{}]", left))];
+
+    if display.has_right {
+        let right = render_bar(display.right, bar_width);
+        lines.push(Line::from(format!("R [{}]", right)));
+    } else {
+        let mono = render_bar(display.left, bar_width);
+        lines.push(Line::from(format!("M [{}]", mono)));
+    }
+
+    Text::from(lines)
+}
+
+fn render_bar(level: f32, width: usize) -> String {
+    let clamped = level.clamp(0.0, 1.0);
+    let filled = (clamped * width as f32).round() as usize;
+    let mut out = String::with_capacity(width);
+    for i in 0..width {
+        out.push(if i < filled { '#' } else { ' ' });
+    }
+    out
+}
+
+struct LevelDisplay {
+    left: f32,
+    right: f32,
+    has_right: bool,
+}
+
+fn pick_levels(levels: &[f32]) -> LevelDisplay {
+    if levels.len() >= 2 {
+        LevelDisplay {
+            left: levels[0].clamp(0.0, 1.0),
+            right: levels[1].clamp(0.0, 1.0),
+            has_right: true,
+        }
+    } else if let Some(value) = levels.first().copied() {
+        LevelDisplay {
+            left: value.clamp(0.0, 1.0),
+            right: 0.0,
+            has_right: false,
+        }
+    } else {
+        LevelDisplay {
+            left: 0.0,
+            right: 0.0,
+            has_right: false,
+        }
+    }
 }
 
 /// Render the TUI frame for container info.
