@@ -9,6 +9,8 @@ pub mod basic_reverb;
 pub mod distortion;
 pub mod high_pass;
 pub mod low_pass;
+pub mod compressor;
+pub mod limiter;
 mod biquad;
 
 pub use basic_reverb::{BasicReverbEffect, BasicReverbSettings};
@@ -16,6 +18,8 @@ pub use convolution_reverb::{ConvolutionReverbEffect, ConvolutionReverbSettings}
 pub use distortion::{DistortionEffect, DistortionSettings};
 pub use high_pass::{HighPassFilterEffect, HighPassFilterSettings};
 pub use low_pass::{LowPassFilterEffect, LowPassFilterSettings};
+pub use compressor::{CompressorEffect, CompressorSettings};
+pub use limiter::{LimiterEffect, LimiterSettings};
 
 /// Shared context for preparing and running DSP effects.
 #[derive(Debug, Clone)]
@@ -40,6 +44,10 @@ pub enum AudioEffect {
     HighPassFilter(HighPassFilterEffect),
     #[serde(rename = "DistortionSettings")]
     Distortion(DistortionEffect),
+    #[serde(rename = "CompressorSettings")]
+    Compressor(CompressorEffect),
+    #[serde(rename = "LimiterSettings")]
+    Limiter(LimiterEffect),
 }
 
 impl AudioEffect {
@@ -64,6 +72,8 @@ impl AudioEffect {
             AudioEffect::LowPassFilter(effect) => effect.process(samples, context, drain),
             AudioEffect::HighPassFilter(effect) => effect.process(samples, context, drain),
             AudioEffect::Distortion(effect) => effect.process(samples, context, drain),
+            AudioEffect::Compressor(effect) => effect.process(samples, context, drain),
+            AudioEffect::Limiter(effect) => effect.process(samples, context, drain),
         }
     }
 
@@ -75,6 +85,8 @@ impl AudioEffect {
             AudioEffect::LowPassFilter(effect) => effect.reset_state(),
             AudioEffect::HighPassFilter(effect) => effect.reset_state(),
             AudioEffect::Distortion(effect) => effect.reset_state(),
+            AudioEffect::Compressor(effect) => effect.reset_state(),
+            AudioEffect::Limiter(effect) => effect.reset_state(),
         }
     }
 

@@ -242,6 +242,8 @@ impl Player {
                 AudioEffect::LowPassFilter(_) => "LowPassFilter".to_string(),
                 AudioEffect::HighPassFilter(_) => "HighPassFilter".to_string(),
                 AudioEffect::Distortion(_) => "Distortion".to_string(),
+                AudioEffect::Compressor(_) => "Compressor".to_string(),
+                AudioEffect::Limiter(_) => "Limiter".to_string(),
             })
             .collect()
     }

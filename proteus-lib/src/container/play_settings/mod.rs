@@ -4,8 +4,8 @@ use log::{info, warn};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 pub use crate::dsp::effects::{
-    BasicReverbSettings, ConvolutionReverbSettings, DistortionSettings, HighPassFilterSettings,
-    LowPassFilterSettings,
+    BasicReverbSettings, CompressorSettings, ConvolutionReverbSettings, DistortionSettings,
+    HighPassFilterSettings, LimiterSettings, LowPassFilterSettings,
 };
 use crate::dsp::effects::AudioEffect;
 
