@@ -1,21 +1,31 @@
-//! Basic reverb effect powered by rodio's `reverb` source.
+//! Basic reverb effect using a simple feedback delay line.
 
-use std::collections::VecDeque;
-use std::time::Duration;
-
-use rodio::buffer::SamplesBuffer;
-use rodio::Source;
+use log::info;
 use serde::{Deserialize, Serialize};
 
 use super::EffectContext;
 
 const DEFAULT_DURATION_MS: u64 = 100;
+const MAX_AMPLITUDE: f32 = 0.8;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct BasicReverbSettings {
     pub duration_ms: u64,
     pub amplitude: f32,
+}
+
+impl BasicReverbSettings {
+    pub fn new(duration_ms: u64, amplitude: f32) -> Self {
+        Self {
+            duration_ms: duration_ms.clamp(0, u64::MAX),
+            amplitude: amplitude.clamp(0.0, MAX_AMPLITUDE),
+        }
+    }
+
+    fn amplitude(&self) -> f32 {
+        self.amplitude.clamp(0.0, MAX_AMPLITUDE)
+    }
 }
 
 impl Default for BasicReverbSettings {
@@ -27,7 +37,7 @@ impl Default for BasicReverbSettings {
     }
 }
 
-/// Basic rodio reverb effect (delay + mix).
+/// Basic reverb effect (feedback delay + mix).
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct BasicReverbEffect {
@@ -69,7 +79,7 @@ impl BasicReverbEffect {
         }
     }
 
-    /// Process interleaved samples through rodio's reverb.
+    /// Process interleaved samples through a feedback delay line.
     pub fn process(&mut self, samples: &[f32], context: &EffectContext, _drain: bool) -> Vec<f32> {
         self.ensure_state(context);
         if !self.enabled || self.mix <= 0.0 {
@@ -86,40 +96,20 @@ impl BasicReverbEffect {
         };
 
         let amplitude = if self.mix > 0.0 {
-            self.mix
+            self.mix.clamp(0.0, MAX_AMPLITUDE)
         } else {
-            self.settings.amplitude
+            self.settings.amplitude()
         };
 
         if samples.is_empty() {
-            if _drain && !state.tail.is_empty() {
-                let mut out = Vec::with_capacity(state.tail.len());
-                while let Some(sample) = state.tail.pop_front() {
-                    out.push(sample * amplitude);
-                }
-                return out;
+            if _drain {
+                return state.drain_tail(amplitude);
             }
             return Vec::new();
         }
 
-        let channels = context.channels.max(1) as u16;
-        let sample_rate = context.sample_rate.max(1);
-        let source = SamplesBuffer::new(channels, sample_rate, samples.to_vec())
-            .buffered()
-            .reverb(Duration::from_millis(self.settings.duration_ms), amplitude);
-
-        let mut output: Vec<f32> = source.collect();
-        let add_len = state.tail.len().min(output.len());
-        if add_len > 0 {
-            for i in 0..add_len {
-                if let Some(sample) = state.tail.get(i) {
-                    output[i] += sample * amplitude;
-                }
-            }
-        }
-
-        state.push_samples(samples);
-
+        let mut output = Vec::with_capacity(samples.len());
+        state.process_samples(samples, amplitude, &mut output);
         output
     }
 
@@ -156,32 +146,67 @@ impl BasicReverbEffect {
 #[derive(Clone)]
 struct BasicReverbState {
     delay_samples: usize,
-    tail: VecDeque<f32>,
+    delay_line: Vec<f32>,
+    write_pos: usize,
 }
 
 impl BasicReverbState {
     fn new(delay_samples: usize) -> Self {
+        info!("Using Basic Reverb!");
         Self {
             delay_samples,
-            tail: VecDeque::with_capacity(delay_samples),
+            delay_line: vec![0.0; delay_samples.max(1)],
+            write_pos: 0,
         }
     }
 
     fn reset(&mut self) {
-        self.tail.clear();
+        self.delay_line.fill(0.0);
+        self.write_pos = 0;
     }
 
-    fn push_samples(&mut self, samples: &[f32]) {
+    fn process_samples(&mut self, samples: &[f32], amplitude: f32, out: &mut Vec<f32>) {
         if self.delay_samples == 0 {
-            self.tail.clear();
+            out.extend_from_slice(samples);
             return;
         }
-        for sample in samples {
-            if self.tail.len() == self.delay_samples {
-                self.tail.pop_front();
+
+        let delay_len = self.delay_line.len();
+        for &sample in samples {
+            let delayed = self.delay_line[self.write_pos];
+            let output = sample + (delayed * amplitude);
+            out.push(output);
+
+            // Feedback delay for smoother tails.
+            self.delay_line[self.write_pos] = sample + (delayed * amplitude);
+            self.write_pos += 1;
+            if self.write_pos >= delay_len {
+                self.write_pos = 0;
             }
-            self.tail.push_back(*sample);
         }
+    }
+
+    fn drain_tail(&mut self, amplitude: f32) -> Vec<f32> {
+        if self.delay_samples == 0 {
+            return Vec::new();
+        }
+
+        let delay_len = self.delay_line.len();
+        let mut out = Vec::with_capacity(delay_len);
+        for _ in 0..delay_len {
+            let delayed = self.delay_line[self.write_pos];
+            let output = delayed * amplitude;
+            out.push(output);
+
+            // Feed silence to decay the tail.
+            self.delay_line[self.write_pos] = delayed * amplitude;
+            self.write_pos += 1;
+            if self.write_pos >= delay_len {
+                self.write_pos = 0;
+            }
+        }
+
+        out
     }
 }
 
@@ -190,7 +215,6 @@ fn delay_samples(sample_rate: u32, channels: usize, duration_ms: u64) -> usize {
         return 0;
     }
     let ns = duration_ms.saturating_mul(1_000_000);
-    let samples =
-        ns.saturating_mul(sample_rate as u64) / 1_000_000_000 * channels as u64;
+    let samples = ns.saturating_mul(sample_rate as u64) / 1_000_000_000 * channels as u64;
     samples as usize
 }

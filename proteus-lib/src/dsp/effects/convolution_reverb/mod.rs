@@ -2,7 +2,7 @@
 
 use std::path::{Path, PathBuf};
 
-use log::warn;
+use log::{info, warn};
 use serde::{Deserialize, Serialize};
 
 use crate::container::prot::{parse_impulse_response_string, ImpulseResponseSpec};
@@ -202,6 +202,7 @@ struct ConvolutionReverbState {
 
 impl ConvolutionReverbState {
     fn new(mut reverb: Reverb) -> Self {
+        info!("Using Convolution Reverb!");
         let block_samples = reverb.block_size_samples();
         reverb.set_dry_wet(DEFAULT_DRY_WET);
         Self {
