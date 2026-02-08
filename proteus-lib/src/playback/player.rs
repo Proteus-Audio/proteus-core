@@ -1,9 +1,7 @@
 //! High-level playback controller for the Proteus library.
 
 use rodio::buffer::SamplesBuffer;
-use rodio::Source;
 use rodio::{OutputStreamBuilder, Sink};
-use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc::RecvTimeoutError, Arc, Mutex};
 use std::thread;
@@ -16,6 +14,7 @@ use crate::container::prot::Prot;
 use crate::diagnostics::reporter::{Report, Reporter};
 use crate::dsp::effects::convolution_reverb::{parse_impulse_response_string, ImpulseResponseSpec};
 use crate::tools::timer;
+use crate::playback::output_meter::OutputMeter;
 use crate::{
     container::info::Info,
     dsp::effects::{AudioEffect, BasicReverbEffect, ConvolutionReverbEffect},
@@ -66,9 +65,7 @@ pub struct Player {
     effects: Arc<Mutex<Vec<AudioEffect>>>,
     dsp_metrics: Arc<Mutex<DspChainMetrics>>,
     effects_reset: Arc<AtomicU64>,
-    levels: Arc<Mutex<Vec<f32>>>,
-    levels_queue: Arc<Mutex<VecDeque<Vec<f32>>>>,
-    levels_offset: Arc<Mutex<usize>>,
+    output_meter: Arc<Mutex<OutputMeter>>,
     buffering_done: Arc<AtomicBool>,
     last_chunk_ms: Arc<AtomicU64>,
     last_time_update_ms: Arc<AtomicU64>,
@@ -132,9 +129,7 @@ impl Player {
             ])),
             dsp_metrics: Arc::new(Mutex::new(DspChainMetrics::default())),
             effects_reset: Arc::new(AtomicU64::new(0)),
-            levels: Arc::new(Mutex::new(vec![0.0; channels])),
-            levels_queue: Arc::new(Mutex::new(VecDeque::new())),
-            levels_offset: Arc::new(Mutex::new(0)),
+            output_meter: Arc::new(Mutex::new(OutputMeter::new(channels))),
             buffering_done: Arc::new(AtomicBool::new(false)),
             last_chunk_ms: Arc::new(AtomicU64::new(0)),
             last_time_update_ms: Arc::new(AtomicU64::new(0)),
@@ -254,7 +249,7 @@ impl Player {
 
     /// Retrieve the most recent per-channel peak levels.
     pub fn get_levels(&self) -> Vec<f32> {
-        self.levels.lock().unwrap().clone()
+        self.output_meter.lock().unwrap().levels()
     }
 
     /// Debug helper returning thread alive, state, and audio heard flags.
@@ -357,9 +352,7 @@ impl Player {
         let effects = self.effects.clone();
         let dsp_metrics = self.dsp_metrics.clone();
         let effects_reset = self.effects_reset.clone();
-        let levels = self.levels.clone();
-        let levels_queue = self.levels_queue.clone();
-        let levels_offset = self.levels_offset.clone();
+        let output_meter = self.output_meter.clone();
 
         let audio_heard = self.audio_heard.clone();
         let volume = self.volume.clone();
@@ -377,12 +370,8 @@ impl Player {
         drop(audition_source);
 
         {
-            let mut queue = self.levels_queue.lock().unwrap();
-            queue.clear();
-            let mut offset = self.levels_offset.lock().unwrap();
-            *offset = 0;
-            let mut levels = self.levels.lock().unwrap();
-            levels.fill(0.0);
+            let mut meter = self.output_meter.lock().unwrap();
+            meter.reset();
         }
 
         // ===== Start playback ===== //
@@ -511,12 +500,10 @@ impl Player {
                 let mut timer = timer_mut.lock().unwrap();
                 last_time_update_ms.store(now_ms(), Ordering::Relaxed);
                 let sink = sink_mutex.lock().unwrap();
-                update_levels_from_sink(
-                    &levels_queue,
-                    &levels_offset,
-                    &levels,
-                    sink.len(),
-                );
+                {
+                    let mut meter = output_meter.lock().unwrap();
+                    meter.update_from_sink_len(sink.len());
+                }
                 if !buffering_done.load(Ordering::Relaxed) {
                     // Check how many chunks have been played (chunk_lengths.len() - sink.len())
                     // since the last time this function was called and add that to time_passed.
@@ -554,18 +541,9 @@ impl Player {
                 audio_heard.store(true, Ordering::Relaxed);
                 last_chunk_ms.store(now_ms(), Ordering::Relaxed);
 
-                let channels = mixer.channels().max(1) as usize;
-                let mut peaks = vec![0.0_f32; channels];
-                for (idx, sample) in mixer.clone().enumerate() {
-                    let ch = idx % channels;
-                    let value = sample.abs();
-                    if value > peaks[ch] {
-                        peaks[ch] = value;
-                    }
-                }
                 {
-                    let mut queue = levels_queue.lock().unwrap();
-                    queue.push_back(peaks);
+                    let mut meter = output_meter.lock().unwrap();
+                    meter.push_samples(&mixer);
                 }
 
                 let mut audition_source = audition_source_mutex.lock().unwrap();
@@ -921,40 +899,4 @@ fn now_ms() -> u64 {
         .duration_since(SystemTime::UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0)
-}
-
-fn update_levels_from_sink(
-    levels_queue: &Arc<Mutex<VecDeque<Vec<f32>>>>,
-    levels_offset: &Arc<Mutex<usize>>,
-    levels: &Arc<Mutex<Vec<f32>>>,
-    sink_len: usize,
-) {
-    let mut offset_guard = levels_offset.lock().unwrap();
-    let mut queue_guard = levels_queue.lock().unwrap();
-
-    let total_enqueued = *offset_guard + queue_guard.len();
-    if total_enqueued == 0 {
-        return;
-    }
-
-    let mut current_index = total_enqueued.saturating_sub(sink_len);
-    if current_index >= total_enqueued {
-        current_index = total_enqueued - 1;
-    }
-
-    let keep_from = current_index.saturating_sub(2);
-    while *offset_guard < keep_from && !queue_guard.is_empty() {
-        queue_guard.pop_front();
-        *offset_guard += 1;
-    }
-
-    let idx = current_index.saturating_sub(*offset_guard);
-    if let Some(frame) = queue_guard.get(idx) {
-        let mut guard = levels.lock().unwrap();
-        if guard.len() != frame.len() {
-            *guard = frame.clone();
-        } else {
-            guard.copy_from_slice(frame);
-        }
-    }
 }
