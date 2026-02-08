@@ -42,6 +42,7 @@ impl Default for BasicReverbSettings {
 #[serde(default)]
 pub struct BasicReverbEffect {
     pub enabled: bool,
+    #[serde(alias = "dry_wet", alias = "wet_dry")]
     pub mix: f32,
     #[serde(flatten)]
     pub settings: BasicReverbSettings,

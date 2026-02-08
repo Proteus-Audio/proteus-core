@@ -114,7 +114,8 @@ pub fn run(args: &ArgMatches, log_buffer: Arc<Mutex<VecDeque<LogLine>>>) -> Resu
         .parse::<f32>()
         .unwrap();
     player.set_track_eos_ms(track_eos_ms);
-    if let Some(path) = args.get_one::<String>("effects-json") {
+    let effects_json_path = args.get_one::<String>("effects-json").cloned();
+    if let Some(path) = effects_json_path.as_deref() {
         match load_effects_json(path) {
             Ok(effects) => player.set_effects(effects),
             Err(err) => {
@@ -127,12 +128,17 @@ pub fn run(args: &ArgMatches, log_buffer: Arc<Mutex<VecDeque<LogLine>>>) -> Resu
         player.set_impulse_response_from_string(impulse_response);
     }
 
-    let reverb_mix = args
-        .get_one::<String>("reverb-mix")
-        .unwrap()
-        .parse::<f32>()
-        .unwrap();
-    player.set_reverb_mix(reverb_mix);
+    let reverb_mix_source = args.value_source("reverb-mix");
+    let should_apply_reverb_mix =
+        effects_json_path.is_none() || matches!(reverb_mix_source, Some(clap::parser::ValueSource::CommandLine));
+    if should_apply_reverb_mix {
+        let reverb_mix = args
+            .get_one::<String>("reverb-mix")
+            .unwrap()
+            .parse::<f32>()
+            .unwrap();
+        player.set_reverb_mix(reverb_mix);
+    }
 
     // Start playback once configuration is applied.
     player.play();

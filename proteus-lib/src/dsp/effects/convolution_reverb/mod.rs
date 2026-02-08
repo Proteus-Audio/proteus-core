@@ -47,6 +47,7 @@ impl Default for ConvolutionReverbSettings {
 #[serde(default)]
 pub struct ConvolutionReverbEffect {
     pub enabled: bool,
+    #[serde(alias = "wet_dry", alias = "mix")]
     pub dry_wet: f32,
     #[serde(flatten)]
     pub settings: ConvolutionReverbSettings,
