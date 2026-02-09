@@ -46,13 +46,29 @@ pub fn buffer_track(args: TrackArgs, abort: Arc<AtomicBool>) -> Arc<Mutex<bool>>
     let playing: Arc<Mutex<bool>> = Arc::new(Mutex::new(true));
 
     thread::spawn(move || {
-        let track_id = track_id.unwrap_or(0);
-
-        let track = format
-            .tracks()
-            .iter()
-            .find(|track| track.id == track_id)
-            .expect("no track found");
+        let (track_id, track) = match track_id {
+            Some(requested_id) => format
+                .tracks()
+                .iter()
+                .find(|track| track.id == requested_id)
+                .map(|track| (requested_id, track))
+                .unwrap_or_else(|| {
+                    let fallback = format
+                        .tracks()
+                        .iter()
+                        .find(|t| t.codec_params.codec != symphonia::core::codecs::CODEC_TYPE_NULL)
+                        .expect("no track found");
+                    (fallback.id, fallback)
+                }),
+            None => {
+                let fallback = format
+                    .tracks()
+                    .iter()
+                    .find(|t| t.codec_params.codec != symphonia::core::codecs::CODEC_TYPE_NULL)
+                    .expect("no track found");
+                (fallback.id, fallback)
+            }
+        };
 
         let dur = track
             .codec_params
