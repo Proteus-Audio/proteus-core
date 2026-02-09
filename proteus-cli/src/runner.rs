@@ -181,6 +181,10 @@ pub fn run(args: &ArgMatches, log_buffer: Arc<Mutex<VecDeque<LogLine>>>) -> Resu
             let levels = player.get_levels();
             #[cfg(not(feature = "output-meter"))]
             let levels: Vec<f32> = Vec::new();
+            #[cfg(feature = "output-meter")]
+            let levels_db = player.get_levels_db();
+            #[cfg(not(feature = "output-meter"))]
+            let levels_db: Vec<f32> = Vec::new();
             #[cfg(feature = "debug")]
             let dsp_metrics = player.get_dsp_metrics();
             #[cfg(feature = "debug")]
@@ -230,7 +234,7 @@ pub fn run(args: &ArgMatches, log_buffer: Arc<Mutex<VecDeque<LogLine>>>) -> Resu
                 #[cfg(feature = "debug")]
                 sink_len,
             });
-            ui::draw_status(term, &status, &log_lines, &levels);
+            ui::draw_status(term, &status, &log_lines, &levels, &levels_db);
         }
 
         if !controls::handle_key_event(&mut player) {

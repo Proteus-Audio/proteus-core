@@ -266,6 +266,17 @@ impl Player {
         self.output_meter.lock().unwrap().levels()
     }
 
+    /// Retrieve the most recent per-channel peak levels in dBFS.
+    pub fn get_levels_db(&self) -> Vec<f32> {
+        self.output_meter
+            .lock()
+            .unwrap()
+            .levels()
+            .into_iter()
+            .map(linear_to_dbfs)
+            .collect()
+    }
+
     /// Retrieve the most recent per-channel average levels.
     pub fn get_levels_avg(&self) -> Vec<f32> {
         self.output_meter.lock().unwrap().averages()
@@ -919,6 +930,14 @@ impl Player {
         reporter.lock().unwrap().start();
 
         self.reporter = Some(reporter);
+    }
+}
+
+fn linear_to_dbfs(value: f32) -> f32 {
+    if value <= 0.0 {
+        f32::NEG_INFINITY
+    } else {
+        20.0 * value.log10()
     }
 }
 
