@@ -92,6 +92,44 @@ impl DistortionEffect {
     pub fn reset_state(&mut self) {}
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn context() -> EffectContext {
+        EffectContext {
+            sample_rate: 44_100,
+            channels: 1,
+            container_path: None,
+            impulse_response_spec: None,
+            impulse_response_tail_db: -60.0,
+        }
+    }
+
+    #[test]
+    fn distortion_disabled_passthrough() {
+        let mut effect = DistortionEffect::default();
+        let samples = vec![0.25_f32, -0.25, 0.5, -0.5];
+        let output = effect.process(&samples, &context(), false);
+        assert_eq!(output, samples);
+    }
+
+    #[test]
+    fn distortion_clamps_output() {
+        let mut effect = DistortionEffect::default();
+        effect.enabled = true;
+        effect.settings.gain = 2.0;
+        effect.settings.threshold = 0.5;
+        let samples = vec![0.4_f32, -0.4, 0.6, -0.6];
+        let output = effect.process(&samples, &context(), false);
+        assert_eq!(output.len(), samples.len());
+        assert_eq!(output[0], 0.5);
+        assert_eq!(output[1], -0.5);
+        assert_eq!(output[2], 0.5);
+        assert_eq!(output[3], -0.5);
+    }
+}
+
 fn sanitize_gain(gain: f32) -> f32 {
     if gain.is_finite() {
         gain

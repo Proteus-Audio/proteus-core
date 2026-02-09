@@ -314,6 +314,25 @@ fn load_effects_json(path: &str) -> std::result::Result<Vec<AudioEffect>, String
     serde_json::from_str(&raw).map_err(|err| format!("failed to parse json: {}", err))
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::NamedTempFile;
+    use std::io::Write;
+
+    #[test]
+    fn load_effects_json_parses_effects() {
+        let effects = default_effects_chain();
+        let json = serde_json::to_string_pretty(&effects).expect("serialize effects");
+
+        let mut file = NamedTempFile::new().expect("temp file");
+        file.write_all(json.as_bytes()).expect("write json");
+
+        let loaded = load_effects_json(file.path().to_str().unwrap()).expect("load json");
+        assert_eq!(loaded.len(), effects.len());
+    }
+}
+
 fn run_info(file_path: &str, print: bool) -> i32 {
     let info = proteus_lib::container::info::Info::new(file_path.to_string());
     if print {

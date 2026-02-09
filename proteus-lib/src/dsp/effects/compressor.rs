@@ -300,3 +300,50 @@ fn sanitize_makeup_db(value: f32) -> f32 {
     }
     value
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn context(channels: usize) -> EffectContext {
+        EffectContext {
+            sample_rate: 48_000,
+            channels,
+            container_path: None,
+            impulse_response_spec: None,
+            impulse_response_tail_db: -60.0,
+        }
+    }
+
+    fn approx_eq(a: f32, b: f32, eps: f32) -> bool {
+        (a - b).abs() <= eps
+    }
+
+    #[test]
+    fn compressor_disabled_passthrough() {
+        let mut effect = CompressorEffect::default();
+        let samples = vec![0.25_f32, -0.25, 0.5, -0.5];
+        let output = effect.process(&samples, &context(2), false);
+        assert_eq!(output, samples);
+    }
+
+    #[test]
+    fn compressor_applies_gain_reduction() {
+        let mut effect = CompressorEffect::default();
+        effect.enabled = true;
+        effect.settings.threshold_db = -6.0;
+        effect.settings.ratio = 2.0;
+        effect.settings.attack_ms = 0.0;
+        effect.settings.release_ms = 0.0;
+        effect.settings.makeup_gain_db = 0.0;
+
+        let samples = vec![1.0_f32, 1.0];
+        let output = effect.process(&samples, &context(2), false);
+        assert_eq!(output.len(), samples.len());
+
+        let level_db = 0.0;
+        let target_gain_db = (-6.0 + (level_db + 6.0) / 2.0) - level_db;
+        let expected = db_to_linear(target_gain_db);
+        assert!(output.iter().all(|value| approx_eq(*value, expected, 1e-3)));
+    }
+}

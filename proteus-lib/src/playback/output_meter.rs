@@ -202,3 +202,40 @@ mod disabled {
 pub use enabled::OutputMeter;
 #[cfg(not(feature = "output-meter"))]
 pub use disabled::OutputMeter;
+
+#[cfg(test)]
+mod tests {
+    use super::OutputMeter;
+
+    #[cfg(feature = "output-meter")]
+    #[test]
+    fn output_meter_tracks_peak_and_avg() {
+        use rodio::buffer::SamplesBuffer;
+
+        let mut meter = OutputMeter::new(2, 10, 1.0);
+        let samples = vec![
+            0.1_f32, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 0.2, 0.1, 0.4, 0.3, 0.6,
+            0.5, 0.8, 0.7, 1.0, 0.9,
+        ];
+        let buffer = SamplesBuffer::new(2, 10, samples);
+        meter.push_samples(&buffer);
+        meter.advance(1.0);
+
+        let levels = meter.levels();
+        let avg = meter.averages();
+        assert_eq!(levels.len(), 2);
+        assert_eq!(avg.len(), 2);
+        assert!((levels[0] - 1.0).abs() < 1e-6);
+        assert!((levels[1] - 1.0).abs() < 1e-6);
+        assert!(avg[0] > 0.0);
+        assert!(avg[1] > 0.0);
+    }
+
+    #[cfg(not(feature = "output-meter"))]
+    #[test]
+    fn output_meter_disabled_returns_zeroes() {
+        let meter = OutputMeter::new(2, 48_000, 10.0);
+        assert_eq!(meter.levels(), vec![0.0, 0.0]);
+        assert_eq!(meter.averages(), vec![0.0, 0.0]);
+    }
+}

@@ -121,3 +121,38 @@ impl HighPassFilterEffect {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn context() -> EffectContext {
+        EffectContext {
+            sample_rate: 48_000,
+            channels: 2,
+            container_path: None,
+            impulse_response_spec: None,
+            impulse_response_tail_db: -60.0,
+        }
+    }
+
+    #[test]
+    fn high_pass_disabled_passthrough() {
+        let mut effect = HighPassFilterEffect::default();
+        let samples = vec![0.1_f32, -0.1, 0.2, -0.2];
+        let output = effect.process(&samples, &context(), false);
+        assert_eq!(output, samples);
+    }
+
+    #[test]
+    fn high_pass_enabled_changes_signal() {
+        let mut effect = HighPassFilterEffect::default();
+        effect.enabled = true;
+        effect.settings.freq_hz = 2000;
+        let samples = vec![1.0_f32, -1.0, 1.0, -1.0, 1.0, -1.0];
+        let output = effect.process(&samples, &context(), false);
+        assert_eq!(output.len(), samples.len());
+        assert!(output.iter().any(|value| value.abs() < 0.999));
+        assert!(output.iter().all(|value| value.is_finite()));
+    }
+}

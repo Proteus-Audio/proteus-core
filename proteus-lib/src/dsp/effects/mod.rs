@@ -122,3 +122,47 @@ impl AudioEffect {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn audio_effect_serde_roundtrip_variants() {
+        let effects = vec![
+            AudioEffect::BasicReverb(BasicReverbEffect::default()),
+            AudioEffect::ConvolutionReverb(ConvolutionReverbEffect::default()),
+            AudioEffect::LowPassFilter(LowPassFilterEffect::default()),
+            AudioEffect::HighPassFilter(HighPassFilterEffect::default()),
+            AudioEffect::Distortion(DistortionEffect::default()),
+            AudioEffect::Compressor(CompressorEffect::default()),
+            AudioEffect::Limiter(LimiterEffect::default()),
+        ];
+
+        let json = serde_json::to_string(&effects).expect("serialize effects");
+        let decoded: Vec<AudioEffect> =
+            serde_json::from_str(&json).expect("deserialize effects");
+        assert_eq!(decoded.len(), effects.len());
+    }
+
+    #[test]
+    fn audio_effect_serde_accepts_aliases() {
+        let json = r#"
+        [
+            {"ConvolutionReverbSettings":{"enabled":true,"wet_dry":0.25}},
+            {"BasicReverbSettings":{"enabled":true,"dry_wet":0.5}},
+            {"LowPassFilterSettings":{"enabled":true,"freq":800,"bandwidth":0.7}},
+            {"HighPassFilterSettings":{"enabled":true,"frequency_hz":1200,"q":0.9}},
+            {"DistortionSettings":{"enabled":true,"gain":2.0,"threshold":0.4}},
+            {"CompressorSettings":{"enabled":true,"threshold":-12.0,"ratio":2.0,
+                "attack":5.0,"release":50.0,"makeup_db":3.0}},
+            {"LimiterSettings":{"enabled":true,"threshold_db":-3.0,"knee_width":2.0,
+                "attack_ms":3.0,"release_ms":30.0}}
+        ]
+        "#;
+
+        let decoded: Vec<AudioEffect> =
+            serde_json::from_str(json).expect("deserialize effects");
+        assert_eq!(decoded.len(), 7);
+    }
+}

@@ -89,3 +89,52 @@ pub fn parse_impulse_response_string(value: &str) -> Option<ImpulseResponseSpec>
 
     Some(ImpulseResponseSpec::FilePath(value.trim().to_string()))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::container::play_settings::{
+        PlaySettingsContainer, PlaySettingsFile, PlaySettingsV2, PlaySettingsV2File,
+    };
+    use crate::dsp::effects::{AudioEffect, ConvolutionReverbEffect};
+
+    #[test]
+    fn parse_impulse_response_string_variants() {
+        assert_eq!(
+            parse_impulse_response_string("attachment:foo.wav"),
+            Some(ImpulseResponseSpec::Attachment("foo.wav".to_string()))
+        );
+        assert_eq!(
+            parse_impulse_response_string("file:/tmp/bar.wav"),
+            Some(ImpulseResponseSpec::FilePath("/tmp/bar.wav".to_string()))
+        );
+        assert_eq!(
+            parse_impulse_response_string("plain.wav"),
+            Some(ImpulseResponseSpec::FilePath("plain.wav".to_string()))
+        );
+    }
+
+    #[test]
+    fn parse_impulse_response_from_play_settings() {
+        let mut effect = ConvolutionReverbEffect::default();
+        effect.settings.impulse_response = Some("attachment:ir.wav".to_string());
+        effect.settings.impulse_response_tail_db = Some(-42.0);
+
+        let settings = PlaySettingsV2 {
+            tracks: Vec::new(),
+            effects: vec![AudioEffect::ConvolutionReverb(effect)],
+        };
+        let file = PlaySettingsV2File {
+            settings: PlaySettingsContainer::Flat(settings),
+        };
+
+        let play_settings = PlaySettingsFile::V2(file);
+        let spec = parse_impulse_response_spec(&play_settings);
+        assert_eq!(
+            spec,
+            Some(ImpulseResponseSpec::Attachment("ir.wav".to_string()))
+        );
+        let tail_db = parse_impulse_response_tail_db(&play_settings);
+        assert_eq!(tail_db, Some(-42.0));
+    }
+}

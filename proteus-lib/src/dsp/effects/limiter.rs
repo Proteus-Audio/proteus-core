@@ -282,3 +282,71 @@ fn sanitize_time_ms(value: f32, fallback: f32) -> f32 {
     }
     value.max(0.0)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn context(channels: usize) -> EffectContext {
+        EffectContext {
+            sample_rate: 48_000,
+            channels,
+            container_path: None,
+            impulse_response_spec: None,
+            impulse_response_tail_db: -60.0,
+        }
+    }
+
+    fn approx_eq(a: f32, b: f32, eps: f32) -> bool {
+        (a - b).abs() <= eps
+    }
+
+    #[test]
+    fn limiter_disabled_passthrough() {
+        let mut effect = LimiterEffect::default();
+        let samples = vec![0.25_f32, -0.25, 0.5, -0.5];
+        let output = effect.process(&samples, &context(2), false);
+        assert_eq!(output, samples);
+    }
+
+    #[test]
+    fn limiter_reduces_hot_signal() {
+        let mut effect = LimiterEffect::default();
+        effect.enabled = true;
+        effect.settings.threshold_db = -12.0;
+        effect.settings.knee_width_db = 0.5;
+        effect.settings.attack_ms = 0.0;
+        effect.settings.release_ms = 0.0;
+
+        let samples = vec![1.0_f32, -1.0, 1.0, -1.0];
+        let output = effect.process(&samples, &context(2), false);
+        assert_eq!(output.len(), samples.len());
+        assert!(output.iter().all(|value| value.is_finite()));
+        assert!(output.iter().any(|value| value.abs() < 1.0));
+    }
+
+    #[test]
+    fn limiter_split_matches_single_pass() {
+        let mut settings = LimiterEffect::default();
+        settings.enabled = true;
+        settings.settings.threshold_db = -6.0;
+        settings.settings.knee_width_db = 1.0;
+        settings.settings.attack_ms = 0.0;
+        settings.settings.release_ms = 0.0;
+
+        let samples = vec![1.0_f32, -1.0, 0.8, -0.8, 0.6, -0.6, 0.4, -0.4];
+
+        let mut effect_full = settings.clone();
+        let out_full = effect_full.process(&samples, &context(2), false);
+
+        let mut effect_split = settings;
+        let mid = samples.len() / 2;
+        let mut out_split = effect_split.process(&samples[..mid], &context(2), false);
+        out_split.extend(effect_split.process(&samples[mid..], &context(2), false));
+
+        assert_eq!(out_full.len(), out_split.len());
+        for (a, b) in out_full.iter().zip(out_split.iter()) {
+            assert!(approx_eq(*a, *b, 1e-5));
+        }
+    }
+}
