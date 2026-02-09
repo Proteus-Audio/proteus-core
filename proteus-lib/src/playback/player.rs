@@ -250,11 +250,20 @@ impl Player {
     }
 
     /// Replace the active DSP effects chain.
-    pub fn set_effects(&self, effects: Vec<AudioEffect>) {
-        let mut guard = self.effects.lock().unwrap();
-        println!("Setting Effects: {:?}", effects);
-        *guard = effects;
+    pub fn set_effects(&mut self, effects: Vec<AudioEffect>) {
+        {
+            let mut guard = self.effects.lock().unwrap();
+            println!("New Effects: {:?}", effects);
+            *guard = effects;
+        }
         self.request_effects_reset();
+
+        // Seeking to the current time stamp refreshes the
+        // Sink so that the new effects are applied immediately.
+        if !self.thread_finished() {
+            let ts = self.get_time();
+            self.seek(ts);
+        }
     }
 
     /// Retrieve the latest DSP chain performance metrics.
