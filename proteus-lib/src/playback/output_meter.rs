@@ -198,10 +198,10 @@ mod disabled {
     }
 }
 
-#[cfg(feature = "output-meter")]
-pub use enabled::OutputMeter;
 #[cfg(not(feature = "output-meter"))]
 pub use disabled::OutputMeter;
+#[cfg(feature = "output-meter")]
+pub use enabled::OutputMeter;
 
 #[cfg(test)]
 mod tests {
@@ -214,8 +214,8 @@ mod tests {
 
         let mut meter = OutputMeter::new(2, 10, 1.0);
         let samples = vec![
-            0.1_f32, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 0.2, 0.1, 0.4, 0.3, 0.6,
-            0.5, 0.8, 0.7, 1.0, 0.9,
+            0.1_f32, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 0.2, 0.1, 0.4, 0.3, 0.6, 0.5,
+            0.8, 0.7, 1.0, 0.9,
         ];
         let buffer = SamplesBuffer::new(2, 10, samples);
         meter.push_samples(&buffer);

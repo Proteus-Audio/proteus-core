@@ -196,14 +196,22 @@ fn vertical_meter_text(levels: &[f32], levels_db: &[f32], height: u16) -> Text<'
     for row in (0..meter_height).rev() {
         let l_on = row < l_fill;
         let r_on = row < r_fill;
-        let line = format!(" {} {}", if l_on { "#" } else { " " }, if r_on { "#" } else { " " });
+        let line = format!(
+            " {} {}",
+            if l_on { "#" } else { " " },
+            if r_on { "#" } else { " " }
+        );
         lines.push(Line::from(line));
     }
 
     let label = if display.has_right { " L R" } else { "  M" };
     lines.push(Line::from(label));
     let db_label = if display_db.has_right {
-        format!("{} {} dB", format_db(display_db.left), format_db(display_db.right))
+        format!(
+            "{} {} dB",
+            format_db(display_db.left),
+            format_db(display_db.right)
+        )
     } else {
         format!(" {} dB", format_db(display_db.left))
     };
@@ -219,34 +227,18 @@ fn horizontal_meter_text(levels: &[f32], levels_db: &[f32], width: u16) -> Text<
     let left_db = format_db(display_db.left);
     let right_db = format_db(display_db.right);
     let overhead = 8; // "L [" + "] " + " dB"
-    let left_bar_width = line_width
-        .saturating_sub(overhead + left_db.len())
-        .max(1);
-    let right_bar_width = line_width
-        .saturating_sub(overhead + right_db.len())
-        .max(1);
+    let left_bar_width = line_width.saturating_sub(overhead + left_db.len()).max(1);
+    let right_bar_width = line_width.saturating_sub(overhead + right_db.len()).max(1);
 
     let left = render_bar(display.left, left_bar_width);
-    let mut lines = vec![Line::from(format!(
-        "L [{}] {} dB",
-        left,
-        left_db
-    ))];
+    let mut lines = vec![Line::from(format!("L [{}] {} dB", left, left_db))];
 
     if display.has_right {
         let right = render_bar(display.right, right_bar_width);
-        lines.push(Line::from(format!(
-            "R [{}] {} dB",
-            right,
-            right_db
-        )));
+        lines.push(Line::from(format!("R [{}] {} dB", right, right_db)));
     } else {
         let mono = render_bar(display.left, left_bar_width);
-        lines.push(Line::from(format!(
-            "M [{}] {} dB",
-            mono,
-            left_db
-        )));
+        lines.push(Line::from(format!("M [{}] {} dB", mono, left_db)));
     }
 
     Text::from(lines)
@@ -384,7 +376,11 @@ pub fn draw_info(
         };
         let tracks = Paragraph::new(Text::from(track_lines))
             .style(Style::default().fg(Color::Yellow))
-            .block(Block::default().borders(Borders::ALL).title("Track Durations"));
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title("Track Durations"),
+            );
         f.render_widget(tracks, chunks[2]);
 
         let footer = Paragraph::new("Press q, Esc, or Enter to exit")

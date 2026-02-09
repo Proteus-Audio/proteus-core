@@ -18,7 +18,7 @@ use crate::playback::output_meter::OutputMeter;
 use crate::tools::timer;
 use crate::{
     container::info::Info,
-    dsp::effects::{AudioEffect, ConvolutionReverbEffect, DelayReverbEffect},
+    dsp::effects::AudioEffect,
     playback::engine::{DspChainMetrics, PlaybackBufferSettings, PlayerEngine},
 };
 
@@ -210,6 +210,12 @@ impl Player {
         {
             effect.mix = dry_wet.clamp(0.0, 1.0);
         }
+        if let Some(effect) = effects
+            .iter_mut()
+            .find_map(|effect| effect.as_diffusion_reverb_mut())
+        {
+            effect.mix = dry_wet.clamp(0.0, 1.0);
+        }
     }
 
     /// Retrieve the current reverb settings snapshot.
@@ -222,6 +228,15 @@ impl Player {
             return ReverbSettingsSnapshot {
                 enabled: effect.enabled,
                 dry_wet: effect.dry_wet,
+            };
+        }
+        if let Some(effect) = effects
+            .iter()
+            .find_map(|effect| effect.as_diffusion_reverb())
+        {
+            return ReverbSettingsSnapshot {
+                enabled: effect.enabled,
+                dry_wet: effect.mix,
             };
         }
         if let Some(effect) = effects.iter().find_map(|effect| effect.as_delay_reverb()) {
@@ -244,6 +259,7 @@ impl Player {
             .map(|effect| match effect {
                 AudioEffect::DelayReverb(_) => "DelayReverb".to_string(),
                 AudioEffect::BasicReverb(_) => "DelayReverb".to_string(),
+                AudioEffect::DiffusionReverb(_) => "DiffusionReverb".to_string(),
                 AudioEffect::ConvolutionReverb(_) => "ConvolutionReverb".to_string(),
                 AudioEffect::LowPassFilter(_) => "LowPassFilter".to_string(),
                 AudioEffect::HighPassFilter(_) => "HighPassFilter".to_string(),

@@ -48,10 +48,7 @@ pub fn bench_convolver(config: DspBenchConfig) -> DspBenchResult {
         times.push(elapsed);
     }
 
-    let min_ms = times
-        .iter()
-        .copied()
-        .fold(f64::INFINITY, |a, b| a.min(b));
+    let min_ms = times.iter().copied().fold(f64::INFINITY, |a, b| a.min(b));
     let max_ms = times.iter().copied().fold(0.0_f64, |a, b| a.max(b));
     let avg_ms = times.iter().sum::<f64>() / times.len() as f64;
     let audio_time_ms = (input_len as f64 / config.sample_rate as f64) * 1000.0;

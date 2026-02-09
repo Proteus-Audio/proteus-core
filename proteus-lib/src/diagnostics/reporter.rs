@@ -22,7 +22,7 @@ pub struct Reporter {
     player: Arc<Mutex<Player>>,
     report: Arc<Mutex<dyn Fn(Report) + Send>>,
     interval: Duration,
-    finish: Arc<Mutex<bool>>
+    finish: Arc<Mutex<bool>>,
 }
 
 impl Reporter {
@@ -36,7 +36,7 @@ impl Reporter {
             player,
             report,
             interval,
-            finish: Arc::new(Mutex::new(false))
+            finish: Arc::new(Mutex::new(false)),
         }
     }
 

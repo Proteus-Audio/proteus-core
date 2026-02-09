@@ -9,6 +9,7 @@ use std::{
 
 use log::debug;
 
+use symphonia::core::sample::SampleFormat;
 use symphonia::core::{
     audio::{AudioBufferRef, Channels, Layout},
     codecs::{CodecParameters, DecoderOptions, CODEC_TYPE_NULL},
@@ -19,7 +20,6 @@ use symphonia::core::{
     probe::{Hint, ProbeResult},
     units::TimeBase,
 };
-use symphonia::core::sample::SampleFormat;
 
 /// Convert Symphonia codec parameters to seconds using time base and frames.
 pub fn get_time_from_frames(codec_params: &CodecParameters) -> f64 {
@@ -45,7 +45,10 @@ pub fn get_probe_result_from_string(file_path: &str) -> Result<ProbeResult, Erro
     }
 
     let path = Path::new(file_path);
-    let ext = path.extension().and_then(|ext| ext.to_str()).map(|ext| ext.to_string());
+    let ext = path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| ext.to_string());
     let mut hints: Vec<Option<String>> = Vec::new();
 
     if let Some(ext) = ext.clone() {
@@ -66,7 +69,8 @@ pub fn get_probe_result_from_string(file_path: &str) -> Result<ProbeResult, Erro
     hints.push(None);
 
     for hint in hints {
-        let source = Box::new(File::open(path).expect("failed to open media file")) as Box<dyn MediaSource>;
+        let source =
+            Box::new(File::open(path).expect("failed to open media file")) as Box<dyn MediaSource>;
         if let Ok(probed) = probe_with_hint(source, hint.as_deref()) {
             return Ok(probed);
         }
@@ -283,8 +287,7 @@ fn bits_from_decode(file_path: &str) -> u32 {
     };
 
     let dec_opts: DecoderOptions = Default::default();
-    let mut decoder = match symphonia::default::get_codecs().make(&codec_params, &dec_opts)
-    {
+    let mut decoder = match symphonia::default::get_codecs().make(&codec_params, &dec_opts) {
         Ok(decoder) => decoder,
         Err(_) => return 0,
     };
@@ -361,7 +364,10 @@ fn fallback_durations(file_path: &str) -> HashMap<u32, f64> {
 
 fn parse_aiff_info(file_path: &str) -> Option<AiffInfo> {
     let path = Path::new(file_path);
-    let ext = path.extension().and_then(|ext| ext.to_str())?.to_lowercase();
+    let ext = path
+        .extension()
+        .and_then(|ext| ext.to_str())?
+        .to_lowercase();
     if ext != "aiff" && ext != "aif" && ext != "aifc" && ext != "aaif" {
         return None;
     }
@@ -438,7 +444,11 @@ fn extended_80_to_f64(bytes: [u8; 10]) -> f64 {
     let exp = exponent as i32 - 16383;
     let fraction = mantissa as f64 / (1u64 << 63) as f64;
     let value = 2f64.powi(exp) * fraction;
-    if sign { -value } else { value }
+    if sign {
+        -value
+    } else {
+        value
+    }
 }
 
 fn reduce_track_infos(track_infos: Vec<TrackInfo>) -> TrackInfo {

@@ -147,8 +147,7 @@ impl PlayerEngine {
         let buffer_size = (sample_rate as usize * 10).max(start_samples * 2);
 
         for key in keys {
-            let ring_buffer =
-                Arc::new(Mutex::new(dasp_ring_buffer::Bounded::from(vec![
+            let ring_buffer = Arc::new(Mutex::new(dasp_ring_buffer::Bounded::from(vec![
                     0.0;
                     buffer_size
                 ])));

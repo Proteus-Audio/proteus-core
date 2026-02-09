@@ -4,26 +4,28 @@ use serde::{Deserialize, Serialize};
 
 use crate::dsp::effects::convolution_reverb::ImpulseResponseSpec;
 
-pub mod convolution_reverb;
 pub mod basic_reverb;
+mod biquad;
+pub mod compressor;
+pub mod convolution_reverb;
+pub mod diffusion_reverb;
 pub mod distortion;
 pub mod high_pass;
-pub mod low_pass;
-pub mod compressor;
 pub mod limiter;
-mod biquad;
+pub mod low_pass;
 
-pub use basic_reverb::{DelayReverbEffect, DelayReverbSettings};
-pub use convolution_reverb::{ConvolutionReverbEffect, ConvolutionReverbSettings};
-pub use distortion::{DistortionEffect, DistortionSettings};
-pub use high_pass::{HighPassFilterEffect, HighPassFilterSettings};
-pub use low_pass::{LowPassFilterEffect, LowPassFilterSettings};
-pub use compressor::{CompressorEffect, CompressorSettings};
-pub use limiter::{LimiterEffect, LimiterSettings};
 #[deprecated(note = "Use DelayReverbEffect instead.")]
 pub use basic_reverb::BasicReverbEffect;
 #[deprecated(note = "Use DelayReverbSettings instead.")]
 pub use basic_reverb::BasicReverbSettings;
+pub use basic_reverb::{DelayReverbEffect, DelayReverbSettings};
+pub use compressor::{CompressorEffect, CompressorSettings};
+pub use convolution_reverb::{ConvolutionReverbEffect, ConvolutionReverbSettings};
+pub use diffusion_reverb::{DiffusionReverbEffect, DiffusionReverbSettings};
+pub use distortion::{DistortionEffect, DistortionSettings};
+pub use high_pass::{HighPassFilterEffect, HighPassFilterSettings};
+pub use limiter::{LimiterEffect, LimiterSettings};
+pub use low_pass::{LowPassFilterEffect, LowPassFilterSettings};
 
 /// Shared context for preparing and running DSP effects.
 #[derive(Debug, Clone)]
@@ -43,6 +45,8 @@ pub enum AudioEffect {
     #[deprecated(note = "Use AudioEffect::DelayReverb instead.")]
     #[serde(rename = "BasicReverbSettings")]
     BasicReverb(DelayReverbEffect),
+    #[serde(rename = "DiffusionReverbSettings")]
+    DiffusionReverb(DiffusionReverbEffect),
     #[serde(rename = "ConvolutionReverbSettings")]
     ConvolutionReverb(ConvolutionReverbEffect),
     #[serde(rename = "LowPassFilterSettings")]
@@ -67,15 +71,11 @@ impl AudioEffect {
     ///
     /// # Returns
     /// Processed interleaved samples.
-    pub fn process(
-        &mut self,
-        samples: &[f32],
-        context: &EffectContext,
-        drain: bool,
-    ) -> Vec<f32> {
+    pub fn process(&mut self, samples: &[f32], context: &EffectContext, drain: bool) -> Vec<f32> {
         match self {
             AudioEffect::BasicReverb(effect) => effect.process(samples, context, drain),
             AudioEffect::DelayReverb(effect) => effect.process(samples, context, drain),
+            AudioEffect::DiffusionReverb(effect) => effect.process(samples, context, drain),
             AudioEffect::ConvolutionReverb(effect) => effect.process(samples, context, drain),
             AudioEffect::LowPassFilter(effect) => effect.process(samples, context, drain),
             AudioEffect::HighPassFilter(effect) => effect.process(samples, context, drain),
@@ -90,6 +90,7 @@ impl AudioEffect {
         match self {
             AudioEffect::BasicReverb(effect) => effect.reset_state(),
             AudioEffect::DelayReverb(effect) => effect.reset_state(),
+            AudioEffect::DiffusionReverb(effect) => effect.reset_state(),
             AudioEffect::ConvolutionReverb(effect) => effect.reset_state(),
             AudioEffect::LowPassFilter(effect) => effect.reset_state(),
             AudioEffect::HighPassFilter(effect) => effect.reset_state(),
@@ -104,6 +105,7 @@ impl AudioEffect {
         match self {
             AudioEffect::BasicReverb(_) => {}
             AudioEffect::DelayReverb(_) => {}
+            AudioEffect::DiffusionReverb(_) => {}
             AudioEffect::ConvolutionReverb(effect) => {
                 let _ = effect.process(&[], context, false);
             }
@@ -127,6 +129,22 @@ impl AudioEffect {
     pub fn as_convolution_reverb(&self) -> Option<&ConvolutionReverbEffect> {
         match self {
             AudioEffect::ConvolutionReverb(effect) => Some(effect),
+            _ => None,
+        }
+    }
+
+    /// Mutable access to the diffusion reverb effect, if present.
+    pub fn as_diffusion_reverb_mut(&mut self) -> Option<&mut DiffusionReverbEffect> {
+        match self {
+            AudioEffect::DiffusionReverb(effect) => Some(effect),
+            _ => None,
+        }
+    }
+
+    /// Immutable access to the diffusion reverb effect, if present.
+    pub fn as_diffusion_reverb(&self) -> Option<&DiffusionReverbEffect> {
+        match self {
+            AudioEffect::DiffusionReverb(effect) => Some(effect),
             _ => None,
         }
     }
@@ -170,6 +188,7 @@ mod tests {
     fn audio_effect_serde_roundtrip_variants() {
         let effects = vec![
             AudioEffect::DelayReverb(DelayReverbEffect::default()),
+            AudioEffect::DiffusionReverb(DiffusionReverbEffect::default()),
             AudioEffect::ConvolutionReverb(ConvolutionReverbEffect::default()),
             AudioEffect::LowPassFilter(LowPassFilterEffect::default()),
             AudioEffect::HighPassFilter(HighPassFilterEffect::default()),
@@ -179,8 +198,7 @@ mod tests {
         ];
 
         let json = serde_json::to_string(&effects).expect("serialize effects");
-        let decoded: Vec<AudioEffect> =
-            serde_json::from_str(&json).expect("deserialize effects");
+        let decoded: Vec<AudioEffect> = serde_json::from_str(&json).expect("deserialize effects");
         assert_eq!(decoded.len(), effects.len());
     }
 
@@ -191,6 +209,7 @@ mod tests {
             {"ConvolutionReverbSettings":{"enabled":true,"wet_dry":0.25}},
             {"DelayReverbSettings":{"enabled":true,"dry_wet":0.5}},
             {"BasicReverbSettings":{"enabled":true,"dry_wet":0.5}},
+            {"DiffusionReverbSettings":{"enabled":true,"dry_wet":0.35}},
             {"LowPassFilterSettings":{"enabled":true,"freq":800,"bandwidth":0.7}},
             {"HighPassFilterSettings":{"enabled":true,"frequency_hz":1200,"q":0.9}},
             {"DistortionSettings":{"enabled":true,"gain":2.0,"threshold":0.4}},
@@ -201,8 +220,7 @@ mod tests {
         ]
         "#;
 
-        let decoded: Vec<AudioEffect> =
-            serde_json::from_str(json).expect("deserialize effects");
-        assert_eq!(decoded.len(), 8);
+        let decoded: Vec<AudioEffect> = serde_json::from_str(json).expect("deserialize effects");
+        assert_eq!(decoded.len(), 9);
     }
 }

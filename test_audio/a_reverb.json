@@ -1,0 +1,61 @@
+[
+  {
+    "ConvolutionReverbSettings": {
+      "enabled": true,
+      "dry_wet": 0.000001,
+      "impulse_response": null,
+      "impulse_response_attachment": null,
+      "impulse_response_path": null,
+      "impulse_response_tail_db": null,
+      "impulse_response_tail": null
+    }
+  },
+  {
+    "DelayReverbSettings": {
+      "enabled": true,
+      "mix": 0.0,
+      "duration_ms": 100,
+      "amplitude": 0.7
+    }
+  },
+  {
+    "LowPassFilterSettings": {
+      "enabled": false,
+      "freq_hz": 1000,
+      "q": 0.5
+    }
+  },
+  {
+    "HighPassFilterSettings": {
+      "enabled": false,
+      "freq_hz": 1000,
+      "q": 0.5
+    }
+  },
+  {
+    "DistortionSettings": {
+      "enabled": false,
+      "gain": 1.0,
+      "threshold": 1.0
+    }
+  },
+  {
+    "CompressorSettings": {
+      "enabled": false,
+      "threshold_db": -18.0,
+      "ratio": 4.0,
+      "attack_ms": 10.0,
+      "release_ms": 100.0,
+      "makeup_gain_db": 0.0
+    }
+  },
+  {
+    "LimiterSettings": {
+      "enabled": false,
+      "threshold_db": -1.0,
+      "knee_width_db": 4.0,
+      "attack_ms": 5.0,
+      "release_ms": 100.0
+    }
+  }
+]
