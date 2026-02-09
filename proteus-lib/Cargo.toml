@@ -25,7 +25,7 @@ rustfft = { version = "6.1.0", optional = true }
 realfft = { version = "3.3.0", optional = true }
 serde_json = "1.0.108"
 serde = { version = "1.0.197", features = ["derive"] }
-symphonia = "0.5.5"
+symphonia = { version = "0.5.5", features = ["all-codecs", "all-formats"] }
 
 [features]
 default = ["real-fft"]

@@ -53,9 +53,10 @@ pub fn get_probe_result_from_string(file_path: &str) -> Result<ProbeResult, Erro
         if ext_lc == "prot" {
             hints.push(Some("mka".to_string()));
         }
-        if ext_lc == "aiff" {
+        if ext_lc == "aiff" || ext_lc == "aif" || ext_lc == "aifc" || ext_lc == "aaif" {
             hints.push(Some("aiff".to_string()));
             hints.push(Some("aif".to_string()));
+            hints.push(Some("aifc".to_string()));
         } else {
             hints.push(Some(ext_lc));
         }
@@ -361,7 +362,7 @@ fn fallback_durations(file_path: &str) -> HashMap<u32, f64> {
 fn parse_aiff_info(file_path: &str) -> Option<AiffInfo> {
     let path = Path::new(file_path);
     let ext = path.extension().and_then(|ext| ext.to_str())?.to_lowercase();
-    if ext != "aiff" && ext != "aif" && ext != "aifc" {
+    if ext != "aiff" && ext != "aif" && ext != "aifc" && ext != "aaif" {
         return None;
     }
 
