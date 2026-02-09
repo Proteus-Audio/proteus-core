@@ -188,11 +188,12 @@ fn vertical_meter_text(levels: &[f32], levels_db: &[f32], height: u16) -> Text<'
     let display = pick_levels(levels);
     let display_db = pick_levels_db(levels_db);
     let mut lines: Vec<Line> = Vec::new();
-    let h = height.max(1) as usize;
-    let l_fill = (display.left * h as f32).ceil() as usize;
-    let r_fill = (display.right * h as f32).ceil() as usize;
+    let total_height = height.max(1) as usize;
+    let meter_height = total_height.saturating_sub(2).max(1);
+    let l_fill = (display.left * meter_height as f32).ceil() as usize;
+    let r_fill = (display.right * meter_height as f32).ceil() as usize;
 
-    for row in (0..h).rev() {
+    for row in (0..meter_height).rev() {
         let l_on = row < l_fill;
         let r_on = row < r_fill;
         let line = format!(" {} {}", if l_on { "#" } else { " " }, if r_on { "#" } else { " " });
@@ -214,28 +215,37 @@ fn vertical_meter_text(levels: &[f32], levels_db: &[f32], height: u16) -> Text<'
 fn horizontal_meter_text(levels: &[f32], levels_db: &[f32], width: u16) -> Text<'static> {
     let display = pick_levels(levels);
     let display_db = pick_levels_db(levels_db);
-    let bar_width = width.saturating_sub(6).max(4) as usize;
+    let line_width = width.max(1) as usize;
+    let left_db = format_db(display_db.left);
+    let right_db = format_db(display_db.right);
+    let overhead = 8; // "L [" + "] " + " dB"
+    let left_bar_width = line_width
+        .saturating_sub(overhead + left_db.len())
+        .max(1);
+    let right_bar_width = line_width
+        .saturating_sub(overhead + right_db.len())
+        .max(1);
 
-    let left = render_bar(display.left, bar_width);
+    let left = render_bar(display.left, left_bar_width);
     let mut lines = vec![Line::from(format!(
         "L [{}] {} dB",
         left,
-        format_db(display_db.left)
+        left_db
     ))];
 
     if display.has_right {
-        let right = render_bar(display.right, bar_width);
+        let right = render_bar(display.right, right_bar_width);
         lines.push(Line::from(format!(
             "R [{}] {} dB",
             right,
-            format_db(display_db.right)
+            right_db
         )));
     } else {
-        let mono = render_bar(display.left, bar_width);
+        let mono = render_bar(display.left, left_bar_width);
         lines.push(Line::from(format!(
             "M [{}] {} dB",
             mono,
-            format_db(display_db.left)
+            left_db
         )));
     }
 
