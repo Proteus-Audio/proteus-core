@@ -191,9 +191,7 @@ impl Prot {
 
         let mut parsed = None;
 
-        info!("Parsing play settings...");
         for attachment in &mka.attachments {
-            info!("Attachments: {:?}", attachment.name);
             if attachment.name == "play_settings.json" {
                 match serde_json::from_slice::<PlaySettingsFile>(&attachment.data) {
                     Ok(play_settings) => {
@@ -211,7 +209,7 @@ impl Prot {
             return;
         };
 
-        info!("Parsed play_settings.json: {:?}", play_settings);
+        info!("Parsed play_settings.json");
 
         self.impulse_response_spec = parse_impulse_response_spec(&play_settings);
         self.impulse_response_tail_db = parse_impulse_response_tail_db(&play_settings);
