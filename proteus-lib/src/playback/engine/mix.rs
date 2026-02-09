@@ -9,7 +9,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 use std::time::Duration;
-#[cfg(feature = "debug")]
 use std::time::Instant;
 
 use crate::audio::buffer::TrackBuffer;
@@ -65,6 +64,8 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer, f
         #[cfg(feature = "debug")]
         let mut avg_rt_factor = 0.0_f64;
         #[cfg(feature = "debug")]
+        let mut avg_overrun_ms = 0.0_f64;
+        #[cfg(feature = "debug")]
         let mut min_rt_factor = f64::INFINITY;
         #[cfg(feature = "debug")]
         let mut max_rt_factor = 0.0_f64;
@@ -74,6 +75,26 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer, f
         let mut min_chain_ksps = f64::INFINITY;
         #[cfg(feature = "debug")]
         let mut max_chain_ksps = 0.0_f64;
+        #[cfg(feature = "debug")]
+        let mut max_overrun_ms = 0.0_f64;
+        #[cfg(feature = "debug")]
+        let mut underrun_count = 0_u64;
+        #[cfg(feature = "debug")]
+        let mut last_underrun_log = Instant::now();
+        #[cfg(feature = "debug")]
+        let mut last_startup_log = Instant::now();
+        #[cfg(feature = "debug")]
+        let startup_log_start = Instant::now();
+        #[cfg(feature = "debug")]
+        let mut last_pop_log = Instant::now();
+        #[cfg(feature = "debug")]
+        let mut pop_count = 0_u64;
+        #[cfg(feature = "debug")]
+        let mut clip_count = 0_u64;
+        #[cfg(feature = "debug")]
+        let mut nan_count = 0_u64;
+        #[cfg(feature = "debug")]
+        let mut last_samples: Vec<f32> = Vec::new();
         #[cfg(feature = "debug")]
         let alpha = 0.1_f64;
 
@@ -148,6 +169,27 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer, f
         let min_mix_samples = min_mix_frames.max(1) * audio_info.channels as usize;
         let mut started = start_samples == 0;
         let mut mix_buffer = vec![0.0_f32; min_mix_samples];
+        let warmup_samples = min_mix_samples;
+
+        if warmup_samples > 0 {
+            let warmup_start = Instant::now();
+            let mut processed = vec![0.0_f32; warmup_samples];
+            {
+                let mut effects_guard = effects.lock().unwrap();
+                for effect in effects_guard.iter_mut() {
+                    processed = effect.process(&processed, &effect_context, false);
+                }
+            }
+            {
+                let mut tail_buffer = effects_buffer.lock().unwrap();
+                while tail_buffer.pop().is_some() {}
+            }
+            log::info!(
+                "DSP warmup: {:.2}ms ({} samples)",
+                warmup_start.elapsed().as_secs_f64() * 1000.0,
+                warmup_samples
+            );
+        }
 
         loop {
             if abort.load(Ordering::SeqCst) {
@@ -221,7 +263,9 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer, f
                         channels: prot.info.channels as usize,
                         container_path: prot.get_container_path(),
                         impulse_response_spec: prot.get_impulse_response_spec(),
-                        impulse_response_tail_db: prot.get_impulse_response_tail_db().unwrap_or(-60.0),
+                        impulse_response_tail_db: prot
+                            .get_impulse_response_tail_db()
+                            .unwrap_or(-60.0),
                     }
                 };
                 last_effects_reset = current_reset;
@@ -248,6 +292,47 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer, f
                 && ((!all_tracks_finished && active_min_len >= min_mix_samples)
                     || (all_tracks_finished && finished_min_len > 0));
 
+            #[cfg(feature = "debug")]
+            if started
+                && startup_log_start.elapsed().as_secs_f64() <= 8.0
+                && last_startup_log.elapsed().as_millis() >= 200
+            {
+                let mut sizes: Vec<String> = Vec::new();
+                for (track_key, buffer) in buffer_snapshot.iter() {
+                    let len = buffer.lock().unwrap().len();
+                    sizes.push(format!("{}={}", track_key, len));
+                }
+                log::info!(
+                    "startup buffers: t={:.2}s active_min={} finished_min={} tail={} sizes=[{}]",
+                    startup_log_start.elapsed().as_secs_f64(),
+                    active_min_len,
+                    finished_min_len,
+                    effects_len,
+                    sizes.join(", ")
+                );
+                last_startup_log = Instant::now();
+            }
+
+            #[cfg(feature = "debug")]
+            if started && !should_mix_tracks && !should_output_tail {
+                underrun_count = underrun_count.saturating_add(1);
+                if last_underrun_log.elapsed().as_secs_f64() >= 1.0 {
+                    log::warn!(
+                        "DSP underrun: active_min_len={} finished_min_len={} effects_len={} tracks={} finished={}",
+                        active_min_len,
+                        finished_min_len,
+                        effects_len,
+                        buffer_snapshot.len(),
+                        finished_snapshot.len()
+                    );
+                    last_underrun_log = Instant::now();
+                }
+                if let Ok(mut metrics) = dsp_metrics.lock() {
+                    metrics.underrun_count = underrun_count;
+                    metrics.underrun_active = true;
+                }
+            }
+
             if buffer_snapshot.is_empty() && effects_len == 0 && all_tracks_finished {
                 let mut drained = Vec::new();
                 {
@@ -273,7 +358,8 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer, f
                 let sample_rate = audio_info.sample_rate as u32;
 
                 let mut samples = if should_mix_tracks {
-                    let current_chunk = if !all_tracks_finished && active_min_len >= min_mix_samples {
+                    let current_chunk = if !all_tracks_finished && active_min_len >= min_mix_samples
+                    {
                         min_mix_samples
                     } else if all_tracks_finished && finished_min_len > 0 {
                         finished_min_len
@@ -313,7 +399,8 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer, f
                         {
                             let mut effects_guard = effects.lock().unwrap();
                             for effect in effects_guard.iter_mut() {
-                                processed = effect.process(&processed, &effect_context, drain_effects);
+                                processed =
+                                    effect.process(&processed, &effect_context, drain_effects);
                             }
                         }
 
@@ -329,12 +416,48 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer, f
 
                         #[cfg(feature = "debug")]
                         {
+                            let channels = input_channels.max(1) as usize;
+                            if last_samples.len() != channels {
+                                last_samples = vec![0.0; channels];
+                            }
+                            for (idx, sample) in processed.iter().enumerate() {
+                                let ch = idx % channels;
+                                let prev = last_samples[ch];
+                                if sample.is_nan() || sample.is_infinite() {
+                                    nan_count = nan_count.saturating_add(1);
+                                }
+                                if sample.abs() > 1.0 {
+                                    clip_count = clip_count.saturating_add(1);
+                                }
+                                let delta = (sample - prev).abs();
+                                if delta > 0.9 && sample.abs() > 0.6 {
+                                    pop_count = pop_count.saturating_add(1);
+                                }
+                                last_samples[ch] = *sample;
+                            }
+                            if last_pop_log.elapsed().as_secs_f64() >= 1.0
+                                && (pop_count > 0 || clip_count > 0 || nan_count > 0)
+                            {
+                                log::warn!(
+                                    "sample anomalies: pops={} clips={} nans={}",
+                                    pop_count,
+                                    clip_count,
+                                    nan_count
+                                );
+                                last_pop_log = Instant::now();
+                            }
+                        }
+
+                        #[cfg(feature = "debug")]
+                        {
                             let dsp_time_ms = dsp_start.elapsed().as_secs_f64() * 1000.0;
                             let rt_factor = if audio_time_ms > 0.0 {
                                 dsp_time_ms / audio_time_ms
                             } else {
                                 0.0
                             };
+                            let overrun_ms = (dsp_time_ms - audio_time_ms).max(0.0);
+                            let overrun = rt_factor > 1.0;
                             let chain_ksps = if dsp_time_ms > 0.0 {
                                 (processed.len() as f64 / (dsp_time_ms / 1000.0)) / 1000.0
                             } else {
@@ -356,6 +479,11 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer, f
                             } else {
                                 (avg_rt_factor * (1.0 - alpha)) + (rt_factor * alpha)
                             };
+                            avg_overrun_ms = if avg_overrun_ms == 0.0 {
+                                overrun_ms
+                            } else {
+                                (avg_overrun_ms * (1.0 - alpha)) + (overrun_ms * alpha)
+                            };
                             avg_chain_ksps = if avg_chain_ksps == 0.0 {
                                 chain_ksps
                             } else {
@@ -366,6 +494,9 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer, f
                                 min_rt_factor = min_rt_factor.min(rt_factor);
                                 max_rt_factor = max_rt_factor.max(rt_factor);
                             }
+                            if overrun_ms > 0.0 {
+                                max_overrun_ms = max_overrun_ms.max(overrun_ms);
+                            }
                             if chain_ksps > 0.0 {
                                 min_chain_ksps = min_chain_ksps.min(chain_ksps);
                                 max_chain_ksps = max_chain_ksps.max(chain_ksps);
@@ -375,6 +506,10 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer, f
                             metrics.dsp_time_ms = dsp_time_ms;
                             metrics.audio_time_ms = audio_time_ms;
                             metrics.rt_factor = rt_factor;
+                            metrics.overrun = overrun;
+                            metrics.overrun_ms = overrun_ms;
+                            metrics.avg_overrun_ms = avg_overrun_ms;
+                            metrics.max_overrun_ms = max_overrun_ms;
                             metrics.avg_dsp_ms = avg_dsp_ms;
                             metrics.avg_audio_ms = avg_audio_ms;
                             metrics.avg_rt_factor = avg_rt_factor;
@@ -392,6 +527,11 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer, f
                                 0.0
                             };
                             metrics.max_chain_ksps = max_chain_ksps;
+                            metrics.underrun_count = underrun_count;
+                            metrics.underrun_active = false;
+                            metrics.pop_count = pop_count;
+                            metrics.clip_count = clip_count;
+                            metrics.nan_count = nan_count;
                             metrics.track_key_count = buffer_snapshot.len();
                             metrics.finished_track_count = finished_snapshot.len();
                             metrics.prot_key_count = prot_key_count;

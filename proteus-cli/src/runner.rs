@@ -116,6 +116,24 @@ pub fn run(args: &ArgMatches, log_buffer: Arc<Mutex<VecDeque<LogLine>>>) -> Resu
         .parse::<f32>()
         .unwrap();
     player.set_start_buffer_ms(start_buffer_ms);
+    let start_sink_chunks = args
+        .get_one::<String>("start-sink-chunks")
+        .unwrap()
+        .parse::<usize>()
+        .unwrap();
+    player.set_start_sink_chunks(start_sink_chunks);
+    let startup_silence_ms = args
+        .get_one::<String>("startup-silence-ms")
+        .unwrap()
+        .parse::<f32>()
+        .unwrap();
+    player.set_startup_silence_ms(startup_silence_ms);
+    let startup_fade_ms = args
+        .get_one::<String>("startup-fade-ms")
+        .unwrap()
+        .parse::<f32>()
+        .unwrap();
+    player.set_startup_fade_ms(startup_fade_ms);
     let track_eos_ms = args
         .get_one::<String>("track-eos-ms")
         .unwrap()
@@ -208,6 +226,14 @@ pub fn run(args: &ArgMatches, log_buffer: Arc<Mutex<VecDeque<LogLine>>>) -> Resu
                 #[cfg(feature = "debug")]
                 rt_factor: dsp_metrics.rt_factor,
                 #[cfg(feature = "debug")]
+                overrun: dsp_metrics.overrun,
+                #[cfg(feature = "debug")]
+                overrun_ms: dsp_metrics.overrun_ms,
+                #[cfg(feature = "debug")]
+                avg_overrun_ms: dsp_metrics.avg_overrun_ms,
+                #[cfg(feature = "debug")]
+                max_overrun_ms: dsp_metrics.max_overrun_ms,
+                #[cfg(feature = "debug")]
                 chain_ksps: dsp_metrics.chain_ksps,
                 #[cfg(feature = "debug")]
                 avg_chain_ksps: dsp_metrics.avg_chain_ksps,
@@ -215,6 +241,16 @@ pub fn run(args: &ArgMatches, log_buffer: Arc<Mutex<VecDeque<LogLine>>>) -> Resu
                 min_chain_ksps: dsp_metrics.min_chain_ksps,
                 #[cfg(feature = "debug")]
                 max_chain_ksps: dsp_metrics.max_chain_ksps,
+                #[cfg(feature = "debug")]
+                underrun_count: dsp_metrics.underrun_count,
+                #[cfg(feature = "debug")]
+                underrun_active: dsp_metrics.underrun_active,
+                #[cfg(feature = "debug")]
+                pop_count: dsp_metrics.pop_count,
+                #[cfg(feature = "debug")]
+                clip_count: dsp_metrics.clip_count,
+                #[cfg(feature = "debug")]
+                nan_count: dsp_metrics.nan_count,
                 #[cfg(feature = "debug")]
                 track_key_count: dsp_metrics.track_key_count,
                 #[cfg(feature = "debug")]

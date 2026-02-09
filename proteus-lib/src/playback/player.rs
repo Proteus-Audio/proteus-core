@@ -349,6 +349,24 @@ impl Player {
         settings.track_eos_ms = track_eos_ms.max(0.0);
     }
 
+    /// Configure minimum sink chunks queued before playback starts/resumes.
+    pub fn set_start_sink_chunks(&self, chunks: usize) {
+        let mut settings = self.buffer_settings.lock().unwrap();
+        settings.start_sink_chunks = chunks;
+    }
+
+    /// Configure the startup silence pre-roll (ms).
+    pub fn set_startup_silence_ms(&self, ms: f32) {
+        let mut settings = self.buffer_settings.lock().unwrap();
+        settings.startup_silence_ms = ms.max(0.0);
+    }
+
+    /// Configure the startup fade-in length (ms).
+    pub fn set_startup_fade_ms(&self, ms: f32) {
+        let mut settings = self.buffer_settings.lock().unwrap();
+        settings.startup_fade_ms = ms.max(0.0);
+    }
+
     fn audition(&self, length: Duration) {
         let audition_source_mutex = self.audition_source.clone();
 
@@ -399,10 +417,12 @@ impl Player {
         let duration = self.duration.clone();
         let prot = self.prot.clone();
         let buffer_settings = self.buffer_settings.clone();
+        let buffer_settings_for_state = self.buffer_settings.clone();
         let effects = self.effects.clone();
         let dsp_metrics = self.dsp_metrics.clone();
         let effects_reset = self.effects_reset.clone();
         let output_meter = self.output_meter.clone();
+        let audio_info = self.info.clone();
 
         let audio_heard = self.audio_heard.clone();
         let volume = self.volume.clone();
@@ -495,9 +515,35 @@ impl Player {
             };
 
             // ===================== //
-            // Start sink with fade in
+            // Start sink with startup silence + fade in
             // ===================== //
-            // resume_sink(&sink_mutex.lock().unwrap(), 0.1);
+            {
+                let startup_settings = buffer_settings_for_state.lock().unwrap();
+                let startup_silence_ms = startup_settings.startup_silence_ms;
+                let startup_fade_ms = startup_settings.startup_fade_ms;
+                drop(startup_settings);
+
+                let sample_rate = audio_info.sample_rate as u32;
+                let channels = audio_info.channels as u16;
+
+                if startup_silence_ms > 0.0 {
+                    let samples = ((startup_silence_ms / 1000.0) * sample_rate as f32).ceil()
+                        as usize
+                        * channels as usize;
+                    let silence = vec![0.0_f32; samples.max(1)];
+                    let silence_buffer = SamplesBuffer::new(channels, sample_rate, silence);
+                    let sink = sink_mutex.lock().unwrap();
+                    sink.append(silence_buffer);
+                    drop(sink);
+                }
+
+                if startup_fade_ms > 0.0 {
+                    resume_sink(
+                        &sink_mutex.lock().unwrap(),
+                        (startup_fade_ms / 1000.0).max(0.0),
+                    );
+                }
+            }
 
             // ===================== //
             // Check if the player should be paused or not
@@ -514,6 +560,16 @@ impl Player {
 
                 let sink = sink_mutex.lock().unwrap();
                 let state = play_state.lock().unwrap().clone();
+                let start_sink_chunks = buffer_settings_for_state.lock().unwrap().start_sink_chunks;
+                if state == PlayerState::Resuming
+                    && start_sink_chunks > 0
+                    && sink.len() < start_sink_chunks
+                {
+                    // Keep paused until enough chunks are queued.
+                    sink.pause();
+                    drop(sink);
+                    return true;
+                }
                 if state == PlayerState::Pausing {
                     pause_sink(&sink, 0.1);
                     play_state.lock().unwrap().clone_from(&PlayerState::Paused);

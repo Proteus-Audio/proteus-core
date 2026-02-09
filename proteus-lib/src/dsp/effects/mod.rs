@@ -99,6 +99,22 @@ impl AudioEffect {
         }
     }
 
+    /// Ensure any internal state (e.g., convolution IR) is initialized.
+    pub fn warm_up(&mut self, context: &EffectContext) {
+        match self {
+            AudioEffect::BasicReverb(_) => {}
+            AudioEffect::DelayReverb(_) => {}
+            AudioEffect::ConvolutionReverb(effect) => {
+                let _ = effect.process(&[], context, false);
+            }
+            AudioEffect::LowPassFilter(_) => {}
+            AudioEffect::HighPassFilter(_) => {}
+            AudioEffect::Distortion(_) => {}
+            AudioEffect::Compressor(_) => {}
+            AudioEffect::Limiter(_) => {}
+        }
+    }
+
     /// Mutable access to the convolution reverb effect, if present.
     pub fn as_convolution_reverb_mut(&mut self) -> Option<&mut ConvolutionReverbEffect> {
         match self {

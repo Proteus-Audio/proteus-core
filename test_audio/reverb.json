@@ -5,9 +5,27 @@
 			"dry_wet": 1.0,
 			"impulse_response": null,
 			"impulse_response_attachment": null,
-			"impulse_response_path": "/Users/innocentsmith/Dev/rust/proteus/test_audio/SparklingHall.wav",
+			"impulse_response_path": "/Users/innocentsmith/Dev/rust/proteus/test_audio/GothicChurch.wav",
 			"impulse_response_tail_db": null,
 			"impulse_response_tail": null
+		}
+	},
+	{
+		"LimiterSettings": {
+			"enabled": true,
+			"threshold_db": -1.0,
+			"knee_width_db": 1.0,
+			"attack_ms": 5.0,
+			"release_ms": 100.0
+		}
+	},
+	{
+		"LimiterSettings": {
+			"enabled": true,
+			"threshold_db": -1.0,
+			"knee_width_db": 0.1,
+			"attack_ms": 0.0,
+			"release_ms": 100.0
 		}
 	}
 ]

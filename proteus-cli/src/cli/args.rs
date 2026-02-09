@@ -97,6 +97,27 @@ pub fn build_cli() -> Command {
                 .help("Amount of audio (ms) to buffer before starting playback"),
         )
         .arg(
+            Arg::new("start-sink-chunks")
+                .long("start-sink-chunks")
+                .value_name("CHUNKS")
+                .default_value("3")
+                .help("Minimum sink chunks queued before playback starts/resumes"),
+        )
+        .arg(
+            Arg::new("startup-silence-ms")
+                .long("startup-silence-ms")
+                .value_name("MS")
+                .default_value("0")
+                .help("Silence pre-roll before playback starts"),
+        )
+        .arg(
+            Arg::new("startup-fade-ms")
+                .long("startup-fade-ms")
+                .value_name("MS")
+                .default_value("150")
+                .help("Fade-in duration at playback start"),
+        )
+        .arg(
             Arg::new("track-eos-ms")
                 .long("track-eos-ms")
                 .value_name("MS")

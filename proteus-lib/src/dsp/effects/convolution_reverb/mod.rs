@@ -139,12 +139,20 @@ impl ConvolutionReverbEffect {
             return;
         }
 
+        let start = std::time::Instant::now();
         let reverb = build_reverb_with_impulse_response(
             config.channels,
             self.dry_wet,
             config.impulse_spec.clone(),
             config.container_path.as_deref(),
             config.tail_db,
+        );
+        let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
+        log::info!(
+            "Convolution reverb init: {:.2}ms (ir={:?} channels={})",
+            elapsed_ms,
+            config.impulse_spec,
+            config.channels
         );
 
         self.state = reverb.map(ConvolutionReverbState::new);
