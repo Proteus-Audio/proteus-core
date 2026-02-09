@@ -44,6 +44,8 @@ pub fn build_cli() -> Command {
         .arg(
             Arg::new("effects-json")
                 .long("effects-json")
+                .short('E')
+                .alias("effects")
                 .value_name("PATH")
                 .help("Path to JSON file containing Vec<AudioEffect>"),
         )

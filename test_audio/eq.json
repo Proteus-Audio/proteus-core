@@ -34,9 +34,9 @@
 	},
 	{
 		"DistortionSettings": {
-			"enabled": false,
-			"gain": 1.0,
-			"threshold": 1.0
+			"enabled": true,
+			"gain": 1.5,
+			"threshold": 0.1
 		}
 	},
 	{

@@ -2,8 +2,7 @@
 
 use std::{
     collections::VecDeque,
-    fs,
-    io,
+    fs, io,
     sync::{Arc, Mutex},
     thread::sleep,
     time::Duration,
@@ -99,12 +98,18 @@ pub fn run(args: &ArgMatches, log_buffer: Arc<Mutex<VecDeque<LogLine>>>) -> Resu
         .unwrap();
     let quiet = args.get_flag("quiet");
 
-    if !(file_path.ends_with(".prot") || file_path.ends_with(".mka")) {
-        error!("File is not a .prot or .mka file");
-        return Ok(-1);
-    }
+    let is_container = file_path.ends_with(".prot") || file_path.ends_with(".mka");
+    let file_paths = if is_container {
+        vec![vec![]]
+    } else {
+        vec![vec![file_path.clone()]]
+    };
 
-    let mut player = player::Player::new(&file_path);
+    let mut player = if is_container {
+        player::Player::new(&file_path)
+    } else {
+        player::Player::new_from_file_paths(file_paths.as_ref())
+    };
     let start_buffer_ms = args
         .get_one::<String>("start-buffer-ms")
         .unwrap()
@@ -132,8 +137,11 @@ pub fn run(args: &ArgMatches, log_buffer: Arc<Mutex<VecDeque<LogLine>>>) -> Resu
     }
 
     let reverb_mix_source = args.value_source("reverb-mix");
-    let should_apply_reverb_mix =
-        effects_json_path.is_none() || matches!(reverb_mix_source, Some(clap::parser::ValueSource::CommandLine));
+    let should_apply_reverb_mix = effects_json_path.is_none()
+        || matches!(
+            reverb_mix_source,
+            Some(clap::parser::ValueSource::CommandLine)
+        );
     if should_apply_reverb_mix {
         let reverb_mix = args
             .get_one::<String>("reverb-mix")
@@ -309,16 +317,16 @@ fn default_effects_chain() -> Vec<AudioEffect> {
 }
 
 fn load_effects_json(path: &str) -> std::result::Result<Vec<AudioEffect>, String> {
-    let raw = fs::read_to_string(path)
-        .map_err(|err| format!("failed to read {}: {}", path, err))?;
+    let raw =
+        fs::read_to_string(path).map_err(|err| format!("failed to read {}: {}", path, err))?;
     serde_json::from_str(&raw).map_err(|err| format!("failed to parse json: {}", err))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::NamedTempFile;
     use std::io::Write;
+    use tempfile::NamedTempFile;
 
     #[test]
     fn load_effects_json_parses_effects() {
@@ -375,9 +383,9 @@ fn run_info(file_path: &str, print: bool) -> i32 {
         if let Ok(true) = event::poll(Duration::from_millis(200)) {
             if let Ok(event::Event::Key(key)) = event::read() {
                 match key.code {
-                    event::KeyCode::Char('q')
-                    | event::KeyCode::Esc
-                    | event::KeyCode::Enter => break,
+                    event::KeyCode::Char('q') | event::KeyCode::Esc | event::KeyCode::Enter => {
+                        break
+                    }
                     _ => {}
                 }
             }

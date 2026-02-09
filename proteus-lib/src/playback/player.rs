@@ -14,8 +14,8 @@ use crate::audio::samples::clone_samples_buffer;
 use crate::container::prot::Prot;
 use crate::diagnostics::reporter::{Report, Reporter};
 use crate::dsp::effects::convolution_reverb::{parse_impulse_response_string, ImpulseResponseSpec};
-use crate::tools::timer;
 use crate::playback::output_meter::OutputMeter;
+use crate::tools::timer;
 use crate::{
     container::info::Info,
     dsp::effects::{AudioEffect, BasicReverbEffect, ConvolutionReverbEffect},
@@ -251,6 +251,7 @@ impl Player {
     /// Replace the active DSP effects chain.
     pub fn set_effects(&self, effects: Vec<AudioEffect>) {
         let mut guard = self.effects.lock().unwrap();
+        println!("Setting Effects: {:?}", effects);
         *guard = effects;
         self.request_effects_reset();
     }
