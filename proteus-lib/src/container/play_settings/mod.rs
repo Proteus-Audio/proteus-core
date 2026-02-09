@@ -4,9 +4,11 @@ use log::{info, warn};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 pub use crate::dsp::effects::{
-    BasicReverbSettings, CompressorSettings, ConvolutionReverbSettings, DistortionSettings,
+    CompressorSettings, ConvolutionReverbSettings, DelayReverbSettings, DistortionSettings,
     HighPassFilterSettings, LimiterSettings, LowPassFilterSettings,
 };
+#[deprecated(note = "Use DelayReverbSettings instead.")]
+pub use crate::dsp::effects::BasicReverbSettings;
 use crate::dsp::effects::AudioEffect;
 
 pub mod legacy;

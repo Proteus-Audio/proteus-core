@@ -18,7 +18,7 @@ use crate::playback::output_meter::OutputMeter;
 use crate::tools::timer;
 use crate::{
     container::info::Info,
-    dsp::effects::{AudioEffect, BasicReverbEffect, ConvolutionReverbEffect},
+    dsp::effects::{AudioEffect, ConvolutionReverbEffect, DelayReverbEffect},
     playback::engine::{DspChainMetrics, PlaybackBufferSettings, PlayerEngine},
 };
 
@@ -129,7 +129,7 @@ impl Player {
             buffer_settings: Arc::new(Mutex::new(PlaybackBufferSettings::new(20.0))),
             effects: Arc::new(Mutex::new(vec![
                 AudioEffect::ConvolutionReverb(ConvolutionReverbEffect::new(0.000001)),
-                AudioEffect::BasicReverb(BasicReverbEffect::new(0.000001)),
+                AudioEffect::DelayReverb(DelayReverbEffect::new(0.000001)),
             ])),
             dsp_metrics: Arc::new(Mutex::new(DspChainMetrics::default())),
             effects_reset: Arc::new(AtomicU64::new(0)),
@@ -184,7 +184,7 @@ impl Player {
         }
         if let Some(effect) = effects
             .iter_mut()
-            .find_map(|effect| effect.as_basic_reverb_mut())
+            .find_map(|effect| effect.as_delay_reverb_mut())
         {
             effect.enabled = enabled;
         }
@@ -201,7 +201,7 @@ impl Player {
         }
         if let Some(effect) = effects
             .iter_mut()
-            .find_map(|effect| effect.as_basic_reverb_mut())
+            .find_map(|effect| effect.as_delay_reverb_mut())
         {
             effect.mix = dry_wet.clamp(0.0, 1.0);
         }
@@ -219,7 +219,7 @@ impl Player {
                 dry_wet: effect.dry_wet,
             };
         }
-        if let Some(effect) = effects.iter().find_map(|effect| effect.as_basic_reverb()) {
+        if let Some(effect) = effects.iter().find_map(|effect| effect.as_delay_reverb()) {
             return ReverbSettingsSnapshot {
                 enabled: effect.enabled,
                 dry_wet: effect.mix,
@@ -237,7 +237,8 @@ impl Player {
         effects
             .iter()
             .map(|effect| match effect {
-                AudioEffect::BasicReverb(_) => "BasicReverb".to_string(),
+                AudioEffect::DelayReverb(_) => "DelayReverb".to_string(),
+                AudioEffect::BasicReverb(_) => "DelayReverb".to_string(),
                 AudioEffect::ConvolutionReverb(_) => "ConvolutionReverb".to_string(),
                 AudioEffect::LowPassFilter(_) => "LowPassFilter".to_string(),
                 AudioEffect::HighPassFilter(_) => "HighPassFilter".to_string(),

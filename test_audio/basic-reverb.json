@@ -1,0 +1,10 @@
+[
+	{
+		"BasicReverbSettings": {
+			"enabled": true,
+			"mix": 0.3,
+			"duration_ms": 100,
+			"amplitude": 0.7
+		}
+	}
+]

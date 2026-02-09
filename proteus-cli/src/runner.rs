@@ -15,7 +15,7 @@ use crossterm::{
 };
 use log::{error, info};
 use proteus_lib::dsp::effects::{
-    AudioEffect, BasicReverbEffect, CompressorEffect, ConvolutionReverbEffect, DistortionEffect,
+    AudioEffect, CompressorEffect, ConvolutionReverbEffect, DelayReverbEffect, DistortionEffect,
     HighPassFilterEffect, LimiterEffect, LowPassFilterEffect,
 };
 use proteus_lib::playback::player;
@@ -311,7 +311,7 @@ fn run_create_effects_json() -> i32 {
 fn default_effects_chain() -> Vec<AudioEffect> {
     vec![
         AudioEffect::ConvolutionReverb(ConvolutionReverbEffect::default()),
-        AudioEffect::BasicReverb(BasicReverbEffect::default()),
+        AudioEffect::DelayReverb(DelayReverbEffect::default()),
         AudioEffect::LowPassFilter(LowPassFilterEffect::default()),
         AudioEffect::HighPassFilter(HighPassFilterEffect::default()),
         AudioEffect::Distortion(DistortionEffect::default()),
