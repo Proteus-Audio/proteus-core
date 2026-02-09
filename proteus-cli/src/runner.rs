@@ -137,12 +137,10 @@ pub fn run(args: &ArgMatches, log_buffer: Arc<Mutex<VecDeque<LogLine>>>) -> Resu
     }
 
     let reverb_mix_source = args.value_source("reverb-mix");
-    let should_apply_reverb_mix = effects_json_path.is_none()
-        || matches!(
-            reverb_mix_source,
-            Some(clap::parser::ValueSource::CommandLine)
-        );
-    if should_apply_reverb_mix {
+    if matches!(
+        reverb_mix_source,
+        Some(clap::parser::ValueSource::CommandLine)
+    ) {
         let reverb_mix = args
             .get_one::<String>("reverb-mix")
             .unwrap()
