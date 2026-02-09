@@ -5,13 +5,14 @@ use rand::Rng;
 use symphonia::core::audio::Channels;
 use symphonia::core::sample::SampleFormat;
 
-use log::{error, warn};
+use log::{error, info, warn};
 
 use crate::container::info::*;
 use crate::container::play_settings::{PlaySettingsFile, PlaySettingsLegacy, SettingsTrack};
 use crate::dsp::effects::convolution_reverb::{
     parse_impulse_response_spec, parse_impulse_response_tail_db, ImpulseResponseSpec,
 };
+use crate::dsp::effects::AudioEffect;
 
 /// Parsed `.prot` container with resolved tracks and playback metadata.
 #[derive(Debug, Clone)]
@@ -25,6 +26,7 @@ pub struct Prot {
     duration: f64,
     impulse_response_spec: Option<ImpulseResponseSpec>,
     impulse_response_tail_db: Option<f32>,
+    effects: Option<Vec<AudioEffect>>,
 }
 
 impl Prot {
@@ -42,6 +44,7 @@ impl Prot {
             duration: 0.0,
             impulse_response_spec: None,
             impulse_response_tail_db: None,
+            effects: None,
         };
 
         this.refresh_tracks();
@@ -74,6 +77,7 @@ impl Prot {
             duration: 0.0,
             impulse_response_spec: None,
             impulse_response_tail_db: None,
+            effects: None,
         };
 
         this.refresh_tracks();
@@ -91,6 +95,7 @@ impl Prot {
         let mut longest_duration = 0.0;
         self.impulse_response_spec = None;
         self.impulse_response_tail_db = None;
+        self.effects = None;
 
         if let Some(file_paths) = &self.file_paths {
             // Choose random file path from each file_paths array
@@ -152,6 +157,14 @@ impl Prot {
                         );
                     }
                     PlaySettingsFile::V1(file) => {
+                        self.effects = Some(file.settings.inner().effects.clone());
+                        if let Some(effects) = self.effects.as_ref() {
+                            info!(
+                                "Loaded play_settings effects ({}): {:?}",
+                                effects.len(),
+                                effects
+                            );
+                        }
                         collect_tracks_from_ids(
                             &file.settings.inner().tracks,
                             &mut track_index_array,
@@ -161,6 +174,14 @@ impl Prot {
                         );
                     }
                     PlaySettingsFile::V2(file) => {
+                        self.effects = Some(file.settings.inner().effects.clone());
+                        if let Some(effects) = self.effects.as_ref() {
+                            info!(
+                                "Loaded play_settings effects ({}): {:?}",
+                                effects.len(),
+                                effects
+                            );
+                        }
                         collect_tracks_from_ids(
                             &file.settings.inner().tracks,
                             &mut track_index_array,
@@ -177,6 +198,11 @@ impl Prot {
         });
 
         self.track_ids = Some(track_index_array);
+    }
+
+    /// Return effects parsed from play_settings, if any.
+    pub fn get_effects(&self) -> Option<Vec<AudioEffect>> {
+        self.effects.clone()
     }
 
     fn get_audio_settings(file_path: &str) -> Audio {

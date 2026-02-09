@@ -2,7 +2,7 @@
 	{
 		"ConvolutionReverbSettings": {
 			"enabled": true,
-			"dry_wet": 0.6,
+			"dry_wet": 1.0,
 			"impulse_response": null,
 			"impulse_response_attachment": null,
 			"impulse_response_path": "/Users/innocentsmith/Dev/rust/proteus/test_audio/SparklingHall.wav",

@@ -111,6 +111,14 @@ impl Player {
 
         let channels = info.channels as usize;
         let sample_rate = info.sample_rate;
+        let effects = {
+            let prot_locked = prot.lock().unwrap();
+            match prot_locked.get_effects() {
+                Some(effects) => Arc::new(Mutex::new(effects)),
+                None => Arc::new(Mutex::new(vec![])),
+            }
+        };
+
         let mut this = Self {
             info,
             finished_tracks: Arc::new(Mutex::new(Vec::new())),
@@ -127,10 +135,7 @@ impl Player {
             prot,
             reporter: None,
             buffer_settings: Arc::new(Mutex::new(PlaybackBufferSettings::new(20.0))),
-            effects: Arc::new(Mutex::new(vec![
-                AudioEffect::ConvolutionReverb(ConvolutionReverbEffect::new(0.000001)),
-                AudioEffect::DelayReverb(DelayReverbEffect::new(0.000001)),
-            ])),
+            effects,
             dsp_metrics: Arc::new(Mutex::new(DspChainMetrics::default())),
             effects_reset: Arc::new(AtomicU64::new(0)),
             output_meter: Arc::new(Mutex::new(OutputMeter::new(
