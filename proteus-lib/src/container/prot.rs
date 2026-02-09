@@ -24,6 +24,7 @@ pub struct Prot {
     track_ids: Option<Vec<u32>>,
     track_paths: Option<Vec<String>>,
     duration: f64,
+    play_settings: Option<PlaySettingsFile>,
     impulse_response_spec: Option<ImpulseResponseSpec>,
     impulse_response_tail_db: Option<f32>,
     effects: Option<Vec<AudioEffect>>,
@@ -34,6 +35,8 @@ impl Prot {
     pub fn new(file_path: &String) -> Self {
         let info = Info::new(file_path.clone());
 
+        println!("Info: {:?}", info);
+
         let mut this = Self {
             info,
             file_path: Some(file_path.clone()),
@@ -42,11 +45,13 @@ impl Prot {
             track_ids: None,
             track_paths: None,
             duration: 0.0,
+            play_settings: None,
             impulse_response_spec: None,
             impulse_response_tail_db: None,
             effects: None,
         };
 
+        this.load_play_settings();
         this.refresh_tracks();
 
         this
@@ -75,6 +80,7 @@ impl Prot {
             track_ids: None,
             track_paths: None,
             duration: 0.0,
+            play_settings: None,
             impulse_response_spec: None,
             impulse_response_tail_db: None,
             effects: None,
@@ -93,9 +99,6 @@ impl Prot {
     /// Rebuild the active track list (e.g., after shuffle).
     pub fn refresh_tracks(&mut self) {
         let mut longest_duration = 0.0;
-        self.impulse_response_spec = None;
-        self.impulse_response_tail_db = None;
-        self.effects = None;
 
         if let Some(file_paths) = &self.file_paths {
             // Choose random file path from each file_paths array
@@ -130,72 +133,44 @@ impl Prot {
             return;
         }
 
-        let file_path = self.file_path.as_ref().unwrap();
-        let file = std::fs::File::open(file_path).unwrap();
-
-        let mka: Matroska = Matroska::open(file).expect("Could not open file");
-
         let mut track_index_array: Vec<u32> = Vec::new();
-        mka.attachments.iter().for_each(|attachment| {
-            // Only print if name is "play_settings.json"
-            if attachment.name == "play_settings.json" {
-                // read json data from attachment.data to object
-                let play_settings: PlaySettingsFile =
-                    serde_json::from_slice(&attachment.data).unwrap();
-
-                self.impulse_response_spec = parse_impulse_response_spec(&play_settings);
-                self.impulse_response_tail_db = parse_impulse_response_tail_db(&play_settings);
-
-                match &play_settings {
-                    PlaySettingsFile::Legacy(file) => {
-                        collect_legacy_tracks(
-                            file.settings.inner(),
-                            &mut track_index_array,
-                            &mut longest_duration,
-                            &self.info,
-                            &mut self.duration,
-                        );
-                    }
-                    PlaySettingsFile::V1(file) => {
-                        self.effects = Some(file.settings.inner().effects.clone());
-                        if let Some(effects) = self.effects.as_ref() {
-                            info!(
-                                "Loaded play_settings effects ({}): {:?}",
-                                effects.len(),
-                                effects
-                            );
-                        }
-                        collect_tracks_from_ids(
-                            &file.settings.inner().tracks,
-                            &mut track_index_array,
-                            &mut longest_duration,
-                            &self.info,
-                            &mut self.duration,
-                        );
-                    }
-                    PlaySettingsFile::V2(file) => {
-                        self.effects = Some(file.settings.inner().effects.clone());
-                        if let Some(effects) = self.effects.as_ref() {
-                            info!(
-                                "Loaded play_settings effects ({}): {:?}",
-                                effects.len(),
-                                effects
-                            );
-                        }
-                        collect_tracks_from_ids(
-                            &file.settings.inner().tracks,
-                            &mut track_index_array,
-                            &mut longest_duration,
-                            &self.info,
-                            &mut self.duration,
-                        );
-                    }
-                    PlaySettingsFile::Unknown { .. } => {
-                        error!("Unknown file format");
-                    }
+        match self.play_settings.as_ref() {
+            Some(play_settings) => match play_settings {
+                PlaySettingsFile::Legacy(file) => {
+                    collect_legacy_tracks(
+                        file.settings.inner(),
+                        &mut track_index_array,
+                        &mut longest_duration,
+                        &self.info,
+                        &mut self.duration,
+                    );
                 }
+                PlaySettingsFile::V1(file) => {
+                    collect_tracks_from_ids(
+                        &file.settings.inner().tracks,
+                        &mut track_index_array,
+                        &mut longest_duration,
+                        &self.info,
+                        &mut self.duration,
+                    );
+                }
+                PlaySettingsFile::V2(file) => {
+                    collect_tracks_from_ids(
+                        &file.settings.inner().tracks,
+                        &mut track_index_array,
+                        &mut longest_duration,
+                        &self.info,
+                        &mut self.duration,
+                    );
+                }
+                PlaySettingsFile::Unknown { .. } => {
+                    error!("Unknown file format");
+                }
+            },
+            None => {
+                warn!("No play_settings.json found; no tracks resolved.");
             }
-        });
+        }
 
         self.track_ids = Some(track_index_array);
     }
@@ -203,6 +178,63 @@ impl Prot {
     /// Return effects parsed from play_settings, if any.
     pub fn get_effects(&self) -> Option<Vec<AudioEffect>> {
         self.effects.clone()
+    }
+
+    fn load_play_settings(&mut self) {
+        println!("Loading play settings...");
+        let Some(file_path) = self.file_path.as_ref() else {
+            return;
+        };
+
+        let file = std::fs::File::open(file_path).unwrap();
+        let mka: Matroska = Matroska::open(file).expect("Could not open file");
+
+        let mut parsed = None;
+
+        info!("Parsing play settings...");
+        for attachment in &mka.attachments {
+            info!("Attachments: {:?}", attachment.name);
+            if attachment.name == "play_settings.json" {
+                match serde_json::from_slice::<PlaySettingsFile>(&attachment.data) {
+                    Ok(play_settings) => {
+                        parsed = Some(play_settings);
+                        break;
+                    }
+                    Err(err) => {
+                        error!("Failed to parse play_settings.json: {}", err);
+                    }
+                }
+            }
+        }
+
+        let Some(play_settings) = parsed else {
+            return;
+        };
+
+        info!("Parsed play_settings.json: {:?}", play_settings);
+
+        self.impulse_response_spec = parse_impulse_response_spec(&play_settings);
+        self.impulse_response_tail_db = parse_impulse_response_tail_db(&play_settings);
+
+        match &play_settings {
+            PlaySettingsFile::V1(file) => {
+                self.effects = Some(file.settings.inner().effects.clone());
+            }
+            PlaySettingsFile::V2(file) => {
+                self.effects = Some(file.settings.inner().effects.clone());
+            }
+            _ => {}
+        }
+
+        if let Some(effects) = self.effects.as_ref() {
+            info!(
+                "Loaded play_settings effects ({}): {:?}",
+                effects.len(),
+                effects
+            );
+        }
+
+        self.play_settings = Some(play_settings);
     }
 
     fn get_audio_settings(file_path: &str) -> Audio {

@@ -12,8 +12,8 @@ pub mod impulse_response;
 pub mod reverb;
 mod spec;
 
-pub use spec::{parse_impulse_response_string, ImpulseResponseSpec};
 pub(crate) use spec::{parse_impulse_response_spec, parse_impulse_response_tail_db};
+pub use spec::{parse_impulse_response_string, ImpulseResponseSpec};
 
 const DEFAULT_DRY_WET: f32 = 0.000001;
 const DEFAULT_TAIL_DB: f32 = -60.0;
