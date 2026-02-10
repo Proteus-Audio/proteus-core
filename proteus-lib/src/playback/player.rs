@@ -712,9 +712,6 @@ impl Player {
                 }
                 let mut chunk_lengths = chunk_lengths.lock().unwrap();
 
-                let total_time = chunk_lengths.iter().sum::<f64>();
-                let should_audition = audition_source.is_none() && total_time < 0.2;
-
                 sink.append(mixer);
 
                 drop(sink);
