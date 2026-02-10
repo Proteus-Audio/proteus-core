@@ -8,6 +8,12 @@ A **waveshaping** effect that adds harmonic content by clipping or bending the w
 - This creates new harmonics (grit, edge).
 - The signal can be softened (soft clip) or harsh (hard clip).
 
+## How it works (step‑by‑step)
+1. Sanitize `gain` and `threshold` (non‑finite values fall back to defaults; threshold is treated as absolute).
+2. For each sample, multiply by `gain`.
+3. Clamp the result to `[-threshold, +threshold]` (hard clip).
+4. Return the clipped samples unchanged in length.
+
 ## Waveform View (visual)
 
 ```

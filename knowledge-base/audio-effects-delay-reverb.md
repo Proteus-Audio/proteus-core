@@ -8,6 +8,17 @@ A classic **delay‑based reverb** that feeds the signal through short delays wi
 - A portion of the delayed signal is fed back to create multiple echoes.
 - The dry (original) and wet (delayed) signals are mixed together.
 
+## How it works (step‑by‑step)
+1. Compute the delay length in samples from `duration_ms`, sample rate, and channel count.
+2. Allocate a circular delay line buffer of that length and track a write cursor.
+3. Choose the feedback amplitude: if `mix` is set, use `mix` (clamped); otherwise use the stored `amplitude`.
+4. For each incoming sample:
+5. Read the delayed sample at the cursor.
+6. Output `sample + (delayed * amplitude)`.
+7. Write `sample + (delayed * amplitude)` back into the delay line (feedback).
+8. Advance the cursor, wrapping at the buffer end.
+9. If draining, keep feeding zeros through the delay line to emit the remaining tail.
+
 ## Signal Flow (simplified)
 
 ```
