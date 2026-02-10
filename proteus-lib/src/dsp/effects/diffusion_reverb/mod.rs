@@ -158,11 +158,6 @@ impl DiffusionReverbEffect {
             return samples.to_vec();
         }
 
-        // If an impulse response is configured, skip algorithmic reverb in favor of convolution.
-        if context.impulse_response_spec.is_some() {
-            return samples.to_vec();
-        }
-
         let Some(state) = self.state.as_mut() else {
             return samples.to_vec();
         };

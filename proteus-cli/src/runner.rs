@@ -15,8 +15,9 @@ use crossterm::{
 };
 use log::{error, info};
 use proteus_lib::dsp::effects::{
-    AudioEffect, CompressorEffect, ConvolutionReverbEffect, DelayReverbEffect, DistortionEffect,
-    HighPassFilterEffect, LimiterEffect, LowPassFilterEffect,
+    AudioEffect, CompressorEffect, ConvolutionReverbEffect, DelayReverbEffect,
+    DiffusionReverbEffect, DistortionEffect, HighPassFilterEffect, LimiterEffect,
+    LowPassFilterEffect,
 };
 use proteus_lib::playback::player;
 use ratatui::{backend::CrosstermBackend, Terminal};
@@ -150,23 +151,6 @@ pub fn run(args: &ArgMatches, log_buffer: Arc<Mutex<VecDeque<LogLine>>>) -> Resu
             }
         }
     }
-    if let Some(impulse_response) = args.get_one::<String>("impulse-response") {
-        player.set_impulse_response_from_string(impulse_response);
-    }
-
-    let reverb_mix_source = args.value_source("reverb-mix");
-    if matches!(
-        reverb_mix_source,
-        Some(clap::parser::ValueSource::CommandLine)
-    ) {
-        let reverb_mix = args
-            .get_one::<String>("reverb-mix")
-            .unwrap()
-            .parse::<f32>()
-            .unwrap();
-        player.set_reverb_mix(reverb_mix);
-    }
-
     // Start playback once configuration is applied.
     player.play();
     player.set_volume(gain / 100.0);
@@ -345,6 +329,7 @@ fn run_create_effects_json() -> i32 {
 fn default_effects_chain() -> Vec<AudioEffect> {
     vec![
         AudioEffect::ConvolutionReverb(ConvolutionReverbEffect::default()),
+        AudioEffect::DiffusionReverb(DiffusionReverbEffect::default()),
         AudioEffect::DelayReverb(DelayReverbEffect::default()),
         AudioEffect::LowPassFilter(LowPassFilterEffect::default()),
         AudioEffect::HighPassFilter(HighPassFilterEffect::default()),

@@ -27,21 +27,6 @@ pub fn build_cli() -> Command {
                 .help("The playback gain"),
         )
         .arg(
-            Arg::new("impulse-response")
-                .long("ir")
-                .value_name("IMPULSE")
-                .help(
-                    "Impulse response path or attachment (e.g., file:ir.wav or attachment:ir.wav)",
-                ),
-        )
-        .arg(
-            Arg::new("reverb-mix")
-                .long("reverb-mix")
-                .value_name("MIX")
-                .default_value("0.0")
-                .help("The reverb wet/dry mix (0.0-1.0)"),
-        )
-        .arg(
             Arg::new("effects-json")
                 .long("effects-json")
                 .short('E')
