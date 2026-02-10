@@ -1,9 +1,33 @@
 //! CLI argument definitions for `proteus-cli`.
 
-use clap::{Arg, ArgAction, ArgGroup, Command};
+use clap::{Arg, ArgAction, Command};
 
 /// Build the CLI argument parser and command definitions.
 pub fn build_cli() -> Command {
+    fn with_bench_common_args(cmd: Command) -> Command {
+        cmd.arg(
+            Arg::new("bench-input-seconds")
+                .long("bench-input-seconds")
+                .value_name("SECONDS")
+                .default_value("1.0")
+                .help("Input length in seconds for DSP benchmark"),
+        )
+        .arg(
+            Arg::new("bench-ir-seconds")
+                .long("bench-ir-seconds")
+                .value_name("SECONDS")
+                .default_value("2.0")
+                .help("Impulse response length in seconds for DSP benchmark"),
+        )
+        .arg(
+            Arg::new("bench-iterations")
+                .long("bench-iterations")
+                .value_name("COUNT")
+                .default_value("5")
+                .help("Number of iterations for DSP benchmark"),
+        )
+    }
+
     // Build the CLI definition in one place to keep main.rs slim.
     Command::new("Prot Play")
         .version("1.0")
@@ -127,50 +151,24 @@ pub fn build_cli() -> Command {
         .subcommand(
             Command::new("bench")
                 .about("Run DSP benchmarks without starting playback")
-                .arg(
-                    Arg::new("bench-dsp")
-                        .long("bench-dsp")
-                        .action(ArgAction::SetTrue)
-                        .help("Run a synthetic DSP benchmark and exit"),
+                .subcommand(
+                    with_bench_common_args(
+                        Command::new("dsp")
+                            .about("Run a synthetic DSP benchmark and exit")
+                            .arg(
+                                Arg::new("bench-fft-size")
+                                    .long("bench-fft-size")
+                                    .value_name("SIZE")
+                                    .default_value("24576")
+                                    .help("FFT size for DSP benchmark"),
+                            ),
+                    ),
                 )
-                .arg(
-                    Arg::new("bench-sweep")
-                        .long("bench-sweep")
-                        .action(ArgAction::SetTrue)
-                        .help("Run a sweep over multiple FFT sizes and exit"),
-                )
-                .arg(
-                    Arg::new("bench-fft-size")
-                        .long("bench-fft-size")
-                        .value_name("SIZE")
-                        .default_value("24576")
-                        .help("FFT size for DSP benchmark"),
-                )
-                .arg(
-                    Arg::new("bench-input-seconds")
-                        .long("bench-input-seconds")
-                        .value_name("SECONDS")
-                        .default_value("1.0")
-                        .help("Input length in seconds for DSP benchmark"),
-                )
-                .arg(
-                    Arg::new("bench-ir-seconds")
-                        .long("bench-ir-seconds")
-                        .value_name("SECONDS")
-                        .default_value("2.0")
-                        .help("Impulse response length in seconds for DSP benchmark"),
-                )
-                .arg(
-                    Arg::new("bench-iterations")
-                        .long("bench-iterations")
-                        .value_name("COUNT")
-                        .default_value("5")
-                        .help("Number of iterations for DSP benchmark"),
-                )
-                .group(
-                    ArgGroup::new("bench-mode")
-                        .required(true)
-                        .args(&["bench-dsp", "bench-sweep"]),
+                .subcommand(
+                    with_bench_common_args(
+                        Command::new("sweep")
+                            .about("Run a sweep over multiple FFT sizes and exit"),
+                    ),
                 ),
         )
         .subcommand(
