@@ -414,7 +414,8 @@ impl Player {
         drop(finished_tracks);
 
         // ===== Set play options ===== //
-        self.abort.store(false, Ordering::SeqCst);
+        // Use a fresh abort flag per playback thread so old mixer threads stay stopped.
+        self.abort = Arc::new(AtomicBool::new(false));
         self.playback_thread_exists.store(true, Ordering::SeqCst);
         let playback_id = self.playback_id.fetch_add(1, Ordering::SeqCst) + 1;
         self.buffering_done.store(false, Ordering::SeqCst);
