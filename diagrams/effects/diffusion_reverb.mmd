@@ -1,0 +1,22 @@
+flowchart LR
+  In["x[n]"] --> Pre["z^-Npre (pre-delay)"]
+  Pre --> Split{Parallel}
+
+  Split --> C1["Comb 1: z^-N1 + LPF + g"]
+  Split --> C2["Comb 2: z^-N2 + LPF + g"]
+  Split --> C3["Comb 3: z^-N3 + LPF + g"]
+  Split --> C4["Comb 4: z^-N4 + LPF + g"]
+
+  C1 --> Sum(("+"))
+  C2 --> Sum
+  C3 --> Sum
+  C4 --> Sum
+
+  Sum --> AP1["Allpass 1: z^-Na, g"]
+  AP1 --> AP2["Allpass 2: z^-Nb, g"]
+  AP2 --> Wet["wet"]
+
+  In --> DryGain["1 - mix"]
+  DryGain --> Out["y[n]"]
+  Wet --> WetGain["mix"]
+  WetGain --> Out
