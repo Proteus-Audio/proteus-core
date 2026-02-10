@@ -1,0 +1,16 @@
+flowchart TB
+  subgraph Core["proteus-lib"]
+    direction TB
+    Container["container (prot/info/attachments)"]
+    Audio["audio (buffering/samples)"]
+    DSP["dsp (convolution/reverb/impulse_response)"]
+    Playback["playback (player/engine)"]
+    Diagnostics["diagnostics (reporter)"]
+    Tools["tools (timer/helpers)"]
+  end
+
+  Container --> Playback
+  Audio --> Playback
+  DSP --> Playback
+  Tools --> Playback
+  Diagnostics --> Playback

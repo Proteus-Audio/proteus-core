@@ -5,41 +5,6 @@ CLI for reading and parsing .prot files
 
 The `proteus-lib` crate is structured to separate container parsing, DSP, and playback orchestration. This keeps the DSP pure, isolates IO/containers, and makes the library easier to embed in other apps.
 
-```mermaid
-flowchart TB
-  subgraph Core["proteus-lib"]
-    direction TB
-    Container["container (prot/info/attachments)"]
-    Audio["audio (buffering/samples)"]
-    DSP["dsp (convolution/reverb/impulse_response)"]
-    Playback["playback (player/engine)"]
-    Diagnostics["diagnostics (reporter)"]
-    Tools["tools (timer/helpers)"]
-  end
-
-  Container --> Playback
-  Audio --> Playback
-  DSP --> Playback
-  Tools --> Playback
-  Diagnostics --> Playback
-```
-
-```mermaid
-sequenceDiagram
-  participant App as App/GUI
-  participant Player as playback::player::Player
-  participant Engine as playback::engine::PlayerEngine
-  participant Container as container::prot::Prot
-  participant DSP as dsp::reverb::Reverb
-  App->>Player: create + configure (IR/mix)
-  Player->>Engine: start playback thread
-  Engine->>Container: read tracks/settings
-  Engine->>DSP: process audio chunks
-  DSP-->>Engine: processed samples
-  Engine-->>Player: mixed SamplesBuffer
-  Player-->>App: playback state/time
-```
-
 ## About
 
 > “It’s possible that our grandchildren will look at us and say ‘You mean people used to listen to the same thing over and over again?’” - Brian Eno

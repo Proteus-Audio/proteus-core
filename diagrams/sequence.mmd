@@ -1,0 +1,13 @@
+sequenceDiagram
+  participant App as App/GUI
+  participant Player as playback::player::Player
+  participant Engine as playback::engine::PlayerEngine
+  participant Container as container::prot::Prot
+  participant DSP as dsp::reverb::Reverb
+  App->>Player: create + configure (IR/mix)
+  Player->>Engine: start playback thread
+  Engine->>Container: read tracks/settings
+  Engine->>DSP: process audio chunks
+  DSP-->>Engine: processed samples
+  Engine-->>Player: mixed SamplesBuffer
+  Player-->>App: playback state/time
