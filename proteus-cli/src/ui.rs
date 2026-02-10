@@ -36,6 +36,7 @@ pub fn draw_status(
         };
         let title_text = to_art("Proteus".to_string(), "standard", 0, 1, 0)
             .unwrap_or_else(|_| "Proteus Audio".to_string());
+        let title_text = format!("{title_text}\nv{}", env!("CARGO_PKG_VERSION"));
         let title_height = title_text.lines().count().max(1) as u16;
 
         let chunks = Layout::default()
@@ -333,6 +334,7 @@ pub fn draw_info(
     let _ = terminal.draw(|f| {
         let title_text = to_art("Proteus".to_string(), "standard", 0, 1, 0)
             .unwrap_or_else(|_| "Proteus Audio".to_string());
+        let title_text = format!("{title_text}\nv{}", env!("CARGO_PKG_VERSION"));
         let title_height = title_text.lines().count().max(1) as u16;
 
         let chunks = Layout::default()
