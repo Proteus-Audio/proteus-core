@@ -4,6 +4,7 @@ use log::{LevelFilter, Log, Metadata, Record};
 use std::collections::VecDeque;
 use std::io::{BufRead, BufReader};
 use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::thread::JoinHandle;
 
@@ -30,7 +31,7 @@ pub struct LogLine {
 struct SharedLogger {
     level: LevelFilter,
     buffer: Arc<Mutex<VecDeque<LogLine>>>,
-    echo_stderr: bool,
+    echo_stderr: AtomicBool,
 }
 
 impl Log for SharedLogger {
@@ -44,7 +45,7 @@ impl Log for SharedLogger {
         }
 
         let line = format!("[{}] {}", record.level(), record.args());
-        if self.echo_stderr {
+        if self.echo_stderr.load(Ordering::Relaxed) {
             eprintln!("{}", line);
         }
 
@@ -87,12 +88,12 @@ pub fn init() -> Arc<Mutex<VecDeque<LogLine>>> {
 
     let echo_stderr = std::env::var("PROTEUS_LOG_STDERR")
         .map(|value| value != "0")
-        .unwrap_or(false);
+        .unwrap_or(true);
 
     let logger = SharedLogger {
         level,
         buffer: buffer.clone(),
-        echo_stderr,
+        echo_stderr: AtomicBool::new(echo_stderr),
     };
 
     let logger_ref = LOGGER.get_or_init(|| logger);
@@ -101,6 +102,13 @@ pub fn init() -> Arc<Mutex<VecDeque<LogLine>>> {
     }
 
     buffer
+}
+
+/// Enable or disable stderr echoing for log lines.
+pub fn set_echo_stderr(enabled: bool) {
+    if let Some(logger) = LOGGER.get() {
+        logger.echo_stderr.store(enabled, Ordering::Relaxed);
+    }
 }
 
 /// Snapshot the current log buffer for rendering.

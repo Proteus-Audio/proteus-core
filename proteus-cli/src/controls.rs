@@ -104,7 +104,7 @@ pub fn status_text(args: StatusArgs) -> StatusSnapshot {
 
     #[cfg(feature = "debug")]
     let text = format!(
-        "{}   {} / {}   ({:>5.1}%)\nEffects: {}\nDSP: {:>6.2}ms audio {:>6.2}ms ({:>4.2}x) overrun={} {:>6.2}ms (avg {:>6.2} max {:>6.2})\nCHAIN: {:>6.2} ksps (avg {:>6.2} min {:>6.2} max {:>6.2})\nTRK: {}/{} (buf {})\nDBG: thread={} state={} heard={} buf_done={} sink_len={} underrun={} count={} pops={} clips={} nans={}\n\tappend_ms={:>6.2} (avg {:>6.2} max {:>6.2}) late={} count={}",
+        "{}   {} / {}   ({:>5.1}%)\nEffects: {}\nDSP: {:>6.2}ms audio {:>6.2}ms ({:>4.2}x) overrun={} {:>6.2}ms (avg {:>6.2} max {:>6.2})\nCHAIN: {:>6.2} ksps (avg {:>6.2} min {:>6.2} max {:>6.2})\nTRK: {}/{} (buf {})\nDBG: thread={} state={} heard={} buf_done={} sink_len={} underrun={} count={} pops={} clips={} nans={}\nAPPEND: late={} count={}",
         state,
         current,
         total,
@@ -134,9 +134,6 @@ pub fn status_text(args: StatusArgs) -> StatusSnapshot {
         args.pop_count,
         args.clip_count,
         args.nan_count,
-        args.append_delay_ms,
-        args.avg_append_delay_ms,
-        args.max_append_delay_ms,
         if args.late_append_active { "YES" } else { "no" },
         args.late_append_count
     );
