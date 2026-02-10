@@ -1,0 +1,9 @@
+[
+	{
+		"DistortionSettings": {
+			"enabled": true,
+			"gain": 1.5,
+			"threshold": 0.1
+		}
+	}
+]

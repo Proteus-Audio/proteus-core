@@ -5,7 +5,7 @@ use std::fs::File;
 use std::io::{BufReader, Cursor, Read, Seek};
 use std::path::Path;
 
-use log::warn;
+use log::{info, warn};
 use matroska::Matroska;
 use rodio::{Decoder, Source};
 
@@ -145,8 +145,10 @@ pub fn load_impulse_response_from_prot_attachment_with_tail(
     let attachment = mka
         .attachments
         .iter()
-        .find(|attachment| attachment.name == attachment_name)
+        .find(|attachment| attachment.name.trim_matches('"') == attachment_name)
         .ok_or_else(|| ImpulseResponseError::AttachmentNotFound(attachment_name.to_string()))?;
+
+    info!("Loading impulse bytes response from {}", attachment.name);
 
     load_impulse_response_from_bytes_with_tail(&attachment.data, tail_db)
 }
@@ -188,10 +190,7 @@ where
 /// Normalization is a two-step process:
 /// 1. Peak normalization to avoid clipping.
 /// 2. Energy normalization (attenuation-only) to keep long IRs controlled.
-pub fn normalize_impulse_response_channels(
-    channel_samples: &mut [Vec<f32>],
-    tail_db: Option<f32>,
-) {
+pub fn normalize_impulse_response_channels(channel_samples: &mut [Vec<f32>], tail_db: Option<f32>) {
     let mut max_abs = 0.0_f32;
     for channel in channel_samples.iter() {
         for sample in channel {

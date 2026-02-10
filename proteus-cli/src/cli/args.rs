@@ -27,23 +27,10 @@ pub fn build_cli() -> Command {
                 .help("The playback gain"),
         )
         .arg(
-            Arg::new("impulse-response")
-                .long("ir")
-                .value_name("IMPULSE")
-                .help(
-                    "Impulse response path or attachment (e.g., file:ir.wav or attachment:ir.wav)",
-                ),
-        )
-        .arg(
-            Arg::new("reverb-mix")
-                .long("reverb-mix")
-                .value_name("MIX")
-                .default_value("0.0")
-                .help("The reverb wet/dry mix (0.0-1.0)"),
-        )
-        .arg(
             Arg::new("effects-json")
                 .long("effects-json")
+                .short('E')
+                .alias("effects")
                 .value_name("PATH")
                 .help("Path to JSON file containing Vec<AudioEffect>"),
         )
@@ -93,6 +80,40 @@ pub fn build_cli() -> Command {
                 .value_name("MS")
                 .default_value("20")
                 .help("Amount of audio (ms) to buffer before starting playback"),
+        )
+        .arg(
+            Arg::new("start-sink-chunks")
+                .long("start-sink-chunks")
+                .value_name("CHUNKS")
+                .default_value("3")
+                .help("Minimum sink chunks queued before playback starts/resumes"),
+        )
+        .arg(
+            Arg::new("startup-silence-ms")
+                .long("startup-silence-ms")
+                .value_name("MS")
+                .default_value("0")
+                .help("Silence pre-roll before playback starts"),
+        )
+        .arg(
+            Arg::new("startup-fade-ms")
+                .long("startup-fade-ms")
+                .value_name("MS")
+                .default_value("150")
+                .help("Fade-in duration at playback start"),
+        )
+        .arg(
+            Arg::new("append-jitter-log-ms")
+                .long("append-jitter-log-ms")
+                .value_name("MS")
+                .default_value("0")
+                .help("Log sink append jitter events above this threshold (ms)"),
+        )
+        .arg(
+            Arg::new("effect-boundary-log")
+                .long("effect-boundary-log")
+                .action(ArgAction::SetTrue)
+                .help("Log per-effect boundary discontinuities in the DSP chain"),
         )
         .arg(
             Arg::new("track-eos-ms")

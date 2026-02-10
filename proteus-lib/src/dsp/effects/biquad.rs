@@ -32,7 +32,13 @@ pub(super) struct BiquadState {
 }
 
 impl BiquadState {
-    pub(super) fn new(kind: BiquadKind, sample_rate: u32, channels: usize, freq: u32, q: f32) -> Self {
+    pub(super) fn new(
+        kind: BiquadKind,
+        sample_rate: u32,
+        channels: usize,
+        freq: u32,
+        q: f32,
+    ) -> Self {
         let freq = sanitize_freq(freq, sample_rate);
         let q = sanitize_q(q);
         let coeffs = coefficients(kind, sample_rate, freq, q);
@@ -51,7 +57,14 @@ impl BiquadState {
         }
     }
 
-    pub(super) fn matches(&self, kind: BiquadKind, sample_rate: u32, channels: usize, freq: u32, q: f32) -> bool {
+    pub(super) fn matches(
+        &self,
+        kind: BiquadKind,
+        sample_rate: u32,
+        channels: usize,
+        freq: u32,
+        q: f32,
+    ) -> bool {
         let freq = sanitize_freq(freq, sample_rate);
         let q = sanitize_q(q);
         self.kind == kind

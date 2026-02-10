@@ -26,6 +26,11 @@ pub fn convert_unsigned_16bit_to_f32(sample: u16) -> f32 {
     shifted_sample as f32 / 2f32.powi(15)
 }
 
+/// Convert a signed 32-bit sample to `f32`.
+pub fn convert_signed_32bit_to_f32(sample: i32) -> f32 {
+    sample as f32 / 2f32.powi(31)
+}
+
 /// Extract samples for a single channel from a decoded packet.
 pub fn process_channel(decoded: AudioBufferRef<'_>, channel: usize) -> Vec<f32> {
     match decoded {
@@ -53,7 +58,13 @@ pub fn process_channel(decoded: AudioBufferRef<'_>, channel: usize) -> Vec<f32> 
             .into_iter()
             .map(|s| convert_signed_24bit_to_f32(s.0))
             .collect(),
-        AudioBufferRef::F32(buf) => buf.chan(0).to_vec().into_iter().collect(),
+        AudioBufferRef::S32(buf) => buf
+            .chan(channel)
+            .to_vec()
+            .into_iter()
+            .map(convert_signed_32bit_to_f32)
+            .collect(),
+        AudioBufferRef::F32(buf) => buf.chan(channel).to_vec().into_iter().collect(),
         _ => {
             // Repeat for the different sample formats as needed.
             unimplemented!();

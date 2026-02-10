@@ -1,0 +1,13 @@
+[
+	{
+		"DiffusionReverbSettings": {
+			"enabled": true,
+			"mix": 1.0,
+			"pre_delay_ms": 12,
+			"room_size_ms": 48,
+			"decay": 0.72,
+			"damping": 0.35,
+			"diffusion": 0.72
+		}
+	}
+]

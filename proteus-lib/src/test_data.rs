@@ -30,26 +30,40 @@ fn get_double_vec_of_mp3s() -> Vec<Vec<String>> {
 fn get_double_vec_of_wavs() -> Vec<Vec<String>> {
     vec![
         vec![
-            "/Users/innocentsmith/Dev/tauri/proteus-author/dev-assets/24bit_wav/op_bgclar1.wav".to_string(),
-            "/Users/innocentsmith/Dev/tauri/proteus-author/dev-assets/24bit_wav/op_bgclar2.wav".to_string(),
-            "/Users/innocentsmith/Dev/tauri/proteus-author/dev-assets/24bit_wav/op_bgclar3.wav".to_string(),
+            "/Users/innocentsmith/Dev/tauri/proteus-author/dev-assets/24bit_wav/op_bgclar1.wav"
+                .to_string(),
+            "/Users/innocentsmith/Dev/tauri/proteus-author/dev-assets/24bit_wav/op_bgclar2.wav"
+                .to_string(),
+            "/Users/innocentsmith/Dev/tauri/proteus-author/dev-assets/24bit_wav/op_bgclar3.wav"
+                .to_string(),
         ],
         vec![
-            "/Users/innocentsmith/Dev/tauri/proteus-author/dev-assets/24bit_wav/op_clar1.wav".to_string(),
-            "/Users/innocentsmith/Dev/tauri/proteus-author/dev-assets/24bit_wav/op_clar2.wav".to_string(),
-            "/Users/innocentsmith/Dev/tauri/proteus-author/dev-assets/24bit_wav/op_clar3.wav".to_string(),
+            "/Users/innocentsmith/Dev/tauri/proteus-author/dev-assets/24bit_wav/op_clar1.wav"
+                .to_string(),
+            "/Users/innocentsmith/Dev/tauri/proteus-author/dev-assets/24bit_wav/op_clar2.wav"
+                .to_string(),
+            "/Users/innocentsmith/Dev/tauri/proteus-author/dev-assets/24bit_wav/op_clar3.wav"
+                .to_string(),
         ],
         vec![
-            "/Users/innocentsmith/Dev/tauri/proteus-author/dev-assets/24bit_wav/op_piano1.wav".to_string(),
-            "/Users/innocentsmith/Dev/tauri/proteus-author/dev-assets/24bit_wav/op_piano2.wav".to_string(),
-            "/Users/innocentsmith/Dev/tauri/proteus-author/dev-assets/24bit_wav/op_piano3.wav".to_string(),
-            "/Users/innocentsmith/Dev/tauri/proteus-author/dev-assets/24bit_wav/op_piano4.wav".to_string(),
+            "/Users/innocentsmith/Dev/tauri/proteus-author/dev-assets/24bit_wav/op_piano1.wav"
+                .to_string(),
+            "/Users/innocentsmith/Dev/tauri/proteus-author/dev-assets/24bit_wav/op_piano2.wav"
+                .to_string(),
+            "/Users/innocentsmith/Dev/tauri/proteus-author/dev-assets/24bit_wav/op_piano3.wav"
+                .to_string(),
+            "/Users/innocentsmith/Dev/tauri/proteus-author/dev-assets/24bit_wav/op_piano4.wav"
+                .to_string(),
         ],
         vec![
-            "/Users/innocentsmith/Dev/tauri/proteus-author/dev-assets/24bit_wav/op_rythmn1.wav".to_string(),
-            "/Users/innocentsmith/Dev/tauri/proteus-author/dev-assets/24bit_wav/op_rythmn2.wav".to_string(),
-            "/Users/innocentsmith/Dev/tauri/proteus-author/dev-assets/24bit_wav/op_rythmn3.wav".to_string(),
-            "/Users/innocentsmith/Dev/tauri/proteus-author/dev-assets/24bit_wav/op_rythmn4.wav".to_string(),
+            "/Users/innocentsmith/Dev/tauri/proteus-author/dev-assets/24bit_wav/op_rythmn1.wav"
+                .to_string(),
+            "/Users/innocentsmith/Dev/tauri/proteus-author/dev-assets/24bit_wav/op_rythmn2.wav"
+                .to_string(),
+            "/Users/innocentsmith/Dev/tauri/proteus-author/dev-assets/24bit_wav/op_rythmn3.wav"
+                .to_string(),
+            "/Users/innocentsmith/Dev/tauri/proteus-author/dev-assets/24bit_wav/op_rythmn4.wav"
+                .to_string(),
         ],
     ]
 }
@@ -59,7 +73,7 @@ fn get_double_vec_of_wavs() -> Vec<Vec<String>> {
 /// Note: Paths are machine-specific and intended for local development only.
 pub struct TestData {
     pub mp3s: Vec<Vec<String>>,
-    pub wavs: Vec<Vec<String>>,   
+    pub wavs: Vec<Vec<String>>,
 }
 
 impl TestData {

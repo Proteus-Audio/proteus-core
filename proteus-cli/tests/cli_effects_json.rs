@@ -8,7 +8,7 @@ fn create_effects_json_outputs_all_effects() {
         .assert()
         .success()
         .stdout(predicate::str::contains("ConvolutionReverbSettings"))
-        .stdout(predicate::str::contains("BasicReverbSettings"))
+        .stdout(predicate::str::contains("DelayReverbSettings"))
         .stdout(predicate::str::contains("LowPassFilterSettings"))
         .stdout(predicate::str::contains("HighPassFilterSettings"))
         .stdout(predicate::str::contains("DistortionSettings"))

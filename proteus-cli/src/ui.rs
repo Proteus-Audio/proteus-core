@@ -20,6 +20,7 @@ pub fn draw_status(
     status: &StatusSnapshot,
     log_lines: &[LogLine],
     levels: &[f32],
+    levels_db: &[f32],
 ) {
     // Render the controls + status panels.
     let _ = terminal.draw(|f| {
@@ -88,7 +89,8 @@ pub fn draw_status(
                         .block(Block::default().borders(Borders::ALL).title("Playback"));
                     f.render_widget(status_widget, cols[0]);
 
-                    let meter_text = vertical_meter_text(levels, cols[1].height.saturating_sub(2));
+                    let meter_text =
+                        vertical_meter_text(levels, levels_db, cols[1].height.saturating_sub(2));
                     let meter_widget = Paragraph::new(meter_text)
                         .style(Style::default().fg(Color::Cyan))
                         .block(Block::default().borders(Borders::ALL).title("Levels"));
@@ -109,7 +111,8 @@ pub fn draw_status(
                         .block(Block::default().borders(Borders::ALL).title("Playback"));
                     f.render_widget(status_widget, rows[0]);
 
-                    let meter_text = horizontal_meter_text(levels, rows[1].width.saturating_sub(2));
+                    let meter_text =
+                        horizontal_meter_text(levels, levels_db, rows[1].width.saturating_sub(2));
                     let meter_widget = Paragraph::new(meter_text)
                         .style(Style::default().fg(Color::Cyan))
                         .block(Block::default().borders(Borders::ALL).title("Levels"));
@@ -120,6 +123,7 @@ pub fn draw_status(
         #[cfg(not(feature = "output-meter"))]
         {
             let _ = levels;
+            let _ = levels_db;
             let status_widget = Paragraph::new(status.text.as_str())
                 .style(
                     Style::default()
@@ -180,39 +184,61 @@ fn pick_meter_mode(width: u16, height: u16) -> MeterMode {
 }
 
 #[cfg(feature = "output-meter")]
-fn vertical_meter_text(levels: &[f32], height: u16) -> Text<'static> {
+fn vertical_meter_text(levels: &[f32], levels_db: &[f32], height: u16) -> Text<'static> {
     let display = pick_levels(levels);
+    let display_db = pick_levels_db(levels_db);
     let mut lines: Vec<Line> = Vec::new();
-    let h = height.max(1) as usize;
-    let l_fill = (display.left * h as f32).ceil() as usize;
-    let r_fill = (display.right * h as f32).ceil() as usize;
+    let total_height = height.max(1) as usize;
+    let meter_height = total_height.saturating_sub(2).max(1);
+    let l_fill = (display.left * meter_height as f32).ceil() as usize;
+    let r_fill = (display.right * meter_height as f32).ceil() as usize;
 
-    for row in (0..h).rev() {
+    for row in (0..meter_height).rev() {
         let l_on = row < l_fill;
         let r_on = row < r_fill;
-        let line = format!(" {} {}", if l_on { "#" } else { " " }, if r_on { "#" } else { " " });
+        let line = format!(
+            " {} {}",
+            if l_on { "#" } else { " " },
+            if r_on { "#" } else { " " }
+        );
         lines.push(Line::from(line));
     }
 
     let label = if display.has_right { " L R" } else { "  M" };
     lines.push(Line::from(label));
+    let db_label = if display_db.has_right {
+        format!(
+            "{} {} dB",
+            format_db(display_db.left),
+            format_db(display_db.right)
+        )
+    } else {
+        format!(" {} dB", format_db(display_db.left))
+    };
+    lines.push(Line::from(db_label));
     Text::from(lines)
 }
 
 #[cfg(feature = "output-meter")]
-fn horizontal_meter_text(levels: &[f32], width: u16) -> Text<'static> {
+fn horizontal_meter_text(levels: &[f32], levels_db: &[f32], width: u16) -> Text<'static> {
     let display = pick_levels(levels);
-    let bar_width = width.saturating_sub(6).max(4) as usize;
+    let display_db = pick_levels_db(levels_db);
+    let line_width = width.max(1) as usize;
+    let left_db = format_db(display_db.left);
+    let right_db = format_db(display_db.right);
+    let overhead = 8; // "L [" + "] " + " dB"
+    let left_bar_width = line_width.saturating_sub(overhead + left_db.len()).max(1);
+    let right_bar_width = line_width.saturating_sub(overhead + right_db.len()).max(1);
 
-    let left = render_bar(display.left, bar_width);
-    let mut lines = vec![Line::from(format!("L [{}]", left))];
+    let left = render_bar(display.left, left_bar_width);
+    let mut lines = vec![Line::from(format!("L [{}] {} dB", left, left_db))];
 
     if display.has_right {
-        let right = render_bar(display.right, bar_width);
-        lines.push(Line::from(format!("R [{}]", right)));
+        let right = render_bar(display.right, right_bar_width);
+        lines.push(Line::from(format!("R [{}] {} dB", right, right_db)));
     } else {
-        let mono = render_bar(display.left, bar_width);
-        lines.push(Line::from(format!("M [{}]", mono)));
+        let mono = render_bar(display.left, left_bar_width);
+        lines.push(Line::from(format!("M [{}] {} dB", mono, left_db)));
     }
 
     Text::from(lines)
@@ -231,6 +257,13 @@ fn render_bar(level: f32, width: usize) -> String {
 
 #[cfg(feature = "output-meter")]
 struct LevelDisplay {
+    left: f32,
+    right: f32,
+    has_right: bool,
+}
+
+#[cfg(feature = "output-meter")]
+struct LevelDbDisplay {
     left: f32,
     right: f32,
     has_right: bool,
@@ -256,6 +289,38 @@ fn pick_levels(levels: &[f32]) -> LevelDisplay {
             right: 0.0,
             has_right: false,
         }
+    }
+}
+
+#[cfg(feature = "output-meter")]
+fn pick_levels_db(levels: &[f32]) -> LevelDbDisplay {
+    if levels.len() >= 2 {
+        LevelDbDisplay {
+            left: levels[0],
+            right: levels[1],
+            has_right: true,
+        }
+    } else if let Some(value) = levels.first().copied() {
+        LevelDbDisplay {
+            left: value,
+            right: 0.0,
+            has_right: false,
+        }
+    } else {
+        LevelDbDisplay {
+            left: f32::NEG_INFINITY,
+            right: f32::NEG_INFINITY,
+            has_right: false,
+        }
+    }
+}
+
+#[cfg(feature = "output-meter")]
+fn format_db(value: f32) -> String {
+    if value.is_infinite() && value.is_sign_negative() {
+        "-inf".to_string()
+    } else {
+        format!("{value:>5.1}")
     }
 }
 
@@ -311,7 +376,11 @@ pub fn draw_info(
         };
         let tracks = Paragraph::new(Text::from(track_lines))
             .style(Style::default().fg(Color::Yellow))
-            .block(Block::default().borders(Borders::ALL).title("Track Durations"));
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title("Track Durations"),
+            );
         f.render_widget(tracks, chunks[2]);
 
         let footer = Paragraph::new("Press q, Esc, or Enter to exit")

@@ -1,0 +1,5 @@
+flowchart LR
+  In["x[n]"] --> Detector["Peak detector (attack/release)"]
+  Detector --> GR["Gain computer (threshold, knee)"]
+  GR --> Apply["Gain"]
+  Apply --> Out["y[n]"]

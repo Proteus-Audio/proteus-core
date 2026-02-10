@@ -14,11 +14,11 @@ use crate::audio::samples::clone_samples_buffer;
 use crate::container::prot::Prot;
 use crate::diagnostics::reporter::{Report, Reporter};
 use crate::dsp::effects::convolution_reverb::{parse_impulse_response_string, ImpulseResponseSpec};
-use crate::tools::timer;
 use crate::playback::output_meter::OutputMeter;
+use crate::tools::timer;
 use crate::{
     container::info::Info,
-    dsp::effects::{AudioEffect, BasicReverbEffect, ConvolutionReverbEffect},
+    dsp::effects::AudioEffect,
     playback::engine::{DspChainMetrics, PlaybackBufferSettings, PlayerEngine},
 };
 
@@ -111,6 +111,14 @@ impl Player {
 
         let channels = info.channels as usize;
         let sample_rate = info.sample_rate;
+        let effects = {
+            let prot_locked = prot.lock().unwrap();
+            match prot_locked.get_effects() {
+                Some(effects) => Arc::new(Mutex::new(effects)),
+                None => Arc::new(Mutex::new(vec![])),
+            }
+        };
+
         let mut this = Self {
             info,
             finished_tracks: Arc::new(Mutex::new(Vec::new())),
@@ -127,10 +135,7 @@ impl Player {
             prot,
             reporter: None,
             buffer_settings: Arc::new(Mutex::new(PlaybackBufferSettings::new(20.0))),
-            effects: Arc::new(Mutex::new(vec![
-                AudioEffect::ConvolutionReverb(ConvolutionReverbEffect::new(0.000001)),
-                AudioEffect::BasicReverb(BasicReverbEffect::new(0.000001)),
-            ])),
+            effects,
             dsp_metrics: Arc::new(Mutex::new(DspChainMetrics::default())),
             effects_reset: Arc::new(AtomicU64::new(0)),
             output_meter: Arc::new(Mutex::new(OutputMeter::new(
@@ -184,7 +189,7 @@ impl Player {
         }
         if let Some(effect) = effects
             .iter_mut()
-            .find_map(|effect| effect.as_basic_reverb_mut())
+            .find_map(|effect| effect.as_delay_reverb_mut())
         {
             effect.enabled = enabled;
         }
@@ -201,7 +206,13 @@ impl Player {
         }
         if let Some(effect) = effects
             .iter_mut()
-            .find_map(|effect| effect.as_basic_reverb_mut())
+            .find_map(|effect| effect.as_delay_reverb_mut())
+        {
+            effect.mix = dry_wet.clamp(0.0, 1.0);
+        }
+        if let Some(effect) = effects
+            .iter_mut()
+            .find_map(|effect| effect.as_diffusion_reverb_mut())
         {
             effect.mix = dry_wet.clamp(0.0, 1.0);
         }
@@ -219,7 +230,16 @@ impl Player {
                 dry_wet: effect.dry_wet,
             };
         }
-        if let Some(effect) = effects.iter().find_map(|effect| effect.as_basic_reverb()) {
+        if let Some(effect) = effects
+            .iter()
+            .find_map(|effect| effect.as_diffusion_reverb())
+        {
+            return ReverbSettingsSnapshot {
+                enabled: effect.enabled,
+                dry_wet: effect.mix,
+            };
+        }
+        if let Some(effect) = effects.iter().find_map(|effect| effect.as_delay_reverb()) {
             return ReverbSettingsSnapshot {
                 enabled: effect.enabled,
                 dry_wet: effect.mix,
@@ -237,7 +257,9 @@ impl Player {
         effects
             .iter()
             .map(|effect| match effect {
-                AudioEffect::BasicReverb(_) => "BasicReverb".to_string(),
+                AudioEffect::DelayReverb(_) => "DelayReverb".to_string(),
+                AudioEffect::BasicReverb(_) => "DelayReverb".to_string(),
+                AudioEffect::DiffusionReverb(_) => "DiffusionReverb".to_string(),
                 AudioEffect::ConvolutionReverb(_) => "ConvolutionReverb".to_string(),
                 AudioEffect::LowPassFilter(_) => "LowPassFilter".to_string(),
                 AudioEffect::HighPassFilter(_) => "HighPassFilter".to_string(),
@@ -249,10 +271,20 @@ impl Player {
     }
 
     /// Replace the active DSP effects chain.
-    pub fn set_effects(&self, effects: Vec<AudioEffect>) {
-        let mut guard = self.effects.lock().unwrap();
-        *guard = effects;
+    pub fn set_effects(&mut self, effects: Vec<AudioEffect>) {
+        {
+            let mut guard = self.effects.lock().unwrap();
+            println!("New Effects: {:?}", effects);
+            *guard = effects;
+        }
         self.request_effects_reset();
+
+        // Seeking to the current time stamp refreshes the
+        // Sink so that the new effects are applied immediately.
+        if !self.thread_finished() {
+            let ts = self.get_time();
+            self.seek(ts);
+        }
     }
 
     /// Retrieve the latest DSP chain performance metrics.
@@ -263,6 +295,17 @@ impl Player {
     /// Retrieve the most recent per-channel peak levels.
     pub fn get_levels(&self) -> Vec<f32> {
         self.output_meter.lock().unwrap().levels()
+    }
+
+    /// Retrieve the most recent per-channel peak levels in dBFS.
+    pub fn get_levels_db(&self) -> Vec<f32> {
+        self.output_meter
+            .lock()
+            .unwrap()
+            .levels()
+            .into_iter()
+            .map(linear_to_dbfs)
+            .collect()
     }
 
     /// Retrieve the most recent per-channel average levels.
@@ -322,6 +365,36 @@ impl Player {
         settings.track_eos_ms = track_eos_ms.max(0.0);
     }
 
+    /// Configure minimum sink chunks queued before playback starts/resumes.
+    pub fn set_start_sink_chunks(&self, chunks: usize) {
+        let mut settings = self.buffer_settings.lock().unwrap();
+        settings.start_sink_chunks = chunks;
+    }
+
+    /// Configure the startup silence pre-roll (ms).
+    pub fn set_startup_silence_ms(&self, ms: f32) {
+        let mut settings = self.buffer_settings.lock().unwrap();
+        settings.startup_silence_ms = ms.max(0.0);
+    }
+
+    /// Configure the startup fade-in length (ms).
+    pub fn set_startup_fade_ms(&self, ms: f32) {
+        let mut settings = self.buffer_settings.lock().unwrap();
+        settings.startup_fade_ms = ms.max(0.0);
+    }
+
+    /// Configure the append jitter logging threshold (ms). 0 disables logging.
+    pub fn set_append_jitter_log_ms(&self, ms: f32) {
+        let mut settings = self.buffer_settings.lock().unwrap();
+        settings.append_jitter_log_ms = ms.max(0.0);
+    }
+
+    /// Enable or disable per-effect boundary discontinuity logging.
+    pub fn set_effect_boundary_log(&self, enabled: bool) {
+        let mut settings = self.buffer_settings.lock().unwrap();
+        settings.effect_boundary_log = enabled;
+    }
+
     fn audition(&self, length: Duration) {
         let audition_source_mutex = self.audition_source.clone();
 
@@ -353,7 +426,8 @@ impl Player {
         drop(finished_tracks);
 
         // ===== Set play options ===== //
-        self.abort.store(false, Ordering::SeqCst);
+        // Use a fresh abort flag per playback thread so old mixer threads stay stopped.
+        self.abort = Arc::new(AtomicBool::new(false));
         self.playback_thread_exists.store(true, Ordering::SeqCst);
         let playback_id = self.playback_id.fetch_add(1, Ordering::SeqCst) + 1;
         self.buffering_done.store(false, Ordering::SeqCst);
@@ -372,10 +446,13 @@ impl Player {
         let duration = self.duration.clone();
         let prot = self.prot.clone();
         let buffer_settings = self.buffer_settings.clone();
+        let buffer_settings_for_state = self.buffer_settings.clone();
         let effects = self.effects.clone();
         let dsp_metrics = self.dsp_metrics.clone();
+        let dsp_metrics_for_sink = self.dsp_metrics.clone();
         let effects_reset = self.effects_reset.clone();
         let output_meter = self.output_meter.clone();
+        let audio_info = self.info.clone();
 
         let audio_heard = self.audio_heard.clone();
         let volume = self.volume.clone();
@@ -468,9 +545,35 @@ impl Player {
             };
 
             // ===================== //
-            // Start sink with fade in
+            // Start sink with startup silence + fade in
             // ===================== //
-            // resume_sink(&sink_mutex.lock().unwrap(), 0.1);
+            {
+                let startup_settings = buffer_settings_for_state.lock().unwrap();
+                let startup_silence_ms = startup_settings.startup_silence_ms;
+                let startup_fade_ms = startup_settings.startup_fade_ms;
+                drop(startup_settings);
+
+                let sample_rate = audio_info.sample_rate as u32;
+                let channels = audio_info.channels as u16;
+
+                if startup_silence_ms > 0.0 {
+                    let samples = ((startup_silence_ms / 1000.0) * sample_rate as f32).ceil()
+                        as usize
+                        * channels as usize;
+                    let silence = vec![0.0_f32; samples.max(1)];
+                    let silence_buffer = SamplesBuffer::new(channels, sample_rate, silence);
+                    let sink = sink_mutex.lock().unwrap();
+                    sink.append(silence_buffer);
+                    drop(sink);
+                }
+
+                if startup_fade_ms > 0.0 {
+                    resume_sink(
+                        &sink_mutex.lock().unwrap(),
+                        (startup_fade_ms / 1000.0).max(0.0),
+                    );
+                }
+            }
 
             // ===================== //
             // Check if the player should be paused or not
@@ -487,6 +590,16 @@ impl Player {
 
                 let sink = sink_mutex.lock().unwrap();
                 let state = play_state.lock().unwrap().clone();
+                let start_sink_chunks = buffer_settings_for_state.lock().unwrap().start_sink_chunks;
+                if state == PlayerState::Resuming
+                    && start_sink_chunks > 0
+                    && sink.len() < start_sink_chunks
+                {
+                    // Keep paused until enough chunks are queued.
+                    sink.pause();
+                    drop(sink);
+                    return true;
+                }
                 if state == PlayerState::Pausing {
                     pause_sink(&sink, 0.1);
                     play_state.lock().unwrap().clone_from(&PlayerState::Paused);
@@ -562,10 +675,29 @@ impl Player {
             // ===================== //
             // Update sink for each chunk received from engine
             // ===================== //
+            let append_timing = Arc::new(Mutex::new((Instant::now(), 0.0_f64, 0_u64, 0.0_f64)));
             let update_sink = |(mixer, length_in_seconds): (SamplesBuffer, f64)| {
                 if playback_id_atomic.load(Ordering::SeqCst) != playback_id {
                     return;
                 }
+                let (delay_ms, late) = {
+                    let mut timing = append_timing.lock().unwrap();
+                    let now = Instant::now();
+                    let delta_ms = now.duration_since(timing.0).as_secs_f64() * 1000.0;
+                    let chunk_ms = length_in_seconds * 1000.0;
+                    let late = delta_ms > (chunk_ms * 1.2) && chunk_ms > 0.0;
+                    if late {
+                        timing.2 = timing.2.saturating_add(1);
+                    }
+                    timing.1 = if timing.1 == 0.0 {
+                        delta_ms
+                    } else {
+                        (timing.1 * 0.9) + (delta_ms * 0.1)
+                    };
+                    timing.3 = timing.3.max(delta_ms);
+                    timing.0 = now;
+                    (delta_ms, late)
+                };
                 audio_heard.store(true, Ordering::Relaxed);
                 last_chunk_ms.store(now_ms(), Ordering::Relaxed);
 
@@ -573,9 +705,41 @@ impl Player {
                     let mut meter = output_meter.lock().unwrap();
                     meter.push_samples(&mixer);
                 }
+                {
+                    let mut metrics = dsp_metrics_for_sink.lock().unwrap();
+                    metrics.append_delay_ms = delay_ms;
+                    metrics.avg_append_delay_ms = {
+                        if metrics.avg_append_delay_ms == 0.0 {
+                            delay_ms
+                        } else {
+                            (metrics.avg_append_delay_ms * 0.9) + (delay_ms * 0.1)
+                        }
+                    };
+                    metrics.max_append_delay_ms = metrics.max_append_delay_ms.max(delay_ms);
+                    metrics.late_append_count = {
+                        let timing = append_timing.lock().unwrap();
+                        timing.2
+                    };
+                    metrics.late_append_active = late;
+                }
 
                 let mut audition_source = audition_source_mutex.lock().unwrap();
                 let sink = sink_mutex.lock().unwrap();
+                let append_jitter_log_ms = {
+                    let settings = buffer_settings_for_state.lock().unwrap();
+                    settings.append_jitter_log_ms
+                };
+                if append_jitter_log_ms > 0.0 && (late || delay_ms > append_jitter_log_ms as f64) {
+                    let expected_ms = length_in_seconds * 1000.0;
+                    log::info!(
+                        "append jitter: delta={:.2}ms expected={:.2}ms late={} threshold={:.2}ms sink_len={}",
+                        delay_ms,
+                        expected_ms,
+                        late,
+                        append_jitter_log_ms,
+                        sink.len()
+                    );
+                }
                 let mut chunk_lengths = chunk_lengths.lock().unwrap();
 
                 let total_time = chunk_lengths.iter().sum::<f64>();
@@ -918,6 +1082,14 @@ impl Player {
         reporter.lock().unwrap().start();
 
         self.reporter = Some(reporter);
+    }
+}
+
+fn linear_to_dbfs(value: f32) -> f32 {
+    if value <= 0.0 {
+        f32::NEG_INFINITY
+    } else {
+        20.0 * value.log10()
     }
 }
 

@@ -126,11 +126,7 @@ impl LimiterEffect {
             .unwrap_or(true);
 
         if needs_reset {
-            self.state = Some(LimiterState::new(
-                context.sample_rate,
-                channels,
-                settings,
-            ));
+            self.state = Some(LimiterState::new(context.sample_rate, channels, settings));
         }
     }
 }

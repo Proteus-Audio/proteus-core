@@ -1,0 +1,10 @@
+flowchart LR
+  In["x[n]"] --> Split{Split}
+  Split --> Detector["Envelope detector (attack/release)"]
+  Detector --> GR["Gain computer (threshold, ratio, knee)"]
+  GR --> GainCtrl["Gain (makeup)"]
+
+  Split --> AudioPath["audio path"]
+  GainCtrl --> Apply["*"]
+  AudioPath --> Apply
+  Apply --> Out["y[n]"]

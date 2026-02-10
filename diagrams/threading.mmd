@@ -1,0 +1,29 @@
+flowchart TB
+  subgraph PlayerThread["Playback Thread"]
+    direction TB
+    Player["Player::initialize_thread"]
+    Engine["PlayerEngine::new"]
+    Sink["rodio::Sink"]
+  end
+
+  subgraph MixThread["Mix Thread"]
+    direction TB
+    MixLoop["mix loop"]
+    Effects["AudioEffect chain"]
+    Send["mpsc sender -> SamplesBuffer"]
+  end
+
+  subgraph TrackThreads["Track Decode Threads"]
+    direction TB
+    BufferTrack["track::buffer_track"]
+    Buffers["TrackBuffer map"]
+  end
+
+  Player --> Engine
+  Engine --> MixLoop
+  Engine --> BufferTrack
+  BufferTrack --> Buffers
+  Buffers --> MixLoop
+  MixLoop --> Effects
+  Effects --> Send
+  Send --> Sink

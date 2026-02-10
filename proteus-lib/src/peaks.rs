@@ -4,7 +4,7 @@ use std::sync::mpsc;
 use std::thread;
 
 use log::warn;
-use symphonia::core::audio::{AudioBufferRef, Signal, Channels};
+use symphonia::core::audio::{AudioBufferRef, Channels, Signal};
 use symphonia::core::errors::Error;
 
 use crate::tools::tools::*;
@@ -66,7 +66,13 @@ pub fn get_peaks(file_path: &str, limited: bool) -> Vec<Vec<(f32, f32)>> {
     let channels = if limited {
         1
     } else {
-        let channels_option = &format.tracks().first().unwrap().codec_params.channels.unwrap_or(Channels::FRONT_CENTRE);
+        let channels_option = &format
+            .tracks()
+            .first()
+            .unwrap()
+            .codec_params
+            .channels
+            .unwrap_or(Channels::FRONT_CENTRE);
         channels_option.iter().count()
     };
 
@@ -106,32 +112,32 @@ pub fn get_peaks(file_path: &str, limited: bool) -> Vec<Vec<(f32, f32)>> {
             let process_channel = |decoded, channel| {
                 match decoded {
                     AudioBufferRef::U16(buf) => buf
-                            .chan(channel)
-                            .to_vec()
-                            .into_iter()
-                            .map(|s| convert_unsigned_16bit_to_f32(s))
-                            .collect(),
+                        .chan(channel)
+                        .to_vec()
+                        .into_iter()
+                        .map(|s| convert_unsigned_16bit_to_f32(s))
+                        .collect(),
 
                     AudioBufferRef::S16(buf) => buf
-                            .chan(channel)
-                            .to_vec()
-                            .into_iter()
-                            .map(|s| convert_signed_16bit_to_f32(s))
-                            .collect(),
+                        .chan(channel)
+                        .to_vec()
+                        .into_iter()
+                        .map(|s| convert_signed_16bit_to_f32(s))
+                        .collect(),
 
                     AudioBufferRef::U24(buf) => buf
-                            .chan(channel)
-                            .to_vec()
-                            .into_iter()
-                            .map(|s| convert_unsigned_24bit_to_f32(s.0))
-                            .collect(),
+                        .chan(channel)
+                        .to_vec()
+                        .into_iter()
+                        .map(|s| convert_unsigned_24bit_to_f32(s.0))
+                        .collect(),
 
                     AudioBufferRef::S24(buf) => buf
-                            .chan(channel)
-                            .to_vec()
-                            .into_iter()
-                            .map(|s| convert_signed_24bit_to_f32(s.0))
-                            .collect(),
+                        .chan(channel)
+                        .to_vec()
+                        .into_iter()
+                        .map(|s| convert_signed_24bit_to_f32(s.0))
+                        .collect(),
 
                     AudioBufferRef::F32(buf) => buf.chan(0).to_vec().into_iter().collect(),
                     _ => {

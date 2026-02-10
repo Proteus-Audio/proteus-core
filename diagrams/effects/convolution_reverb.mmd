@@ -1,0 +1,8 @@
+flowchart LR
+  In["x[n]"] --> Conv["* h[n] (impulse response)"]
+  Conv --> Wet["wet"]
+
+  In --> DryGain["1 - mix"]
+  DryGain --> Out["y[n]"]
+  Wet --> WetGain["mix"]
+  WetGain --> Out

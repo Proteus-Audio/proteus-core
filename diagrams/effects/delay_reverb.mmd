@@ -1,0 +1,13 @@
+flowchart LR
+  In["x[n]"] --> SumIn(("+"))
+  SumIn --> Out["y[n]"]
+  MixTap["Mix (wet)" ] --> SumIn
+
+  In --> Delay["z^-N (delay)"]
+  Delay --> FbGain["g (feedback)" ]
+  FbGain --> Delay
+  Delay --> MixTap
+
+  %% Dry path
+  In --> DryGain["1 - mix" ]
+  DryGain --> Out

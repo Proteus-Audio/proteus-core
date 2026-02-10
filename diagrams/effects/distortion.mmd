@@ -1,0 +1,5 @@
+flowchart LR
+  In["x[n]"] --> Gain["pre-gain"]
+  Gain --> Waveshaper["clip/tanh (threshold)"]
+  Waveshaper --> Mix["dry/wet mix"]
+  Mix --> Out["y[n]"]

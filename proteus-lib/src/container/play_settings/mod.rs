@@ -3,11 +3,13 @@
 use log::{info, warn};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
+use crate::dsp::effects::AudioEffect;
+#[deprecated(note = "Use DelayReverbSettings instead.")]
+pub use crate::dsp::effects::BasicReverbSettings;
 pub use crate::dsp::effects::{
-    BasicReverbSettings, CompressorSettings, ConvolutionReverbSettings, DistortionSettings,
+    CompressorSettings, ConvolutionReverbSettings, DelayReverbSettings, DistortionSettings,
     HighPassFilterSettings, LimiterSettings, LowPassFilterSettings,
 };
-use crate::dsp::effects::AudioEffect;
 
 pub mod legacy;
 pub mod v1;
@@ -29,7 +31,6 @@ pub struct SettingsTrack {
     pub name: String,
     pub safe_name: String,
 }
-
 
 /// Wrapper allowing `play_settings` to be nested or flat.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -135,8 +136,7 @@ impl Serialize for PlaySettingsFile {
             T: Serialize,
             S: Serializer,
         {
-            let mut value =
-                serde_json::to_value(payload).map_err(serde::ser::Error::custom)?;
+            let mut value = serde_json::to_value(payload).map_err(serde::ser::Error::custom)?;
             match value {
                 serde_json::Value::Object(ref mut map) => {
                     map.insert(

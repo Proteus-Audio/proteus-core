@@ -22,10 +22,7 @@ pub fn init_buffer_map() -> TrackBufferMap {
 /// Return the remaining capacity for a track buffer.
 ///
 /// If the track buffer has not been created yet, this returns `0`.
-pub fn buffer_remaining_space(
-    track_buffers: &TrackBufferMap,
-    track_key: u16,
-) -> usize {
+pub fn buffer_remaining_space(track_buffers: &TrackBufferMap, track_key: u16) -> usize {
     let track_buffers = track_buffers.lock().unwrap();
     match track_buffers.get(&track_key) {
         Some(track_buffer) => {

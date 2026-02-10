@@ -28,6 +28,14 @@ pub struct StatusArgs {
     #[cfg(feature = "debug")]
     pub rt_factor: f64,
     #[cfg(feature = "debug")]
+    pub overrun: bool,
+    #[cfg(feature = "debug")]
+    pub overrun_ms: f64,
+    #[cfg(feature = "debug")]
+    pub avg_overrun_ms: f64,
+    #[cfg(feature = "debug")]
+    pub max_overrun_ms: f64,
+    #[cfg(feature = "debug")]
     pub track_key_count: usize,
     #[cfg(feature = "debug")]
     pub finished_track_count: usize,
@@ -41,6 +49,26 @@ pub struct StatusArgs {
     pub min_chain_ksps: f64,
     #[cfg(feature = "debug")]
     pub max_chain_ksps: f64,
+    #[cfg(feature = "debug")]
+    pub underrun_count: u64,
+    #[cfg(feature = "debug")]
+    pub underrun_active: bool,
+    #[cfg(feature = "debug")]
+    pub pop_count: u64,
+    #[cfg(feature = "debug")]
+    pub clip_count: u64,
+    #[cfg(feature = "debug")]
+    pub nan_count: u64,
+    #[cfg(feature = "debug")]
+    pub append_delay_ms: f64,
+    #[cfg(feature = "debug")]
+    pub avg_append_delay_ms: f64,
+    #[cfg(feature = "debug")]
+    pub max_append_delay_ms: f64,
+    #[cfg(feature = "debug")]
+    pub late_append_count: u64,
+    #[cfg(feature = "debug")]
+    pub late_append_active: bool,
     #[cfg(feature = "debug")]
     pub thread_exists: bool,
     #[cfg(feature = "debug")]
@@ -76,7 +104,7 @@ pub fn status_text(args: StatusArgs) -> StatusSnapshot {
 
     #[cfg(feature = "debug")]
     let text = format!(
-        "{}   {} / {}   ({:>5.1}%)\nEffects: {}\nDSP: {:>6.2}ms audio {:>6.2}ms ({:>4.2}x)\nCHAIN: {:>6.2} ksps (avg {:>6.2} min {:>6.2} max {:>6.2})\nTRK: {}/{} (buf {})\nDBG: thread={} state={} heard={} buf_done={} sink_len={}",
+        "{}   {} / {}   ({:>5.1}%)\nEffects: {}\nDSP: {:>6.2}ms audio {:>6.2}ms ({:>4.2}x) overrun={} {:>6.2}ms (avg {:>6.2} max {:>6.2})\nCHAIN: {:>6.2} ksps (avg {:>6.2} min {:>6.2} max {:>6.2})\nTRK: {}/{} (buf {})\nDBG: thread={} state={} heard={} buf_done={} sink_len={} underrun={} count={} pops={} clips={} nans={}\n\tappend_ms={:>6.2} (avg {:>6.2} max {:>6.2}) late={} count={}",
         state,
         current,
         total,
@@ -85,6 +113,10 @@ pub fn status_text(args: StatusArgs) -> StatusSnapshot {
         args.dsp_time_ms,
         args.audio_time_ms,
         args.rt_factor,
+        if args.overrun { "YES" } else { "no" },
+        args.overrun_ms,
+        args.avg_overrun_ms,
+        args.max_overrun_ms,
         args.chain_ksps,
         args.avg_chain_ksps,
         args.min_chain_ksps,
@@ -96,7 +128,17 @@ pub fn status_text(args: StatusArgs) -> StatusSnapshot {
         args.state_label,
         args.audio_heard,
         args.buffering_done,
-        args.sink_len
+        args.sink_len,
+        if args.underrun_active { "YES" } else { "no" },
+        args.underrun_count,
+        args.pop_count,
+        args.clip_count,
+        args.nan_count,
+        args.append_delay_ms,
+        args.avg_append_delay_ms,
+        args.max_append_delay_ms,
+        if args.late_append_active { "YES" } else { "no" },
+        args.late_append_count
     );
 
     #[cfg(not(feature = "debug"))]

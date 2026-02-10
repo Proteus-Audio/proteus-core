@@ -2,8 +2,7 @@
 
 use std::{
     collections::VecDeque,
-    fs,
-    io,
+    fs, io,
     sync::{Arc, Mutex},
     thread::sleep,
     time::Duration,
@@ -16,8 +15,9 @@ use crossterm::{
 };
 use log::{error, info};
 use proteus_lib::dsp::effects::{
-    AudioEffect, BasicReverbEffect, CompressorEffect, ConvolutionReverbEffect, DistortionEffect,
-    HighPassFilterEffect, LimiterEffect, LowPassFilterEffect,
+    AudioEffect, CompressorEffect, ConvolutionReverbEffect, DelayReverbEffect,
+    DiffusionReverbEffect, DistortionEffect, HighPassFilterEffect, LimiterEffect,
+    LowPassFilterEffect,
 };
 use proteus_lib::playback::player;
 use ratatui::{backend::CrosstermBackend, Terminal};
@@ -99,18 +99,50 @@ pub fn run(args: &ArgMatches, log_buffer: Arc<Mutex<VecDeque<LogLine>>>) -> Resu
         .unwrap();
     let quiet = args.get_flag("quiet");
 
-    if !(file_path.ends_with(".prot") || file_path.ends_with(".mka")) {
-        error!("File is not a .prot or .mka file");
-        return Ok(-1);
-    }
+    let is_container = file_path.ends_with(".prot") || file_path.ends_with(".mka");
+    let file_paths = if is_container {
+        vec![vec![]]
+    } else {
+        vec![vec![file_path.clone()]]
+    };
 
-    let mut player = player::Player::new(&file_path);
+    let mut player = if is_container {
+        player::Player::new(&file_path)
+    } else {
+        player::Player::new_from_file_paths(file_paths.as_ref())
+    };
     let start_buffer_ms = args
         .get_one::<String>("start-buffer-ms")
         .unwrap()
         .parse::<f32>()
         .unwrap();
     player.set_start_buffer_ms(start_buffer_ms);
+    let start_sink_chunks = args
+        .get_one::<String>("start-sink-chunks")
+        .unwrap()
+        .parse::<usize>()
+        .unwrap();
+    player.set_start_sink_chunks(start_sink_chunks);
+    let startup_silence_ms = args
+        .get_one::<String>("startup-silence-ms")
+        .unwrap()
+        .parse::<f32>()
+        .unwrap();
+    player.set_startup_silence_ms(startup_silence_ms);
+    let startup_fade_ms = args
+        .get_one::<String>("startup-fade-ms")
+        .unwrap()
+        .parse::<f32>()
+        .unwrap();
+    player.set_startup_fade_ms(startup_fade_ms);
+    let append_jitter_log_ms = args
+        .get_one::<String>("append-jitter-log-ms")
+        .unwrap()
+        .parse::<f32>()
+        .unwrap();
+    player.set_append_jitter_log_ms(append_jitter_log_ms);
+    let effect_boundary_log = args.get_flag("effect-boundary-log");
+    player.set_effect_boundary_log(effect_boundary_log);
     let track_eos_ms = args
         .get_one::<String>("track-eos-ms")
         .unwrap()
@@ -127,22 +159,6 @@ pub fn run(args: &ArgMatches, log_buffer: Arc<Mutex<VecDeque<LogLine>>>) -> Resu
             }
         }
     }
-    if let Some(impulse_response) = args.get_one::<String>("impulse-response") {
-        player.set_impulse_response_from_string(impulse_response);
-    }
-
-    let reverb_mix_source = args.value_source("reverb-mix");
-    let should_apply_reverb_mix =
-        effects_json_path.is_none() || matches!(reverb_mix_source, Some(clap::parser::ValueSource::CommandLine));
-    if should_apply_reverb_mix {
-        let reverb_mix = args
-            .get_one::<String>("reverb-mix")
-            .unwrap()
-            .parse::<f32>()
-            .unwrap();
-        player.set_reverb_mix(reverb_mix);
-    }
-
     // Start playback once configuration is applied.
     player.play();
     player.set_volume(gain / 100.0);
@@ -173,6 +189,10 @@ pub fn run(args: &ArgMatches, log_buffer: Arc<Mutex<VecDeque<LogLine>>>) -> Resu
             let levels = player.get_levels();
             #[cfg(not(feature = "output-meter"))]
             let levels: Vec<f32> = Vec::new();
+            #[cfg(feature = "output-meter")]
+            let levels_db = player.get_levels_db();
+            #[cfg(not(feature = "output-meter"))]
+            let levels_db: Vec<f32> = Vec::new();
             #[cfg(feature = "debug")]
             let dsp_metrics = player.get_dsp_metrics();
             #[cfg(feature = "debug")]
@@ -198,6 +218,14 @@ pub fn run(args: &ArgMatches, log_buffer: Arc<Mutex<VecDeque<LogLine>>>) -> Resu
                 #[cfg(feature = "debug")]
                 rt_factor: dsp_metrics.rt_factor,
                 #[cfg(feature = "debug")]
+                overrun: dsp_metrics.overrun,
+                #[cfg(feature = "debug")]
+                overrun_ms: dsp_metrics.overrun_ms,
+                #[cfg(feature = "debug")]
+                avg_overrun_ms: dsp_metrics.avg_overrun_ms,
+                #[cfg(feature = "debug")]
+                max_overrun_ms: dsp_metrics.max_overrun_ms,
+                #[cfg(feature = "debug")]
                 chain_ksps: dsp_metrics.chain_ksps,
                 #[cfg(feature = "debug")]
                 avg_chain_ksps: dsp_metrics.avg_chain_ksps,
@@ -205,6 +233,26 @@ pub fn run(args: &ArgMatches, log_buffer: Arc<Mutex<VecDeque<LogLine>>>) -> Resu
                 min_chain_ksps: dsp_metrics.min_chain_ksps,
                 #[cfg(feature = "debug")]
                 max_chain_ksps: dsp_metrics.max_chain_ksps,
+                #[cfg(feature = "debug")]
+                underrun_count: dsp_metrics.underrun_count,
+                #[cfg(feature = "debug")]
+                underrun_active: dsp_metrics.underrun_active,
+                #[cfg(feature = "debug")]
+                pop_count: dsp_metrics.pop_count,
+                #[cfg(feature = "debug")]
+                clip_count: dsp_metrics.clip_count,
+                #[cfg(feature = "debug")]
+                nan_count: dsp_metrics.nan_count,
+                #[cfg(feature = "debug")]
+                append_delay_ms: dsp_metrics.append_delay_ms,
+                #[cfg(feature = "debug")]
+                avg_append_delay_ms: dsp_metrics.avg_append_delay_ms,
+                #[cfg(feature = "debug")]
+                max_append_delay_ms: dsp_metrics.max_append_delay_ms,
+                #[cfg(feature = "debug")]
+                late_append_count: dsp_metrics.late_append_count,
+                #[cfg(feature = "debug")]
+                late_append_active: dsp_metrics.late_append_active,
                 #[cfg(feature = "debug")]
                 track_key_count: dsp_metrics.track_key_count,
                 #[cfg(feature = "debug")]
@@ -222,7 +270,7 @@ pub fn run(args: &ArgMatches, log_buffer: Arc<Mutex<VecDeque<LogLine>>>) -> Resu
                 #[cfg(feature = "debug")]
                 sink_len,
             });
-            ui::draw_status(term, &status, &log_lines, &levels);
+            ui::draw_status(term, &status, &log_lines, &levels, &levels_db);
         }
 
         if !controls::handle_key_event(&mut player) {
@@ -299,7 +347,8 @@ fn run_create_effects_json() -> i32 {
 fn default_effects_chain() -> Vec<AudioEffect> {
     vec![
         AudioEffect::ConvolutionReverb(ConvolutionReverbEffect::default()),
-        AudioEffect::BasicReverb(BasicReverbEffect::default()),
+        AudioEffect::DiffusionReverb(DiffusionReverbEffect::default()),
+        AudioEffect::DelayReverb(DelayReverbEffect::default()),
         AudioEffect::LowPassFilter(LowPassFilterEffect::default()),
         AudioEffect::HighPassFilter(HighPassFilterEffect::default()),
         AudioEffect::Distortion(DistortionEffect::default()),
@@ -309,16 +358,16 @@ fn default_effects_chain() -> Vec<AudioEffect> {
 }
 
 fn load_effects_json(path: &str) -> std::result::Result<Vec<AudioEffect>, String> {
-    let raw = fs::read_to_string(path)
-        .map_err(|err| format!("failed to read {}: {}", path, err))?;
+    let raw =
+        fs::read_to_string(path).map_err(|err| format!("failed to read {}: {}", path, err))?;
     serde_json::from_str(&raw).map_err(|err| format!("failed to parse json: {}", err))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::NamedTempFile;
     use std::io::Write;
+    use tempfile::NamedTempFile;
 
     #[test]
     fn load_effects_json_parses_effects() {
@@ -375,9 +424,9 @@ fn run_info(file_path: &str, print: bool) -> i32 {
         if let Ok(true) = event::poll(Duration::from_millis(200)) {
             if let Ok(event::Event::Key(key)) = event::read() {
                 match key.code {
-                    event::KeyCode::Char('q')
-                    | event::KeyCode::Esc
-                    | event::KeyCode::Enter => break,
+                    event::KeyCode::Char('q') | event::KeyCode::Esc | event::KeyCode::Enter => {
+                        break
+                    }
                     _ => {}
                 }
             }

@@ -5,7 +5,6 @@ Command-line player for `.prot` and `.mka` containers powered by `proteus-lib`.
 **Usage**
 - `cargo run -p proteus-cli -- /path/to/file.prot`
 - `cargo run -p proteus-cli -- /path/to/file.mka`
-- `cargo run -p proteus-cli -- /path/to/file.prot --ir /path/to/ir.wav`
 
 **Controls**
 - `space` play/pause
@@ -29,8 +28,6 @@ Arguments:
 Options:
   -s, --seek <TIME>                    Seek to the given time in seconds
   -g, --gain <GAIN>                    The playback gain [default: 70]
-      --ir <IMPULSE>                   Impulse response path or attachment (e.g., file:ir.wav or attachment:ir.wav)
-      --reverb-mix <MIX>               The reverb wet/dry mix (0.0-1.0) [default: 0.0]
       --bench-dsp                      Run a synthetic DSP benchmark and exit
       --bench-sweep                    Run a sweep over multiple FFT sizes and exit
       --bench-fft-size <SIZE>          FFT size for DSP benchmark [default: 24576]

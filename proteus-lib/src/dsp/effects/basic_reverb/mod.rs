@@ -1,4 +1,4 @@
-//! Basic reverb effect using a simple feedback delay line.
+//! Delay reverb effect using a simple feedback delay line.
 
 use log::info;
 use serde::{Deserialize, Serialize};
@@ -10,12 +10,12 @@ const MAX_AMPLITUDE: f32 = 0.8;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
-pub struct BasicReverbSettings {
+pub struct DelayReverbSettings {
     pub duration_ms: u64,
     pub amplitude: f32,
 }
 
-impl BasicReverbSettings {
+impl DelayReverbSettings {
     pub fn new(duration_ms: u64, amplitude: f32) -> Self {
         Self {
             duration_ms: duration_ms.clamp(0, u64::MAX),
@@ -28,7 +28,7 @@ impl BasicReverbSettings {
     }
 }
 
-impl Default for BasicReverbSettings {
+impl Default for DelayReverbSettings {
     fn default() -> Self {
         Self {
             duration_ms: DEFAULT_DURATION_MS,
@@ -37,33 +37,33 @@ impl Default for BasicReverbSettings {
     }
 }
 
-/// Basic reverb effect (feedback delay + mix).
+/// Delay reverb effect (feedback delay + mix).
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(default)]
-pub struct BasicReverbEffect {
+pub struct DelayReverbEffect {
     pub enabled: bool,
     #[serde(alias = "dry_wet", alias = "wet_dry")]
     pub mix: f32,
     #[serde(flatten)]
-    pub settings: BasicReverbSettings,
+    pub settings: DelayReverbSettings,
     #[serde(skip)]
-    state: Option<BasicReverbState>,
+    state: Option<DelayReverbState>,
 }
 
-impl Default for BasicReverbEffect {
+impl Default for DelayReverbEffect {
     fn default() -> Self {
         Self {
             enabled: true,
             mix: 0.0,
-            settings: BasicReverbSettings::default(),
+            settings: DelayReverbSettings::default(),
             state: None,
         }
     }
 }
 
-impl std::fmt::Debug for BasicReverbEffect {
+impl std::fmt::Debug for DelayReverbEffect {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("BasicReverbEffect")
+        f.debug_struct("DelayReverbEffect")
             .field("enabled", &self.enabled)
             .field("mix", &self.mix)
             .field("settings", &self.settings)
@@ -71,8 +71,8 @@ impl std::fmt::Debug for BasicReverbEffect {
     }
 }
 
-impl BasicReverbEffect {
-    /// Create a new basic reverb effect.
+impl DelayReverbEffect {
+    /// Create a new delay reverb effect.
     pub fn new(mix: f32) -> Self {
         Self {
             mix: mix.clamp(0.0, 1.0),
@@ -84,11 +84,6 @@ impl BasicReverbEffect {
     pub fn process(&mut self, samples: &[f32], context: &EffectContext, _drain: bool) -> Vec<f32> {
         self.ensure_state(context);
         if !self.enabled || self.mix <= 0.0 {
-            return samples.to_vec();
-        }
-
-        // If an impulse response is configured, skip basic reverb in favor of convolution.
-        if context.impulse_response_spec.is_some() {
             return samples.to_vec();
         }
 
@@ -114,7 +109,7 @@ impl BasicReverbEffect {
         output
     }
 
-    /// Reset any internal state (none for basic reverb).
+    /// Reset any internal state (none for delay reverb).
     pub fn reset_state(&mut self) {
         if let Some(state) = self.state.as_mut() {
             state.reset();
@@ -123,7 +118,7 @@ impl BasicReverbEffect {
     }
 
     /// Mutable access to settings.
-    pub fn settings_mut(&mut self) -> &mut BasicReverbSettings {
+    pub fn settings_mut(&mut self) -> &mut DelayReverbSettings {
         &mut self.settings
     }
 
@@ -139,21 +134,21 @@ impl BasicReverbEffect {
             .map(|state| state.delay_samples != delay_samples)
             .unwrap_or(true);
         if needs_reset {
-            self.state = Some(BasicReverbState::new(delay_samples));
+            self.state = Some(DelayReverbState::new(delay_samples));
         }
     }
 }
 
 #[derive(Clone)]
-struct BasicReverbState {
+struct DelayReverbState {
     delay_samples: usize,
     delay_line: Vec<f32>,
     write_pos: usize,
 }
 
-impl BasicReverbState {
+impl DelayReverbState {
     fn new(delay_samples: usize) -> Self {
-        info!("Using Basic Reverb!");
+        info!("Using Delay Reverb!");
         Self {
             delay_samples,
             delay_line: vec![0.0; delay_samples.max(1)],
@@ -219,3 +214,9 @@ fn delay_samples(sample_rate: u32, channels: usize, duration_ms: u64) -> usize {
     let samples = ns.saturating_mul(sample_rate as u64) / 1_000_000_000 * channels as u64;
     samples as usize
 }
+
+#[deprecated(note = "Use DelayReverbSettings instead.")]
+pub type BasicReverbSettings = DelayReverbSettings;
+
+#[deprecated(note = "Use DelayReverbEffect instead.")]
+pub type BasicReverbEffect = DelayReverbEffect;
