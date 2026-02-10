@@ -33,6 +33,7 @@ pub fn run(args: &ArgMatches, log_buffer: Arc<Mutex<VecDeque<LogLine>>>) -> Resu
     // Primary entry for CLI execution; runs benchmarks or playback.
     if let Some((subcommand, sub_args)) = args.subcommand() {
         let code = match subcommand {
+            "bench" => cli::bench::run_bench_subcommand(sub_args)?,
             "info" => {
                 let file_path = sub_args.get_one::<String>("INPUT").unwrap();
                 let print = sub_args.get_flag("print");
@@ -42,6 +43,26 @@ pub fn run(args: &ArgMatches, log_buffer: Arc<Mutex<VecDeque<LogLine>>>) -> Resu
                 let file_path = sub_args.get_one::<String>("INPUT").unwrap();
                 let limited = sub_args.get_flag("limited");
                 run_peaks(file_path, limited)
+            }
+            "verify" => {
+                let (verify_cmd, verify_args) = match sub_args.subcommand() {
+                    Some((cmd, args)) => (cmd, args),
+                    None => {
+                        error!("Missing verify subcommand");
+                        return Ok(-1);
+                    }
+                };
+                let file_path = verify_args.get_one::<String>("INPUT").unwrap();
+                let mode = match verify_cmd {
+                    "probe" => cli::verify::VerifyMode::ProbeOnly,
+                    "decode" => cli::verify::VerifyMode::DecodeOnly,
+                    "verify" => cli::verify::VerifyMode::VerifyOnly,
+                    _ => {
+                        error!("Unknown verify subcommand");
+                        return Ok(-1);
+                    }
+                };
+                cli::verify::run_verify(file_path, mode)?
             }
             "create" => match sub_args.subcommand() {
                 Some(("effects-json", _)) => run_create_effects_json(),
@@ -57,10 +78,6 @@ pub fn run(args: &ArgMatches, log_buffer: Arc<Mutex<VecDeque<LogLine>>>) -> Resu
         };
         return Ok(code);
     }
-    if let Some(code) = cli::bench::maybe_run_bench(args)? {
-        return Ok(code);
-    }
-
     let file_path = match args.get_one::<String>("INPUT") {
         Some(path) => path.clone(),
         None => {

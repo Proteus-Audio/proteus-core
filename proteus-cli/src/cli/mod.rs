@@ -2,3 +2,4 @@
 
 pub mod args;
 pub mod bench;
+pub mod verify;

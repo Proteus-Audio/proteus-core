@@ -1,6 +1,6 @@
 //! CLI argument definitions for `proteus-cli`.
 
-use clap::{Arg, ArgAction, Command};
+use clap::{Arg, ArgAction, ArgGroup, Command};
 
 /// Build the CLI argument parser and command definitions.
 pub fn build_cli() -> Command {
@@ -16,7 +16,7 @@ pub fn build_cli() -> Command {
                 .short('s')
                 .value_name("TIME")
                 .help("Seek to the given time in seconds")
-                .conflicts_with_all(&["verify", "decode-only", "verify-only", "probe-only"]),
+                .conflicts_with_all(&["verify"]),
         )
         .arg(
             Arg::new("GAIN")
@@ -33,46 +33,6 @@ pub fn build_cli() -> Command {
                 .alias("effects")
                 .value_name("PATH")
                 .help("Path to JSON file containing Vec<AudioEffect>"),
-        )
-        .arg(
-            Arg::new("bench-dsp")
-                .long("bench-dsp")
-                .action(ArgAction::SetTrue)
-                .help("Run a synthetic DSP benchmark and exit"),
-        )
-        .arg(
-            Arg::new("bench-sweep")
-                .long("bench-sweep")
-                .action(ArgAction::SetTrue)
-                .help("Run a sweep over multiple FFT sizes and exit"),
-        )
-        .arg(
-            Arg::new("bench-fft-size")
-                .long("bench-fft-size")
-                .value_name("SIZE")
-                .default_value("24576")
-                .help("FFT size for DSP benchmark"),
-        )
-        .arg(
-            Arg::new("bench-input-seconds")
-                .long("bench-input-seconds")
-                .value_name("SECONDS")
-                .default_value("1.0")
-                .help("Input length in seconds for DSP benchmark"),
-        )
-        .arg(
-            Arg::new("bench-ir-seconds")
-                .long("bench-ir-seconds")
-                .value_name("SECONDS")
-                .default_value("2.0")
-                .help("Impulse response length in seconds for DSP benchmark"),
-        )
-        .arg(
-            Arg::new("bench-iterations")
-                .long("bench-iterations")
-                .value_name("COUNT")
-                .default_value("5")
-                .help("Number of iterations for DSP benchmark"),
         )
         .arg(
             Arg::new("start-buffer-ms")
@@ -135,24 +95,6 @@ pub fn build_cli() -> Command {
                 .help("Scan all packets to compute per-track durations, then exit"),
         )
         .arg(
-            Arg::new("decode-only")
-                .long("decode-only")
-                .help("Decode, but do not play the audio")
-                .conflicts_with_all(&["probe-only", "verify-only", "verify"]),
-        )
-        .arg(
-            Arg::new("probe-only")
-                .long("probe-only")
-                .help("Only probe the input for metadata")
-                .conflicts_with_all(&["decode-only", "verify-only"]),
-        )
-        .arg(
-            Arg::new("verify-only")
-                .long("verify-only")
-                .help("Verify the decoded audio is valid, but do not play the audio")
-                .conflicts_with_all(&["verify"]),
-        )
-        .arg(
             Arg::new("verify")
                 .long("verify")
                 .short('v')
@@ -181,6 +123,89 @@ pub fn build_cli() -> Command {
                 .help("The input file path, or - to use standard input")
                 .required(false)
                 .index(1),
+        )
+        .subcommand(
+            Command::new("bench")
+                .about("Run DSP benchmarks without starting playback")
+                .arg(
+                    Arg::new("bench-dsp")
+                        .long("bench-dsp")
+                        .action(ArgAction::SetTrue)
+                        .help("Run a synthetic DSP benchmark and exit"),
+                )
+                .arg(
+                    Arg::new("bench-sweep")
+                        .long("bench-sweep")
+                        .action(ArgAction::SetTrue)
+                        .help("Run a sweep over multiple FFT sizes and exit"),
+                )
+                .arg(
+                    Arg::new("bench-fft-size")
+                        .long("bench-fft-size")
+                        .value_name("SIZE")
+                        .default_value("24576")
+                        .help("FFT size for DSP benchmark"),
+                )
+                .arg(
+                    Arg::new("bench-input-seconds")
+                        .long("bench-input-seconds")
+                        .value_name("SECONDS")
+                        .default_value("1.0")
+                        .help("Input length in seconds for DSP benchmark"),
+                )
+                .arg(
+                    Arg::new("bench-ir-seconds")
+                        .long("bench-ir-seconds")
+                        .value_name("SECONDS")
+                        .default_value("2.0")
+                        .help("Impulse response length in seconds for DSP benchmark"),
+                )
+                .arg(
+                    Arg::new("bench-iterations")
+                        .long("bench-iterations")
+                        .value_name("COUNT")
+                        .default_value("5")
+                        .help("Number of iterations for DSP benchmark"),
+                )
+                .group(
+                    ArgGroup::new("bench-mode")
+                        .required(true)
+                        .args(&["bench-dsp", "bench-sweep"]),
+                ),
+        )
+        .subcommand(
+            Command::new("verify")
+                .about("Probe or decode audio without starting playback")
+                .subcommand(
+                    Command::new("probe")
+                        .about("Only probe the input for metadata")
+                        .arg(
+                            Arg::new("INPUT")
+                                .help("The input file path, or - to use standard input")
+                                .required(true)
+                                .index(1),
+                        ),
+                )
+                .subcommand(
+                    Command::new("decode")
+                        .about("Decode, but do not play the audio")
+                        .arg(
+                            Arg::new("INPUT")
+                                .help("The input file path, or - to use standard input")
+                                .required(true)
+                                .index(1),
+                        ),
+                )
+                .subcommand(
+                    Command::new("verify")
+                        .about("Verify the decoded audio is valid, but do not play the audio")
+                        .arg(
+                            Arg::new("INPUT")
+                                .help("The input file path, or - to use standard input")
+                                .required(true)
+                                .index(1),
+                        ),
+                ),
         )
         .subcommand(
             Command::new("info")

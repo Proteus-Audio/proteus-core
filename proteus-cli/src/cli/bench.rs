@@ -3,16 +3,15 @@
 use clap::ArgMatches;
 use symphonia::core::errors::Result;
 
-/// Run benchmarks if the CLI flags request them.
-pub fn maybe_run_bench(args: &ArgMatches) -> Result<Option<i32>> {
-    // Dispatches benchmark sub-modes and returns an exit code if handled.
+/// Run the bench subcommand.
+pub fn run_bench_subcommand(args: &ArgMatches) -> Result<i32> {
     if args.get_flag("bench-dsp") {
-        return run_single_bench(args);
+        return run_single_bench(args).map(|code| code.unwrap_or(0));
     }
     if args.get_flag("bench-sweep") {
-        return run_sweep_bench(args);
+        return run_sweep_bench(args).map(|code| code.unwrap_or(0));
     }
-    Ok(None)
+    Ok(1)
 }
 
 /// Execute a single FFT benchmark run.
