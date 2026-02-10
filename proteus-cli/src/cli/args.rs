@@ -39,7 +39,7 @@ pub fn build_cli() -> Command {
 
     // Build the CLI definition in one place to keep main.rs slim.
     Command::new("Prot Play")
-        .version("1.0")
+        .version(env!("CARGO_PKG_VERSION"))
         .author("Adam Howard <adam.thomas.howard@gmail.com>")
         .about("Play Prot audio")
         .arg_required_else_help(true)
@@ -160,75 +160,60 @@ pub fn build_cli() -> Command {
         .subcommand(
             Command::new("bench")
                 .about("Run DSP benchmarks without starting playback")
-                .subcommand(
-                    with_bench_common_args(
-                        Command::new("dsp")
-                            .about("Run a synthetic DSP benchmark and exit")
-                            .arg(
-                                Arg::new("bench-fft-size")
-                                    .long("bench-fft-size")
-                                    .value_name("SIZE")
-                                    .default_value("24576")
-                                    .help("FFT size for DSP benchmark"),
-                            ),
-                    ),
-                )
-                .subcommand(
-                    with_bench_common_args(
-                        Command::new("sweep")
-                            .about("Run a sweep over multiple FFT sizes and exit"),
-                    ),
-                ),
+                .subcommand(with_bench_common_args(
+                    Command::new("dsp")
+                        .about("Run a synthetic DSP benchmark and exit")
+                        .arg(
+                            Arg::new("bench-fft-size")
+                                .long("bench-fft-size")
+                                .value_name("SIZE")
+                                .default_value("24576")
+                                .help("FFT size for DSP benchmark"),
+                        ),
+                ))
+                .subcommand(with_bench_common_args(
+                    Command::new("sweep").about("Run a sweep over multiple FFT sizes and exit"),
+                )),
         )
         .subcommand(
             Command::new("verify")
                 .about("Probe or decode audio without starting playback")
-                .subcommand(
-                    with_input_arg(
-                        Command::new("probe").about("Only probe the input for metadata"),
-                        true,
-                    ),
-                )
-                .subcommand(
-                    with_input_arg(
-                        Command::new("decode").about("Decode, but do not play the audio"),
-                        true,
-                    ),
-                )
-                .subcommand(
-                    with_input_arg(
-                        Command::new("verify")
-                            .about("Verify the decoded audio is valid, but do not play the audio"),
-                        true,
-                    ),
+                .subcommand(with_input_arg(
+                    Command::new("probe").about("Only probe the input for metadata"),
+                    true,
+                ))
+                .subcommand(with_input_arg(
+                    Command::new("decode").about("Decode, but do not play the audio"),
+                    true,
+                ))
+                .subcommand(with_input_arg(
+                    Command::new("verify")
+                        .about("Verify the decoded audio is valid, but do not play the audio"),
+                    true,
+                )),
+        )
+        .subcommand(with_input_arg(
+            Command::new("info")
+                .about("Display container info in a TUI")
+                .arg(
+                    Arg::new("print")
+                        .long("print")
+                        .action(ArgAction::SetTrue)
+                        .help("Print info to stdout instead of opening the TUI"),
                 ),
-        )
-        .subcommand(
-            with_input_arg(
-                Command::new("info")
-                    .about("Display container info in a TUI")
-                    .arg(
-                        Arg::new("print")
-                            .long("print")
-                            .action(ArgAction::SetTrue)
-                            .help("Print info to stdout instead of opening the TUI"),
-                    ),
-                true,
-            ),
-        )
-        .subcommand(
-            with_input_arg(
-                Command::new("peaks")
-                    .about("Output per-channel waveform peaks as JSON")
-                    .arg(
-                        Arg::new("limited")
-                            .long("limited")
-                            .action(ArgAction::SetTrue)
-                            .help("Only process a single channel"),
-                    ),
-                true,
-            ),
-        )
+            true,
+        ))
+        .subcommand(with_input_arg(
+            Command::new("peaks")
+                .about("Output per-channel waveform peaks as JSON")
+                .arg(
+                    Arg::new("limited")
+                        .long("limited")
+                        .action(ArgAction::SetTrue)
+                        .help("Only process a single channel"),
+                ),
+            true,
+        ))
         .subcommand(
             Command::new("create")
                 .about("Emit default JSON payloads")
