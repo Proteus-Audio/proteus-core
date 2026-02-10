@@ -143,7 +143,6 @@ pub fn get_peaks(file_path: &str, limited: bool) -> Vec<Vec<(f32, f32)>> {
                     _ => {
                         // Repeat for the different sample formats.
                         unimplemented!();
-                        return Vec::new();
                     }
                 }
             };

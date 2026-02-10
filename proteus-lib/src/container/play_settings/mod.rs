@@ -4,6 +4,7 @@ use log::{info, warn};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::dsp::effects::AudioEffect;
+#[allow(deprecated)]
 #[deprecated(note = "Use DelayReverbSettings instead.")]
 pub use crate::dsp::effects::BasicReverbSettings;
 pub use crate::dsp::effects::{

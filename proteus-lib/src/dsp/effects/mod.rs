@@ -14,8 +14,10 @@ pub mod high_pass;
 pub mod limiter;
 pub mod low_pass;
 
+#[allow(deprecated)]
 #[deprecated(note = "Use DelayReverbEffect instead.")]
 pub use basic_reverb::BasicReverbEffect;
+#[allow(deprecated)]
 #[deprecated(note = "Use DelayReverbSettings instead.")]
 pub use basic_reverb::BasicReverbSettings;
 pub use basic_reverb::{DelayReverbEffect, DelayReverbSettings};
@@ -71,6 +73,7 @@ impl AudioEffect {
     ///
     /// # Returns
     /// Processed interleaved samples.
+    #[allow(deprecated)]
     pub fn process(&mut self, samples: &[f32], context: &EffectContext, drain: bool) -> Vec<f32> {
         match self {
             AudioEffect::BasicReverb(effect) => effect.process(samples, context, drain),
@@ -86,6 +89,7 @@ impl AudioEffect {
     }
 
     /// Reset any internal state maintained by the effect.
+    #[allow(deprecated)]
     pub fn reset_state(&mut self) {
         match self {
             AudioEffect::BasicReverb(effect) => effect.reset_state(),
@@ -101,6 +105,7 @@ impl AudioEffect {
     }
 
     /// Ensure any internal state (e.g., convolution IR) is initialized.
+    #[allow(deprecated)]
     pub fn warm_up(&mut self, context: &EffectContext) {
         match self {
             AudioEffect::BasicReverb(_) => {}
@@ -150,6 +155,7 @@ impl AudioEffect {
     }
 
     /// Mutable access to the delay reverb effect, if present.
+    #[allow(deprecated)]
     pub fn as_delay_reverb_mut(&mut self) -> Option<&mut DelayReverbEffect> {
         match self {
             AudioEffect::DelayReverb(effect) => Some(effect),
@@ -159,6 +165,7 @@ impl AudioEffect {
     }
 
     /// Immutable access to the delay reverb effect, if present.
+    #[allow(deprecated)]
     pub fn as_delay_reverb(&self) -> Option<&DelayReverbEffect> {
         match self {
             AudioEffect::DelayReverb(effect) => Some(effect),
@@ -169,12 +176,14 @@ impl AudioEffect {
 
     /// Mutable access to the basic reverb effect, if present.
     #[deprecated(note = "Use as_delay_reverb_mut instead.")]
+    #[allow(deprecated)]
     pub fn as_basic_reverb_mut(&mut self) -> Option<&mut BasicReverbEffect> {
         self.as_delay_reverb_mut()
     }
 
     /// Immutable access to the basic reverb effect, if present.
     #[deprecated(note = "Use as_delay_reverb instead.")]
+    #[allow(deprecated)]
     pub fn as_basic_reverb(&self) -> Option<&BasicReverbEffect> {
         self.as_delay_reverb()
     }

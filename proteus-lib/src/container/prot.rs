@@ -1,9 +1,7 @@
 //! Container model and play settings parsing for `.prot`/`.mka`.
 
-use matroska::{Audio, Matroska, Settings};
+use matroska::Matroska;
 use rand::Rng;
-use symphonia::core::audio::Channels;
-use symphonia::core::sample::SampleFormat;
 
 use log::{error, info, warn};
 
@@ -235,72 +233,6 @@ impl Prot {
         self.play_settings = Some(play_settings);
     }
 
-    fn get_audio_settings(file_path: &str) -> Audio {
-        let file = std::fs::File::open(file_path).unwrap();
-
-        let symph = match get_probe_result_from_string(file_path) {
-            Ok(probed) => probed,
-            Err(err) => {
-                warn!("Failed to probe audio settings: {}", err);
-                return Audio {
-                    sample_rate: 0.0,
-                    channels: 0,
-                    bit_depth: None,
-                };
-            }
-        };
-
-        let first_track = match symph.format.tracks().first() {
-            Some(track) => &track.codec_params,
-            None => {
-                warn!("No audio tracks found in {}", file_path);
-                return Audio {
-                    sample_rate: 0.0,
-                    channels: 0,
-                    bit_depth: None,
-                };
-            }
-        };
-
-        let channels = {
-            let channels_option = first_track.channels.unwrap_or(Channels::FRONT_CENTRE);
-            channels_option.iter().count()
-        };
-
-        let mut bit_depth = None;
-
-        let bits_per_sample = first_track
-            .bits_per_sample
-            .or_else(|| sample_format_bits(first_track.sample_format));
-        if let Some(bits) = bits_per_sample {
-            bit_depth = Some(bits as u64);
-        }
-
-        let audio = Audio {
-            sample_rate: first_track.sample_rate.unwrap_or(0) as f64,
-            channels: channels as u64,
-            bit_depth,
-        };
-
-        audio
-
-        // let mka: Matroska = Matroska::open(file).expect("Could not open file");
-
-        // let first_audio_settings = mka
-        //     .tracks
-        //     .iter()
-        //     .find_map(|track| {
-        //         if let Settings::Audio(audio_settings) = &track.settings {
-        //             Some(audio_settings.clone()) // assuming you want to keep the settings, and they are cloneable
-        //         } else {
-        //             None
-        //         }
-        //     })
-        //     .expect("Could not find audio settings");
-
-        // first_audio_settings
-    }
-
     /// Get the convolution impulse response spec, if configured.
     pub fn get_impulse_response_spec(&self) -> Option<ImpulseResponseSpec> {
         self.impulse_response_spec.clone()
@@ -460,16 +392,5 @@ fn collect_legacy_tracks(
             }
         }
         track_index_array.push(index);
-    }
-}
-
-fn sample_format_bits(sample_format: Option<SampleFormat>) -> Option<u32> {
-    match sample_format {
-        Some(SampleFormat::U8 | SampleFormat::S8) => Some(8),
-        Some(SampleFormat::U16 | SampleFormat::S16) => Some(16),
-        Some(SampleFormat::U24 | SampleFormat::S24) => Some(24),
-        Some(SampleFormat::U32 | SampleFormat::S32 | SampleFormat::F32) => Some(32),
-        Some(SampleFormat::F64) => Some(64),
-        None => None,
     }
 }

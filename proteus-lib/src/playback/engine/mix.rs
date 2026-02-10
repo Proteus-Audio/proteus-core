@@ -19,6 +19,7 @@ use crate::track::{buffer_container_tracks, buffer_track, ContainerTrackArgs, Tr
 use super::state::{DspChainMetrics, PlaybackBufferSettings};
 
 #[cfg(feature = "debug")]
+#[allow(deprecated)]
 fn effect_label(effect: &AudioEffect) -> &'static str {
     match effect {
         AudioEffect::DelayReverb(_) => "DelayReverb",
@@ -386,15 +387,14 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer, f
             }
 
             if buffer_snapshot.is_empty() && effects_len == 0 && all_tracks_finished {
-                let mut drained = Vec::new();
-                {
+                let drained = {
                     let mut effects_guard = effects.lock().unwrap();
                     let mut current = Vec::new();
                     for effect in effects_guard.iter_mut() {
                         current = effect.process(&current, &effect_context, true);
                     }
-                    drained = current;
-                }
+                    current
+                };
                 if !drained.is_empty() {
                     let mut tail_buffer = effects_buffer.lock().unwrap();
                     for sample in drained {
@@ -409,7 +409,7 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer, f
                 let input_channels = audio_info.channels as u16;
                 let sample_rate = audio_info.sample_rate as u32;
 
-                let mut samples = if should_mix_tracks {
+                let samples = if should_mix_tracks {
                     let current_chunk = if !all_tracks_finished && active_min_len >= min_mix_samples
                     {
                         min_mix_samples

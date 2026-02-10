@@ -252,6 +252,7 @@ impl Player {
     }
 
     /// Snapshot the active effect chain names.
+    #[allow(deprecated)]
     pub fn get_effect_names(&self) -> Vec<String> {
         let effects = self.effects.lock().unwrap();
         effects
@@ -743,9 +744,10 @@ impl Player {
                 let mut chunk_lengths = chunk_lengths.lock().unwrap();
 
                 let total_time = chunk_lengths.iter().sum::<f64>();
+                let should_audition = audition_source.is_none() && total_time < 0.2;
 
                 // If total_time is less than 0.2 seconds, audition the chunk
-                if audition_source.is_none() {
+                if should_audition {
                     let (mixer_clone, mixer) = clone_samples_buffer(mixer);
                     *audition_source = Some(mixer_clone);
                     drop(audition_source);
