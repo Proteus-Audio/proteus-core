@@ -189,6 +189,7 @@ pub fn run(args: &ArgMatches, log_buffer: Arc<Mutex<VecDeque<LogLine>>>) -> Resu
     } else {
         None
     };
+    logging::set_echo_stderr(!quiet && terminal.is_none());
     let _stderr_guard = if terminal.is_some() {
         logging::capture_stderr(log_buffer.clone())
     } else {

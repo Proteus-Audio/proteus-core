@@ -33,14 +33,14 @@ pub fn run_verify(file_path: &str, mode: VerifyMode) -> Result<i32> {
 fn run_probe(file_path: &str) -> Result<i32> {
     let probed = get_probe_result_from_string(file_path)?;
     let tracks = probed.format.tracks();
-    println!("Probed {} track(s)", tracks.len());
+    info!("Probed {} track(s)", tracks.len());
     for track in tracks {
         let params = &track.codec_params;
         let codec = params.codec;
         let sample_rate = params.sample_rate.unwrap_or(0);
         let channels = params.channels.map(|c| c.count()).unwrap_or(0);
         let bits = params.bits_per_sample.unwrap_or(0);
-        println!(
+        info!(
             "track {} codec={:?} sample_rate={} channels={} bits_per_sample={}",
             track.id, codec, sample_rate, channels, bits
         );
