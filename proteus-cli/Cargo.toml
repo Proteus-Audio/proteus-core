@@ -33,6 +33,7 @@ predicates = "3.1.0"
 tempfile = "3.10.1"
 
 [features]
+default = ["output-meter", "real-fft"]
 bench = ["proteus-lib/bench"]
 debug = ["proteus-lib/debug"]
 real-fft = ["proteus-lib/real-fft"]
