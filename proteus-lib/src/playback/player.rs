@@ -67,6 +67,7 @@ pub struct Player {
     dsp_metrics: Arc<Mutex<DspChainMetrics>>,
     effects_reset: Arc<AtomicU64>,
     output_meter: Arc<Mutex<OutputMeter>>,
+    last_levels: Arc<Mutex<Vec<f32>>>,
     buffering_done: Arc<AtomicBool>,
     last_chunk_ms: Arc<AtomicU64>,
     last_time_update_ms: Arc<AtomicU64>,
@@ -140,6 +141,7 @@ impl Player {
                 sample_rate,
                 OUTPUT_METER_REFRESH_HZ,
             ))),
+            last_levels: Arc::new(Mutex::new(vec![0.0; channels])),
             buffering_done: Arc::new(AtomicBool::new(false)),
             last_chunk_ms: Arc::new(AtomicU64::new(0)),
             last_time_update_ms: Arc::new(AtomicU64::new(0)),
@@ -291,18 +293,34 @@ impl Player {
 
     /// Retrieve the most recent per-channel peak levels.
     pub fn get_levels(&self) -> Vec<f32> {
-        self.output_meter.lock().unwrap().levels()
+        let state = *self.state.lock().unwrap();
+        if self.is_stopped_state(state) {
+            return vec![0.0; self.info.channels as usize];
+        }
+        if self.is_paused_state(state) {
+            return self.last_levels.lock().unwrap().clone();
+        }
+        let levels = self.output_meter.lock().unwrap().levels();
+        let mut cached = self.last_levels.lock().unwrap();
+        *cached = levels.clone();
+        levels
     }
 
     /// Retrieve the most recent per-channel peak levels in dBFS.
     pub fn get_levels_db(&self) -> Vec<f32> {
-        self.output_meter
-            .lock()
-            .unwrap()
-            .levels()
-            .into_iter()
-            .map(linear_to_dbfs)
-            .collect()
+        let state = *self.state.lock().unwrap();
+        if self.is_stopped_state(state) {
+            return vec![f32::NEG_INFINITY; self.info.channels as usize];
+        }
+        let levels = if self.is_paused_state(state) {
+            self.last_levels.lock().unwrap().clone()
+        } else {
+            let levels = self.output_meter.lock().unwrap().levels();
+            let mut cached = self.last_levels.lock().unwrap();
+            *cached = levels.clone();
+            levels
+        };
+        levels.into_iter().map(linear_to_dbfs).collect()
     }
 
     /// Retrieve the most recent per-channel average levels.
@@ -425,6 +443,7 @@ impl Player {
         let dsp_metrics_for_sink = self.dsp_metrics.clone();
         let effects_reset = self.effects_reset.clone();
         let output_meter = self.output_meter.clone();
+        let last_levels = self.last_levels.clone();
         let audio_info = self.info.clone();
 
         let audio_heard = self.audio_heard.clone();
@@ -439,6 +458,11 @@ impl Player {
         {
             let mut meter = self.output_meter.lock().unwrap();
             meter.reset();
+        }
+        {
+            let mut cached = self.last_levels.lock().unwrap();
+            cached.clear();
+            cached.resize(self.info.channels as usize, 0.0);
         }
 
         // ===== Start playback ===== //
@@ -631,6 +655,9 @@ impl Player {
                 {
                     let mut meter = output_meter.lock().unwrap();
                     meter.advance(delta);
+                    let levels = meter.levels();
+                    let mut cached = last_levels.lock().unwrap();
+                    *cached = levels;
                 }
 
                 *time_passed_unlocked = current_audio_time;
@@ -889,6 +916,17 @@ impl Player {
     pub fn is_paused(&self) -> bool {
         let state = self.state.lock().unwrap();
         *state == PlayerState::Paused
+    }
+
+    fn is_paused_state(&self, state: PlayerState) -> bool {
+        state == PlayerState::Paused || state == PlayerState::Pausing
+    }
+
+    fn is_stopped_state(&self, state: PlayerState) -> bool {
+        matches!(
+            state,
+            PlayerState::Stopped | PlayerState::Stopping | PlayerState::Init | PlayerState::Finished
+        ) || self.thread_finished()
     }
 
     /// Get the current playback time in seconds.
