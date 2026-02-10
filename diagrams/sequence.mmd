@@ -1,13 +1,21 @@
 sequenceDiagram
-  participant App as App/GUI
+  participant App as CLI/TUI
   participant Player as playback::player::Player
   participant Engine as playback::engine::PlayerEngine
-  participant Container as container::prot::Prot
-  participant DSP as dsp::reverb::Reverb
-  App->>Player: create + configure (IR/mix)
-  Player->>Engine: start playback thread
-  Engine->>Container: read tracks/settings
-  Engine->>DSP: process audio chunks
-  DSP-->>Engine: processed samples
-  Engine-->>Player: mixed SamplesBuffer
-  Player-->>App: playback state/time
+  participant Prot as container::prot::Prot
+  participant Buffer as track::buffer_track
+  participant Mix as playback::engine::mix
+  participant DSP as dsp::effects::AudioEffect
+  participant Sink as rodio::Sink
+
+  App->>Player: create + configure (effects json or play_settings)
+  Player->>Engine: spawn playback thread
+  Engine->>Prot: read tracks + play settings
+  Engine->>Buffer: spawn per-track decoding threads
+  loop realtime mix
+    Mix->>DSP: process interleaved samples through effect chain
+    DSP-->>Mix: processed samples
+    Mix-->>Engine: SamplesBuffer + duration
+    Engine->>Sink: append buffer
+  end
+  Player-->>App: playback state/time/metrics

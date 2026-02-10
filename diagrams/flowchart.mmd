@@ -1,15 +1,27 @@
 flowchart TB
-  subgraph Core["proteus-lib"]
+  subgraph Workspace["Proteus Workspace"]
     direction TB
-    Container["container (prot/info/attachments)"]
-    Audio["audio (buffering/samples)"]
-    DSP["dsp (convolution/reverb/impulse_response)"]
-    Playback["playback (player/engine)"]
-    Diagnostics["diagnostics (reporter)"]
-    Tools["tools (timer/helpers)"]
+    CLI["proteus-cli (TUI/CLI)"]
+    Scripts["proteus-scripts (helpers)"]
+    Lib["proteus-lib (core audio library)"]
   end
 
+  subgraph Core["proteus-lib modules"]
+    direction TB
+    Container["container (prot/mka parsing + play_settings)"]
+    Track["track (decode + buffering)"]
+    Audio["audio (buffers + samples)"]
+    DSP["dsp (effects + convolution)"]
+    Playback["playback (player + engine + mix)"]
+    Diagnostics["diagnostics (reporting/bench)"]
+    Tools["tools (timing/helpers)"]
+  end
+
+  CLI --> Lib
+  Scripts --> Lib
+
   Container --> Playback
+  Track --> Playback
   Audio --> Playback
   DSP --> Playback
   Tools --> Playback

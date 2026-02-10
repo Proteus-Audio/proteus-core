@@ -1,0 +1,24 @@
+flowchart LR
+  Input["Interleaved samples"] --> Context["EffectContext (rate/channels/IR)"]
+  Context --> Chain["Vec<AudioEffect> (ordered chain)"]
+  Chain --> E1["Effect 1"]
+  E1 --> E2["Effect 2"]
+  E2 --> E3["Effect N"]
+  E3 --> Output["Processed samples"]
+
+  subgraph Examples["Effect examples"]
+    direction TB
+    Delay["DelayReverb"]
+    Diffusion["DiffusionReverb"]
+    Convolution["ConvolutionReverb"]
+    Filters["LowPass/HighPass"]
+    Dynamics["Compressor/Limiter"]
+    Distortion["Distortion"]
+  end
+
+  Chain --- Delay
+  Chain --- Diffusion
+  Chain --- Convolution
+  Chain --- Filters
+  Chain --- Dynamics
+  Chain --- Distortion
