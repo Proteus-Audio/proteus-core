@@ -135,6 +135,14 @@ pub fn run(args: &ArgMatches, log_buffer: Arc<Mutex<VecDeque<LogLine>>>) -> Resu
         .parse::<f32>()
         .unwrap();
     player.set_startup_fade_ms(startup_fade_ms);
+    let append_jitter_log_ms = args
+        .get_one::<String>("append-jitter-log-ms")
+        .unwrap()
+        .parse::<f32>()
+        .unwrap();
+    player.set_append_jitter_log_ms(append_jitter_log_ms);
+    let effect_boundary_log = args.get_flag("effect-boundary-log");
+    player.set_effect_boundary_log(effect_boundary_log);
     let track_eos_ms = args
         .get_one::<String>("track-eos-ms")
         .unwrap()
@@ -235,6 +243,16 @@ pub fn run(args: &ArgMatches, log_buffer: Arc<Mutex<VecDeque<LogLine>>>) -> Resu
                 clip_count: dsp_metrics.clip_count,
                 #[cfg(feature = "debug")]
                 nan_count: dsp_metrics.nan_count,
+                #[cfg(feature = "debug")]
+                append_delay_ms: dsp_metrics.append_delay_ms,
+                #[cfg(feature = "debug")]
+                avg_append_delay_ms: dsp_metrics.avg_append_delay_ms,
+                #[cfg(feature = "debug")]
+                max_append_delay_ms: dsp_metrics.max_append_delay_ms,
+                #[cfg(feature = "debug")]
+                late_append_count: dsp_metrics.late_append_count,
+                #[cfg(feature = "debug")]
+                late_append_active: dsp_metrics.late_append_active,
                 #[cfg(feature = "debug")]
                 track_key_count: dsp_metrics.track_key_count,
                 #[cfg(feature = "debug")]

@@ -103,6 +103,19 @@ pub fn build_cli() -> Command {
                 .help("Fade-in duration at playback start"),
         )
         .arg(
+            Arg::new("append-jitter-log-ms")
+                .long("append-jitter-log-ms")
+                .value_name("MS")
+                .default_value("0")
+                .help("Log sink append jitter events above this threshold (ms)"),
+        )
+        .arg(
+            Arg::new("effect-boundary-log")
+                .long("effect-boundary-log")
+                .action(ArgAction::SetTrue)
+                .help("Log per-effect boundary discontinuities in the DSP chain"),
+        )
+        .arg(
             Arg::new("track-eos-ms")
                 .long("track-eos-ms")
                 .value_name("MS")

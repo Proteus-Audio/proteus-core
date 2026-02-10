@@ -18,6 +18,21 @@ use crate::track::{buffer_container_tracks, buffer_track, ContainerTrackArgs, Tr
 
 use super::state::{DspChainMetrics, PlaybackBufferSettings};
 
+#[cfg(feature = "debug")]
+fn effect_label(effect: &AudioEffect) -> &'static str {
+    match effect {
+        AudioEffect::DelayReverb(_) => "DelayReverb",
+        AudioEffect::BasicReverb(_) => "BasicReverb",
+        AudioEffect::DiffusionReverb(_) => "DiffusionReverb",
+        AudioEffect::ConvolutionReverb(_) => "ConvolutionReverb",
+        AudioEffect::LowPassFilter(_) => "LowPassFilter",
+        AudioEffect::HighPassFilter(_) => "HighPassFilter",
+        AudioEffect::Distortion(_) => "Distortion",
+        AudioEffect::Compressor(_) => "Compressor",
+        AudioEffect::Limiter(_) => "Limiter",
+    }
+}
+
 /// Arguments required to spawn the mixing thread.
 pub struct MixThreadArgs {
     pub audio_info: crate::container::info::Info,
@@ -88,6 +103,8 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer, f
         #[cfg(feature = "debug")]
         let mut last_pop_log = Instant::now();
         #[cfg(feature = "debug")]
+        let mut last_boundary_log = Instant::now();
+        #[cfg(feature = "debug")]
         let mut pop_count = 0_u64;
         #[cfg(feature = "debug")]
         let mut clip_count = 0_u64;
@@ -95,6 +112,18 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer, f
         let mut nan_count = 0_u64;
         #[cfg(feature = "debug")]
         let mut last_samples: Vec<f32> = Vec::new();
+        #[cfg(feature = "debug")]
+        let mut boundary_initialized = false;
+        #[cfg(feature = "debug")]
+        let mut boundary_count = 0_u64;
+        #[cfg(feature = "debug")]
+        let mut effect_boundary_initialized: Vec<bool> = Vec::new();
+        #[cfg(feature = "debug")]
+        let mut effect_last_samples: Vec<Vec<f32>> = Vec::new();
+        #[cfg(feature = "debug")]
+        let mut effect_boundary_counts: Vec<u64> = Vec::new();
+        #[cfg(feature = "debug")]
+        let mut effect_boundary_logs: Vec<Instant> = Vec::new();
         #[cfg(feature = "debug")]
         let alpha = 0.1_f64;
 
@@ -269,6 +298,13 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer, f
                     }
                 };
                 last_effects_reset = current_reset;
+                #[cfg(feature = "debug")]
+                {
+                    effect_boundary_initialized.clear();
+                    effect_last_samples.clear();
+                    effect_boundary_counts.clear();
+                    effect_boundary_logs.clear();
+                }
             }
 
             let effects_len = effects_buffer.lock().unwrap().len();
@@ -302,7 +338,7 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer, f
                     let len = buffer.lock().unwrap().len();
                     sizes.push(format!("{}={}", track_key, len));
                 }
-                log::info!(
+                log::debug!(
                     "startup buffers: t={:.2}s active_min={} finished_min={} tail={} sizes=[{}]",
                     startup_log_start.elapsed().as_secs_f64(),
                     active_min_len,
@@ -398,9 +434,83 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer, f
                         let mut processed = mix_buffer[..current_chunk].to_vec();
                         {
                             let mut effects_guard = effects.lock().unwrap();
-                            for effect in effects_guard.iter_mut() {
+                            #[cfg(feature = "debug")]
+                            let effect_boundary_log = {
+                                let settings = buffer_settings.lock().unwrap();
+                                settings.effect_boundary_log
+                            };
+                            #[cfg(feature = "debug")]
+                            if effect_boundary_log {
+                                let effect_count = effects_guard.len();
+                                if effect_boundary_initialized.len() != effect_count
+                                    || effect_last_samples.len() != effect_count
+                                    || effect_boundary_counts.len() != effect_count
+                                    || effect_boundary_logs.len() != effect_count
+                                {
+                                    let channels = input_channels.max(1) as usize;
+                                    effect_boundary_initialized = vec![false; effect_count];
+                                    effect_last_samples = vec![vec![0.0; channels]; effect_count];
+                                    effect_boundary_counts = vec![0_u64; effect_count];
+                                    effect_boundary_logs = vec![Instant::now(); effect_count];
+                                }
+                            }
+                            for (effect_index, effect) in effects_guard.iter_mut().enumerate() {
+                                #[cfg(not(feature = "debug"))]
+                                let _ = effect_index;
                                 processed =
                                     effect.process(&processed, &effect_context, drain_effects);
+                                #[cfg(feature = "debug")]
+                                if effect_boundary_log {
+                                    let channels = input_channels.max(1) as usize;
+                                    if effect_index < effect_last_samples.len()
+                                        && effect_index < effect_boundary_initialized.len()
+                                    {
+                                        if processed.len() >= channels {
+                                            let initialized =
+                                                effect_boundary_initialized[effect_index];
+                                            for ch in 0..channels {
+                                                let prev = effect_last_samples[effect_index][ch];
+                                                let curr = processed[ch];
+                                                let delta = (curr - prev).abs();
+                                                if initialized && delta > 0.1 {
+                                                    effect_boundary_counts[effect_index] =
+                                                        effect_boundary_counts[effect_index]
+                                                            .saturating_add(1);
+                                                    if effect_boundary_logs[effect_index]
+                                                        .elapsed()
+                                                        .as_millis()
+                                                        >= 200
+                                                    {
+                                                        log::info!(
+                                                            "effect boundary discontinuity: effect={} delta={:.4} prev={:.4} curr={:.4} ch={} count={}",
+                                                            effect_label(effect),
+                                                            delta,
+                                                            prev,
+                                                            curr,
+                                                            ch,
+                                                            effect_boundary_counts[effect_index]
+                                                        );
+                                                        effect_boundary_logs[effect_index] =
+                                                            Instant::now();
+                                                    }
+                                                }
+                                            }
+                                            let last_frame_start =
+                                                processed.len().saturating_sub(channels);
+                                            for ch in 0..channels {
+                                                let idx = (last_frame_start + ch)
+                                                    .min(processed.len().saturating_sub(1));
+                                                effect_last_samples[effect_index][ch] =
+                                                    processed[idx];
+                                            }
+                                            if !effect_boundary_initialized[effect_index]
+                                                && !processed.is_empty()
+                                            {
+                                                effect_boundary_initialized[effect_index] = true;
+                                            }
+                                        }
+                                    }
+                                }
                             }
                         }
 
@@ -430,10 +540,27 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer, f
                                     clip_count = clip_count.saturating_add(1);
                                 }
                                 let delta = (sample - prev).abs();
+                                if boundary_initialized && idx < channels && delta > 0.1 {
+                                    boundary_count = boundary_count.saturating_add(1);
+                                    if last_boundary_log.elapsed().as_millis() >= 200 {
+                                        log::info!(
+                                            "boundary discontinuity: delta={:.4} prev={:.4} curr={:.4} ch={} count={}",
+                                            delta,
+                                            prev,
+                                            sample,
+                                            ch,
+                                            boundary_count
+                                        );
+                                        last_boundary_log = Instant::now();
+                                    }
+                                }
                                 if delta > 0.9 && sample.abs() > 0.6 {
                                     pop_count = pop_count.saturating_add(1);
                                 }
                                 last_samples[ch] = *sample;
+                            }
+                            if !boundary_initialized && !processed.is_empty() {
+                                boundary_initialized = true;
                             }
                             if last_pop_log.elapsed().as_secs_f64() >= 1.0
                                 && (pop_count > 0 || clip_count > 0 || nan_count > 0)

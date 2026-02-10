@@ -383,6 +383,18 @@ impl Player {
         settings.startup_fade_ms = ms.max(0.0);
     }
 
+    /// Configure the append jitter logging threshold (ms). 0 disables logging.
+    pub fn set_append_jitter_log_ms(&self, ms: f32) {
+        let mut settings = self.buffer_settings.lock().unwrap();
+        settings.append_jitter_log_ms = ms.max(0.0);
+    }
+
+    /// Enable or disable per-effect boundary discontinuity logging.
+    pub fn set_effect_boundary_log(&self, enabled: bool) {
+        let mut settings = self.buffer_settings.lock().unwrap();
+        settings.effect_boundary_log = enabled;
+    }
+
     fn audition(&self, length: Duration) {
         let audition_source_mutex = self.audition_source.clone();
 
@@ -437,6 +449,7 @@ impl Player {
         let buffer_settings_for_state = self.buffer_settings.clone();
         let effects = self.effects.clone();
         let dsp_metrics = self.dsp_metrics.clone();
+        let dsp_metrics_for_sink = self.dsp_metrics.clone();
         let effects_reset = self.effects_reset.clone();
         let output_meter = self.output_meter.clone();
         let audio_info = self.info.clone();
@@ -662,10 +675,29 @@ impl Player {
             // ===================== //
             // Update sink for each chunk received from engine
             // ===================== //
+            let append_timing = Arc::new(Mutex::new((Instant::now(), 0.0_f64, 0_u64, 0.0_f64)));
             let update_sink = |(mixer, length_in_seconds): (SamplesBuffer, f64)| {
                 if playback_id_atomic.load(Ordering::SeqCst) != playback_id {
                     return;
                 }
+                let (delay_ms, late) = {
+                    let mut timing = append_timing.lock().unwrap();
+                    let now = Instant::now();
+                    let delta_ms = now.duration_since(timing.0).as_secs_f64() * 1000.0;
+                    let chunk_ms = length_in_seconds * 1000.0;
+                    let late = delta_ms > (chunk_ms * 1.2) && chunk_ms > 0.0;
+                    if late {
+                        timing.2 = timing.2.saturating_add(1);
+                    }
+                    timing.1 = if timing.1 == 0.0 {
+                        delta_ms
+                    } else {
+                        (timing.1 * 0.9) + (delta_ms * 0.1)
+                    };
+                    timing.3 = timing.3.max(delta_ms);
+                    timing.0 = now;
+                    (delta_ms, late)
+                };
                 audio_heard.store(true, Ordering::Relaxed);
                 last_chunk_ms.store(now_ms(), Ordering::Relaxed);
 
@@ -673,9 +705,41 @@ impl Player {
                     let mut meter = output_meter.lock().unwrap();
                     meter.push_samples(&mixer);
                 }
+                {
+                    let mut metrics = dsp_metrics_for_sink.lock().unwrap();
+                    metrics.append_delay_ms = delay_ms;
+                    metrics.avg_append_delay_ms = {
+                        if metrics.avg_append_delay_ms == 0.0 {
+                            delay_ms
+                        } else {
+                            (metrics.avg_append_delay_ms * 0.9) + (delay_ms * 0.1)
+                        }
+                    };
+                    metrics.max_append_delay_ms = metrics.max_append_delay_ms.max(delay_ms);
+                    metrics.late_append_count = {
+                        let timing = append_timing.lock().unwrap();
+                        timing.2
+                    };
+                    metrics.late_append_active = late;
+                }
 
                 let mut audition_source = audition_source_mutex.lock().unwrap();
                 let sink = sink_mutex.lock().unwrap();
+                let append_jitter_log_ms = {
+                    let settings = buffer_settings_for_state.lock().unwrap();
+                    settings.append_jitter_log_ms
+                };
+                if append_jitter_log_ms > 0.0 && (late || delay_ms > append_jitter_log_ms as f64) {
+                    let expected_ms = length_in_seconds * 1000.0;
+                    log::info!(
+                        "append jitter: delta={:.2}ms expected={:.2}ms late={} threshold={:.2}ms sink_len={}",
+                        delay_ms,
+                        expected_ms,
+                        late,
+                        append_jitter_log_ms,
+                        sink.len()
+                    );
+                }
                 let mut chunk_lengths = chunk_lengths.lock().unwrap();
 
                 let total_time = chunk_lengths.iter().sum::<f64>();

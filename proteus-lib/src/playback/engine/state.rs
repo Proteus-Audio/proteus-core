@@ -8,6 +8,8 @@ pub struct PlaybackBufferSettings {
     pub start_sink_chunks: usize,
     pub startup_silence_ms: f32,
     pub startup_fade_ms: f32,
+    pub append_jitter_log_ms: f32,
+    pub effect_boundary_log: bool,
 }
 
 impl PlaybackBufferSettings {
@@ -19,6 +21,8 @@ impl PlaybackBufferSettings {
             start_sink_chunks: 0,
             startup_silence_ms: 0.0,
             startup_fade_ms: 150.0,
+            append_jitter_log_ms: 0.0,
+            effect_boundary_log: false,
         }
     }
 }
@@ -50,4 +54,9 @@ pub struct DspChainMetrics {
     pub pop_count: u64,
     pub clip_count: u64,
     pub nan_count: u64,
+    pub append_delay_ms: f64,
+    pub avg_append_delay_ms: f64,
+    pub max_append_delay_ms: f64,
+    pub late_append_count: u64,
+    pub late_append_active: bool,
 }

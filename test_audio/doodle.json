@@ -1,0 +1,50 @@
+[
+	{
+		"BasicReverbSettings": {
+			"enabled": true,
+			"mix": 0.6,
+			"duration_ms": 100,
+			"amplitude": 0.7
+		}
+	},
+	{
+		"LowPassFilterSettings": {
+			"enabled": true,
+			"freq_hz": 1200,
+			"q": 0.5
+		}
+	},
+	{
+		"HighPassFilterSettings": {
+			"enabled": true,
+			"freq_hz": 200,
+			"q": 0.5
+		}
+	},
+	{
+		"DistortionSettings": {
+			"enabled": true,
+			"gain": 1.5,
+			"threshold": 0.1
+		}
+	},
+	{
+		"CompressorSettings": {
+			"enabled": true,
+			"threshold_db": -18.0,
+			"ratio": 4.0,
+			"attack_ms": 10.0,
+			"release_ms": 100.0,
+			"makeup_gain_db": 0.0
+		}
+	},
+	{
+		"LimiterSettings": {
+			"enabled": true,
+			"threshold_db": -1.0,
+			"knee_width_db": 4.0,
+			"attack_ms": 5.0,
+			"release_ms": 100.0
+		}
+	}
+]
