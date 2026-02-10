@@ -4,6 +4,15 @@ use clap::{Arg, ArgAction, Command};
 
 /// Build the CLI argument parser and command definitions.
 pub fn build_cli() -> Command {
+    fn with_input_arg(cmd: Command, required: bool) -> Command {
+        cmd.arg(
+            Arg::new("INPUT")
+                .help("The input file path, or - to use standard input")
+                .required(required)
+                .index(1),
+        )
+    }
+
     fn with_bench_common_args(cmd: Command) -> Command {
         cmd.arg(
             Arg::new("bench-input-seconds")
@@ -175,67 +184,50 @@ pub fn build_cli() -> Command {
             Command::new("verify")
                 .about("Probe or decode audio without starting playback")
                 .subcommand(
-                    Command::new("probe")
-                        .about("Only probe the input for metadata")
-                        .arg(
-                            Arg::new("INPUT")
-                                .help("The input file path, or - to use standard input")
-                                .required(true)
-                                .index(1),
-                        ),
+                    with_input_arg(
+                        Command::new("probe").about("Only probe the input for metadata"),
+                        true,
+                    ),
                 )
                 .subcommand(
-                    Command::new("decode")
-                        .about("Decode, but do not play the audio")
-                        .arg(
-                            Arg::new("INPUT")
-                                .help("The input file path, or - to use standard input")
-                                .required(true)
-                                .index(1),
-                        ),
+                    with_input_arg(
+                        Command::new("decode").about("Decode, but do not play the audio"),
+                        true,
+                    ),
                 )
                 .subcommand(
-                    Command::new("verify")
-                        .about("Verify the decoded audio is valid, but do not play the audio")
-                        .arg(
-                            Arg::new("INPUT")
-                                .help("The input file path, or - to use standard input")
-                                .required(true)
-                                .index(1),
-                        ),
+                    with_input_arg(
+                        Command::new("verify")
+                            .about("Verify the decoded audio is valid, but do not play the audio"),
+                        true,
+                    ),
                 ),
         )
         .subcommand(
-            Command::new("info")
-                .about("Display container info in a TUI")
-                .arg(
-                    Arg::new("INPUT")
-                        .help("The input file path, or - to use standard input")
-                        .required(true)
-                        .index(1),
-                )
-                .arg(
-                    Arg::new("print")
-                        .long("print")
-                        .action(ArgAction::SetTrue)
-                        .help("Print info to stdout instead of opening the TUI"),
-                ),
+            with_input_arg(
+                Command::new("info")
+                    .about("Display container info in a TUI")
+                    .arg(
+                        Arg::new("print")
+                            .long("print")
+                            .action(ArgAction::SetTrue)
+                            .help("Print info to stdout instead of opening the TUI"),
+                    ),
+                true,
+            ),
         )
         .subcommand(
-            Command::new("peaks")
-                .about("Output per-channel waveform peaks as JSON")
-                .arg(
-                    Arg::new("INPUT")
-                        .help("The input file path, or - to use standard input")
-                        .required(true)
-                        .index(1),
-                )
-                .arg(
-                    Arg::new("limited")
-                        .long("limited")
-                        .action(ArgAction::SetTrue)
-                        .help("Only process a single channel"),
-                ),
+            with_input_arg(
+                Command::new("peaks")
+                    .about("Output per-channel waveform peaks as JSON")
+                    .arg(
+                        Arg::new("limited")
+                            .long("limited")
+                            .action(ArgAction::SetTrue)
+                            .help("Only process a single channel"),
+                    ),
+                true,
+            ),
         )
         .subcommand(
             Command::new("create")
