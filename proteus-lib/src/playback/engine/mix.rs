@@ -13,7 +13,7 @@ use std::time::Instant;
 
 use crate::audio::buffer::TrackBuffer;
 use crate::container::prot::Prot;
-use crate::dsp::effects::{AudioEffect, EffectContext};
+use crate::dsp::effects::{convolution_reverb, AudioEffect, EffectContext};
 use crate::track::{buffer_container_tracks, buffer_track, ContainerTrackArgs, TrackArgs};
 
 use super::state::{DspChainMetrics, PlaybackBufferSettings};
@@ -195,7 +195,23 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer, f
         let start_samples = ((audio_info.sample_rate as f32 * start_buffer_ms) / 1000.0) as usize
             * audio_info.channels as usize;
         let min_mix_frames = ((audio_info.sample_rate as f32 * MIN_MIX_MS) / 1000.0) as usize;
-        let min_mix_samples = min_mix_frames.max(1) * audio_info.channels as usize;
+        let mut min_mix_samples = min_mix_frames.max(1) * audio_info.channels as usize;
+        let has_convolution = {
+            let effects_guard = effects.lock().unwrap();
+            effects_guard.iter().any(|effect| match effect {
+                AudioEffect::ConvolutionReverb(effect) => effect.enabled,
+                _ => false,
+            })
+        };
+        if has_convolution {
+            let batch_samples = convolution_reverb::preferred_batch_samples(
+                audio_info.channels.max(1) as usize,
+            );
+            if batch_samples > 0 {
+                min_mix_samples =
+                    ((min_mix_samples + batch_samples - 1) / batch_samples) * batch_samples;
+            }
+        }
         let mut started = start_samples == 0;
         let mut mix_buffer = vec![0.0_f32; min_mix_samples];
         let warmup_samples = min_mix_samples;

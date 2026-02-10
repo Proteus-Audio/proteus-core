@@ -17,7 +17,12 @@ pub use spec::{parse_impulse_response_string, ImpulseResponseSpec};
 
 const DEFAULT_DRY_WET: f32 = 0.000001;
 const DEFAULT_TAIL_DB: f32 = -60.0;
-const REVERB_BATCH_BLOCKS: usize = 2;
+pub(crate) const REVERB_BATCH_BLOCKS: usize = 2;
+
+/// Preferred processing batch size in interleaved samples for the reverb.
+pub fn preferred_batch_samples(channels: usize) -> usize {
+    reverb::preferred_batch_samples(channels)
+}
 
 /// Serialized configuration for convolution reverb impulse response selection.
 #[derive(Debug, Clone, Serialize, Deserialize)]

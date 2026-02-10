@@ -17,6 +17,16 @@ const FFT_SIZE: usize = 8192;
 // const FFT_SIZE: usize = 16384;
 // const FFT_SIZE: usize = 32768;
 
+/// Preferred processing batch size in interleaved samples.
+pub fn preferred_batch_samples(channels: usize) -> usize {
+    if channels == 0 {
+        return 0;
+    }
+    let segment_size = FFT_SIZE / 2;
+    let block_samples = segment_size * channels;
+    block_samples * super::REVERB_BATCH_BLOCKS
+}
+
 /// Stateful convolution reverb processor.
 ///
 /// The processor keeps a `Convolver` per output channel and maintains
