@@ -503,6 +503,11 @@ impl Player {
 
             let resume_sink = |sink: &Sink, fade_length_in_seconds: f32| {
                 let volume = *volume.lock().unwrap();
+                if fade_length_in_seconds <= 0.0 {
+                    sink.play();
+                    sink.set_volume(volume);
+                    return;
+                }
                 let fade_increments = (volume - sink.volume()) / (fade_length_in_seconds * 100.0);
                 // Fade in and play sink
                 sink.play();
@@ -518,7 +523,6 @@ impl Player {
             {
                 let startup_settings = buffer_settings_for_state.lock().unwrap();
                 let startup_silence_ms = startup_settings.startup_silence_ms;
-                let startup_fade_ms = startup_settings.startup_fade_ms;
                 drop(startup_settings);
 
                 let sample_rate = audio_info.sample_rate as u32;
@@ -535,20 +539,12 @@ impl Player {
                     drop(sink);
                 }
 
-                if startup_fade_ms > 0.0 {
-                    let state = play_state.lock().unwrap().clone();
-                    if state != PlayerState::Paused && state != PlayerState::Pausing {
-                        resume_sink(
-                            &sink_mutex.lock().unwrap(),
-                            (startup_fade_ms / 1000.0).max(0.0),
-                        );
-                    }
-                }
             }
 
             // ===================== //
             // Check if the player should be paused or not
             // ===================== //
+            let startup_fade_pending = Cell::new(true);
             let check_details = || {
                 if abort.load(Ordering::SeqCst) {
                     let sink = sink_mutex.lock().unwrap();
@@ -576,7 +572,13 @@ impl Player {
                     play_state.lock().unwrap().clone_from(&PlayerState::Paused);
                 }
                 if state == PlayerState::Resuming {
-                    resume_sink(&sink, 0.1);
+                    let fade_length = if startup_fade_pending.replace(false) {
+                        let startup_fade_ms = buffer_settings_for_state.lock().unwrap().startup_fade_ms;
+                        (startup_fade_ms / 1000.0).max(0.0)
+                    } else {
+                        0.1
+                    };
+                    resume_sink(&sink, fade_length);
                     play_state.lock().unwrap().clone_from(&PlayerState::Playing);
                 }
                 drop(sink);
