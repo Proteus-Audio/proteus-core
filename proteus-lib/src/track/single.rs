@@ -1,6 +1,6 @@
 //! Buffering implementation for a single audio track.
 
-use log::warn;
+use log::{info, warn};
 use std::collections::HashMap;
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
@@ -13,7 +13,7 @@ use crate::audio::buffer::TrackBufferMap;
 use crate::tools::tools::open_file;
 
 use super::buffer::{add_samples_to_buffer_map, mark_track_as_finished};
-use super::convert::process_channel;
+use super::convert::{decoded_format_label, process_channel};
 
 /// Arguments required to buffer a single track into a ring buffer.
 pub struct TrackArgs {
@@ -94,6 +94,8 @@ pub fn buffer_track(args: TrackArgs, abort: Arc<AtomicBool>) -> Arc<Mutex<bool>>
             return;
         }
 
+        let mut logged_format = false;
+
         let _result: Result<bool, Error> = loop {
             if abort.load(std::sync::atomic::Ordering::Relaxed) {
                 break Ok(true);
@@ -114,6 +116,14 @@ pub fn buffer_track(args: TrackArgs, abort: Arc<AtomicBool>) -> Arc<Mutex<bool>>
 
             match decoder.decode(&packet) {
                 Ok(decoded) => {
+                    if !logged_format {
+                        info!(
+                            "Decoded track {} buffer format: {}",
+                            track_id,
+                            decoded_format_label(&decoded)
+                        );
+                        logged_format = true;
+                    }
                     let mut channel_samples = Vec::new();
 
                     for channel in 0..channels {
