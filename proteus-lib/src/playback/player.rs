@@ -496,16 +496,13 @@ impl Player {
                         if attempt == OUTPUT_STREAM_OPEN_RETRIES {
                             error!(
                                 "failed to open default output stream after {} attempts: {}",
-                                OUTPUT_STREAM_OPEN_RETRIES,
-                                err
+                                OUTPUT_STREAM_OPEN_RETRIES, err
                             );
                             return;
                         }
                         warn!(
                             "open_default_stream attempt {}/{} failed: {}",
-                            attempt,
-                            OUTPUT_STREAM_OPEN_RETRIES,
-                            err
+                            attempt, OUTPUT_STREAM_OPEN_RETRIES, err
                         );
                         thread::sleep(Duration::from_millis(OUTPUT_STREAM_OPEN_RETRY_MS));
                     }
@@ -584,7 +581,6 @@ impl Player {
                     sink.append(silence_buffer);
                     drop(sink);
                 }
-
             }
 
             // ===================== //
@@ -619,7 +615,8 @@ impl Player {
                 }
                 if state == PlayerState::Resuming {
                     let fade_length = if startup_fade_pending.replace(false) {
-                        let startup_fade_ms = buffer_settings_for_state.lock().unwrap().startup_fade_ms;
+                        let startup_fade_ms =
+                            buffer_settings_for_state.lock().unwrap().startup_fade_ms;
                         (startup_fade_ms / 1000.0).max(0.0)
                     } else {
                         0.1

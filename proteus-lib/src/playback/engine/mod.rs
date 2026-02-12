@@ -27,6 +27,7 @@ pub struct PlayerEngine {
     buffer_notify: Arc<Condvar>,
     effects_buffer: Arc<Mutex<Bounded<Vec<f32>>>>,
     track_weights: Arc<Mutex<HashMap<u16, f32>>>,
+    track_channel_gains: Arc<Mutex<HashMap<u16, Vec<f32>>>>,
     effects_reset: Arc<AtomicU64>,
     prot: Arc<Mutex<Prot>>,
     buffer_settings: Arc<Mutex<PlaybackBufferSettings>>,
@@ -48,6 +49,7 @@ impl PlayerEngine {
         let buffer_map = init_buffer_map();
         let buffer_notify = Arc::new(Condvar::new());
         let track_weights = Arc::new(Mutex::new(HashMap::new()));
+        let track_channel_gains = Arc::new(Mutex::new(HashMap::new()));
         let finished_tracks: Arc<Mutex<Vec<u16>>> = Arc::new(Mutex::new(Vec::new()));
         let abort = if abort_option.is_some() {
             abort_option.unwrap()
@@ -75,6 +77,7 @@ impl PlayerEngine {
             buffer_notify,
             effects_buffer,
             track_weights,
+            track_channel_gains,
             effects_reset,
             abort,
             prot,
@@ -117,6 +120,7 @@ impl PlayerEngine {
             buffer_notify: self.buffer_notify.clone(),
             effects_buffer: self.effects_buffer.clone(),
             track_weights: self.track_weights.clone(),
+            track_channel_gains: self.track_channel_gains.clone(),
             effects_reset: self.effects_reset.clone(),
             finished_tracks: self.finished_tracks.clone(),
             prot: self.prot.clone(),
@@ -137,10 +141,12 @@ impl PlayerEngine {
     fn ready_buffer_map(&mut self, keys: &Vec<u32>) {
         self.buffer_map = init_buffer_map();
         self.track_weights.lock().unwrap().clear();
+        self.track_channel_gains.lock().unwrap().clear();
 
         let prot = self.prot.lock().unwrap();
         let sample_rate = prot.info.sample_rate;
         let channels = prot.info.channels as usize;
+        let track_mix_settings = prot.get_track_mix_settings();
         let start_buffer_ms = self.buffer_settings.lock().unwrap().start_buffer_ms;
         drop(prot);
         let start_samples = ((sample_rate as f32 * start_buffer_ms) / 1000.0) as usize * channels;
@@ -156,6 +162,15 @@ impl PlayerEngine {
                 .unwrap()
                 .insert(*key as u16, ring_buffer);
             self.track_weights.lock().unwrap().insert(*key as u16, 1.0);
+            let (level, pan) = track_mix_settings
+                .get(&(*key as u16))
+                .copied()
+                .unwrap_or((1.0, 0.0));
+            let gains = compute_track_channel_gains(level, pan, channels);
+            self.track_channel_gains
+                .lock()
+                .unwrap()
+                .insert(*key as u16, gains);
         }
     }
 
@@ -174,4 +189,20 @@ impl PlayerEngine {
 
         true
     }
+}
+
+fn compute_track_channel_gains(level: f32, pan: f32, channels: usize) -> Vec<f32> {
+    let level = level.max(0.0);
+    if channels <= 1 {
+        return vec![level];
+    }
+
+    let pan = pan.clamp(-1.0, 1.0);
+    let left = if pan > 0.0 { 1.0 - pan } else { 1.0 };
+    let right = if pan < 0.0 { 1.0 + pan } else { 1.0 };
+
+    let mut gains = vec![level; channels];
+    gains[0] = level * left;
+    gains[1] = level * right;
+    gains
 }

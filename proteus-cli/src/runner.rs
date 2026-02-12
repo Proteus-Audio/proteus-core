@@ -16,8 +16,8 @@ use crossterm::{
 use log::{error, info};
 use proteus_lib::dsp::effects::{
     AudioEffect, CompressorEffect, ConvolutionReverbEffect, DelayReverbEffect,
-    DiffusionReverbEffect, DistortionEffect, GainEffect, HighPassFilterEffect,
-    LimiterEffect, LowPassFilterEffect,
+    DiffusionReverbEffect, DistortionEffect, GainEffect, HighPassFilterEffect, LimiterEffect,
+    LowPassFilterEffect,
 };
 use proteus_lib::playback::player;
 use ratatui::{backend::CrosstermBackend, Terminal};

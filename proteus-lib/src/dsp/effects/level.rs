@@ -74,9 +74,8 @@ where
         where
             E: DeError,
         {
-            (self.parse_str)(value).ok_or_else(|| {
-                DeError::custom(format!("invalid gain value \"{}\"", value))
-            })
+            (self.parse_str)(value)
+                .ok_or_else(|| DeError::custom(format!("invalid gain value \"{}\"", value)))
         }
 
         fn visit_string<E>(self, value: String) -> Result<Self::Value, E>
