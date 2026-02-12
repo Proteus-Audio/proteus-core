@@ -110,8 +110,10 @@ pub fn buffer_track(args: TrackArgs, abort: Arc<AtomicBool>) -> Arc<Mutex<bool>>
                 continue;
             }
 
-            if packet.ts() >= dur.unwrap_or(0) {
-                break Ok(true);
+            if let Some(dur) = dur {
+                if packet.ts() >= dur {
+                    break Ok(true);
+                }
             }
 
             match decoder.decode(&packet) {
