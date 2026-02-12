@@ -403,6 +403,14 @@ impl Player {
         settings.start_sink_chunks = chunks;
     }
 
+    /// Configure the maximum sink chunks queued before producer backpressure.
+    ///
+    /// Set to `0` to disable this guard.
+    pub fn set_max_sink_chunks(&self, chunks: usize) {
+        let mut settings = self.buffer_settings.lock().unwrap();
+        settings.max_sink_chunks = chunks;
+    }
+
     /// Configure the startup silence pre-roll (ms).
     pub fn set_startup_silence_ms(&self, ms: f32) {
         let mut settings = self.buffer_settings.lock().unwrap();
@@ -709,6 +717,32 @@ impl Player {
             let update_sink = |(mixer, length_in_seconds): (SamplesBuffer, f64)| {
                 if playback_id_atomic.load(Ordering::SeqCst) != playback_id {
                     return;
+                }
+                let max_sink_chunks = {
+                    let settings = buffer_settings_for_state.lock().unwrap();
+                    settings.max_sink_chunks
+                };
+                if max_sink_chunks > 0 {
+                    loop {
+                        if abort.load(Ordering::SeqCst) {
+                            return;
+                        }
+                        if playback_id_atomic.load(Ordering::SeqCst) != playback_id {
+                            return;
+                        }
+                        let sink_len = {
+                            let sink = sink_mutex.lock().unwrap();
+                            sink.len()
+                        };
+                        if sink_len < max_sink_chunks {
+                            break;
+                        }
+                        update_chunk_lengths();
+                        if !check_details() {
+                            return;
+                        }
+                        thread::sleep(Duration::from_millis(5));
+                    }
                 }
                 let (delay_ms, late) = {
                     let mut timing = append_timing.lock().unwrap();

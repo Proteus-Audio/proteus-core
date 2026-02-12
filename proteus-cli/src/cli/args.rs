@@ -82,6 +82,13 @@ pub fn build_cli() -> Command {
                 .help("Minimum sink chunks queued before playback starts/resumes"),
         )
         .arg(
+            Arg::new("max-sink-chunks")
+                .long("max-sink-chunks")
+                .value_name("CHUNKS")
+                .default_value("0")
+                .help("Maximum sink chunks queued before producer waits (0 disables)"),
+        )
+        .arg(
             Arg::new("startup-silence-ms")
                 .long("startup-silence-ms")
                 .value_name("MS")

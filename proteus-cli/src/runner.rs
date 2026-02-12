@@ -140,6 +140,12 @@ pub fn run(args: &ArgMatches, log_buffer: Arc<Mutex<VecDeque<LogLine>>>) -> Resu
         .parse::<usize>()
         .unwrap();
     player.set_start_sink_chunks(start_sink_chunks);
+    let max_sink_chunks = args
+        .get_one::<String>("max-sink-chunks")
+        .unwrap()
+        .parse::<usize>()
+        .unwrap();
+    player.set_max_sink_chunks(max_sink_chunks);
     let startup_silence_ms = args
         .get_one::<String>("startup-silence-ms")
         .unwrap()
