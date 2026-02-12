@@ -5,18 +5,18 @@ A linear gain stage is the most fundamental operation in digital audio. It appea
 
 ## Mathematical Form
 
-```text
-y[n] = g * x[n]
+```math
+y[n] = g\,x[n]
 ```
 
 For dB control values:
 
-```text
-g = 10^(dB/20)
+```math
+g = 10^{\frac{G_{\mathrm{dB}}}{20}}
 ```
 
 ## Variable Key
-- `x[n]`: input sample
-- `y[n]`: output sample
-- `g`: linear gain factor
-- `dB`: gain in decibels
+- `$x[n]$`: input sample
+- `$y[n]$`: output sample
+- `$g$`: linear gain factor
+- `$G_{\mathrm{dB}}$`: gain in decibels

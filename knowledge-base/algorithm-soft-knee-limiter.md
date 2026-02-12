@@ -4,24 +4,27 @@
 Limiters are high-ratio dynamics processors used to prevent overs and clipping. Soft-knee variants became common in mastering/broadcast because they reduce abrupt gain transitions around threshold.
 
 ## Mathematical Form
-A common soft-knee static curve is piecewise around threshold `Th` with knee width `K`:
+A common soft-knee static curve around threshold `$T$` with knee width `$K$`:
 
-```text
-If L <= Th - K/2:        G = 0
-If L >= Th + K/2:        G = Th - L
-Else (knee region):      G = -((L - Th + K/2)^2) / (2K)
+```math
+G(L) =
+\begin{cases}
+0, & L \le T - \frac{K}{2} \\
+T - L, & L \ge T + \frac{K}{2} \\
+-\dfrac{\left(L - T + \frac{K}{2}\right)^2}{2K}, & \text{otherwise}
+\end{cases}
 ```
 
-Then apply smoothed gain to signal:
+Apply smoothed gain in linear amplitude:
 
-```text
-y[n] = x[n] * 10^(G[n]/20)
+```math
+y[n] = x[n]\cdot 10^{\frac{G[n]}{20}}
 ```
 
 ## Variable Key
-- `L`: input level in dB
-- `Th`: threshold in dB
-- `K`: knee width in dB
-- `G`: gain reduction in dB
-- `x[n]`: input sample
-- `y[n]`: output sample
+- `$L$`: input level (dB)
+- `$T$`: threshold (dB)
+- `$K$`: knee width (dB)
+- `$G$`: gain reduction (dB)
+- `$x[n]$`: input sample
+- `$y[n]$`: output sample

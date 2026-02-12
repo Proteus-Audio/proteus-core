@@ -4,32 +4,40 @@
 Feed-forward dynamics processors compute gain from the input signal rather than from output feedback. This became a dominant digital compressor architecture because it is predictable and easy to tune.
 
 ## Mathematical Form
-Peak detection and static curve:
+Peak detector and static curve:
 
-```text
-L[n] = 20*log10(max(|x_ch[n]|))
-G_target[n] = 0,                     if L[n] <= Th
-G_target[n] = (Th + (L[n]-Th)/R) - L[n], otherwise
+```math
+L[n] = 20\log_{10}\!\left(\max_c\left|x_c[n]\right|\right)
 ```
 
-Ballistics smoothing (attack/release):
-
-```text
-G[n] = alpha * G[n-1] + (1-alpha) * G_target[n]
+```math
+G_t[n] =
+\begin{cases}
+0, & L[n] \le T \\
+\left(T + \frac{L[n]-T}{R}\right) - L[n], & L[n] > T
+\end{cases}
 ```
 
-Output gain application:
+Attack/release smoothing:
 
-```text
-y[n] = x[n] * 10^((G[n] + M)/20)
+```math
+G[n] = \alpha\,G[n-1] + (1-\alpha)\,G_t[n]
+```
+
+Gain application:
+
+```math
+y[n] = x[n] \cdot 10^{\frac{G[n]+M}{20}}
 ```
 
 ## Variable Key
-- `x_ch[n]`: channel sample at frame `n`
-- `L[n]`: detected level in dB
-- `Th`: threshold in dB
-- `R`: ratio
-- `G_target[n]`: target gain reduction in dB
-- `G[n]`: smoothed gain reduction in dB
-- `M`: makeup gain in dB
-- `alpha`: smoothing coefficient (attack or release dependent)
+- `$x_c[n]$`: input sample for channel `$c$`
+- `$x[n]$`: input sample after channel/frame selection
+- `$y[n]$`: output sample
+- `$L[n]$`: detected level (dB)
+- `$T$`: threshold (dB)
+- `$R$`: ratio
+- `$G_t[n]$`: target gain reduction (dB)
+- `$G[n]$`: smoothed gain reduction (dB)
+- `$M$`: makeup gain (dB)
+- `$\alpha$`: smoothing coefficient (attack or release dependent)
