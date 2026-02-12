@@ -12,6 +12,7 @@ pub mod diffusion_reverb;
 pub mod distortion;
 pub mod gain;
 pub mod high_pass;
+mod level;
 pub mod limiter;
 pub mod low_pass;
 

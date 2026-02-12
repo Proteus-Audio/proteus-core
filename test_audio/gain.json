@@ -40,7 +40,7 @@
 	{
 		"GainSettings": {
 			"enabled": true,
-			"gain": "30db"
+			"gain": "20db"
 		}
 	},
 	{

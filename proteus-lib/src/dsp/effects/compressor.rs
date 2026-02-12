@@ -2,6 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use super::level::{db_to_linear, deserialize_db_gain, linear_to_db};
 use super::EffectContext;
 
 const DEFAULT_THRESHOLD_DB: f32 = -18.0;
@@ -14,14 +15,22 @@ const DEFAULT_MAKEUP_DB: f32 = 0.0;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct CompressorSettings {
-    #[serde(alias = "threshold", alias = "threshold_db")]
+    #[serde(
+        alias = "threshold",
+        alias = "threshold_db",
+        deserialize_with = "deserialize_db_gain"
+    )]
     pub threshold_db: f32,
     pub ratio: f32,
     #[serde(alias = "attack_ms", alias = "attack")]
     pub attack_ms: f32,
     #[serde(alias = "release_ms", alias = "release")]
     pub release_ms: f32,
-    #[serde(alias = "makeup_db", alias = "makeup_gain_db")]
+    #[serde(
+        alias = "makeup_db",
+        alias = "makeup_gain_db",
+        deserialize_with = "deserialize_db_gain"
+    )]
     pub makeup_gain_db: f32,
 }
 
@@ -254,15 +263,6 @@ fn compute_gain_db(level_db: f32, threshold_db: f32, ratio: f32) -> f32 {
         let compressed = threshold_db + (level_db - threshold_db) / ratio;
         compressed - level_db
     }
-}
-
-fn linear_to_db(value: f32) -> f32 {
-    let v = value.max(f32::MIN_POSITIVE);
-    20.0 * v.log10()
-}
-
-fn db_to_linear(db: f32) -> f32 {
-    10.0_f32.powf(db / 20.0)
 }
 
 fn time_to_coeff(time_ms: f32, sample_rate: u32) -> f32 {

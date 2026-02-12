@@ -2,6 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use super::level::deserialize_linear_gain;
 use super::EffectContext;
 
 const DEFAULT_GAIN: f32 = 1.0;
@@ -11,7 +12,9 @@ const DEFAULT_THRESHOLD: f32 = 1.0;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct DistortionSettings {
+    #[serde(deserialize_with = "deserialize_linear_gain")]
     pub gain: f32,
+    #[serde(deserialize_with = "deserialize_linear_gain")]
     pub threshold: f32,
 }
 
@@ -127,6 +130,14 @@ mod tests {
         assert_eq!(output[1], -0.5);
         assert_eq!(output[2], 0.5);
         assert_eq!(output[3], -0.5);
+    }
+
+    #[test]
+    fn distortion_deserializes_db_gain() {
+        let json = r#"{\"enabled\":true,\"gain\":\"6db\",\"threshold\":\"-6db\"}"#;
+        let effect: DistortionEffect = serde_json::from_str(json).expect("deserialize distortion");
+        assert!(effect.settings.gain > 1.0);
+        assert!(effect.settings.threshold > 0.0);
     }
 }
 

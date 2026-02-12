@@ -6,6 +6,7 @@ use std::time::Duration;
 use rodio::source::{Limit, LimitSettings, SeekError, Source};
 use serde::{Deserialize, Serialize};
 
+use super::level::deserialize_db_gain;
 use super::EffectContext;
 
 const DEFAULT_THRESHOLD_DB: f32 = -1.0;
@@ -17,7 +18,11 @@ const DEFAULT_RELEASE_MS: f32 = 100.0;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct LimiterSettings {
-    #[serde(alias = "threshold", alias = "threshold_db")]
+    #[serde(
+        alias = "threshold",
+        alias = "threshold_db",
+        deserialize_with = "deserialize_db_gain"
+    )]
     pub threshold_db: f32,
     #[serde(alias = "knee_width", alias = "knee_width_db")]
     pub knee_width_db: f32,
