@@ -49,6 +49,11 @@ Output
 | `makeup_gain` | Adds gain after compression | Louder output |
 | `enabled` | Bypass when false | Dry only |
 
+## Technical
+This is a **feed-forward peak compressor** with a smoothed gain computer. Per frame, it detects peak level, converts to dB, applies a static compression curve (`threshold` + `ratio`), then smooths toward target gain using separate attack/release time constants (envelope follower).
+
+That architecture matches mainstream digital dynamic-range control practice and the precedent described in standard compressor literature (peak/RMS detector + static curve + ballistics smoothing). The math used here is the common log-domain control path because multiplicative gain changes become additive in dB, simplifying stable attack/release behavior.
+
 ## Typical use
 - Control peaks on vocals or drums
 - Increase perceived loudness

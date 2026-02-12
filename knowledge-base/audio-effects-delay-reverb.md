@@ -34,6 +34,11 @@ Input ──┬─────────────► Dry ──────
 | `dry_wet` | Blend between dry and wet | More/less reverb presence |
 | `enabled` | Bypass when false | Dry only |
 
+## Technical
+This effect is a feedback delay-line reverb, a simple form of a **Schroeder-style artificial reverb**. The core idea is to use short delays plus feedback to create exponentially decaying echoes that psychoacoustically read as room sustain instead of discrete repeats.
+
+The algorithmic precedent is classic digital reverberation work from the 1960s and 1970s: cascading/parallel delay structures with feedback are the historical foundation of many lightweight reverbs. This implementation uses the minimal version of that family (single delay feedback path with wet/dry mix), trading realism for low CPU and predictable behavior.
+
 ## Typical use
 - Add subtle space to dry signals
 - Thicken short percussive material

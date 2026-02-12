@@ -34,6 +34,11 @@ Output
 | `release` | How quickly it recovers | Short = tighter, long = smoother |
 | `enabled` | Bypass when false | Dry only |
 
+## Technical
+This limiter delegates to `rodio::source::Limit`, which implements a **ceiling-style dynamics processor** with configurable threshold, soft-knee width, and attack/release timing. Conceptually it is the high-ratio end of compressor design, tuned to prevent overs beyond a target level.
+
+Algorithmically, it follows the same established DRC precedent as compressor design (level detection, static limiting curve, time-domain smoothing/ballistics), but with limiter-oriented curve behavior near the ceiling. Soft-knee control is a standard mastering/broadcast technique to reduce abrupt gain transitions around threshold.
+
 ## Typical use
 - Prevent digital clipping
 - Increase perceived loudness safely

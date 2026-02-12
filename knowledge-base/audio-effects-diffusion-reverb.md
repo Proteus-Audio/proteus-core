@@ -34,6 +34,11 @@ Input ─► Diffusion Network (short delays / all‑pass) ─► Wet
 | `dry_wet` | Blend between dry and wet | More/less diffusion |
 | `enabled` | Bypass when false | Dry only |
 
+## Technical
+The design is a **comb + all-pass diffusion network**: parallel comb filters build modal density, then serial all-pass sections smear phase/transients to reduce discrete echo perception. This is the canonical architecture of **Schroeder/Moorer algorithmic reverb** and closely related to widely used lightweight designs such as Freeverb-style structures.
+
+Its research precedent is that dense, decorrelated reflections can be synthesized without convolution by carefully tuned delay lengths, feedback, and damping. The low-pass damping in feedback loops follows the same practical model used in many algorithmic reverbs to emulate high-frequency air/surface absorption over time.
+
 ## Typical use
 - Smoothing harsh transients
 - Creating a “room‑like” or “ambience” style reverb

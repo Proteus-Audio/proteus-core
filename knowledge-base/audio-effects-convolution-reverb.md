@@ -35,6 +35,11 @@ Input ─► FFT ─► * IR Spectrum ─► IFFT ─► Wet ──┐
 | `impulse_response_*` | Which IR to load | Changes the “space” |
 | `impulse_response_tail_db` | Tail trimming threshold | Shorter/longer tail |
 
+## Technical
+This effect uses **partitioned FFT convolution** with an **overlap-add** style reconstruction path. Converting long FIR convolution to frequency-domain block multiplication reduces complexity from direct O(N*M) time-domain convolution to a practical block-FFT pipeline suitable for real-time use.
+
+The method follows established DSP precedent for long impulse responses in audio (fast convolution literature and production reverb engines): pre-FFT the IR partitions, FFT incoming partitions, multiply/accumulate in frequency domain, IFFT back, then manage overlaps/tails between blocks. This is the standard approach for realistic space emulation at manageable CPU cost.
+
 ## Performance characteristics
 
 | Property | Value |

@@ -23,6 +23,11 @@ A **linear gain** stage that multiplies every sample by a constant factor.
 ### dB strings
 When `gain` is a string ending with `db`, the value is converted to linear gain using `10^(db/20)`.
 
+## Technical
+This is a pure **linear scalar multiply** (`y[n] = g * x[n]`) with no state and no feedback. It is the canonical "gain stage" operation used throughout digital signal chains.
+
+The dB input form uses the standard amplitude conversion relationship `g = 10^(dB/20)`, which comes directly from log-amplitude definitions in acoustics/electrical engineering. This is foundational DSP practice and the same mapping used in DAWs, mixers, and outboard gain controls.
+
 ## Typical use
 - Trim levels between tracks
 - Boost into a compressor or limiter

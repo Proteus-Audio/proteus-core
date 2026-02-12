@@ -40,6 +40,11 @@ Gain
 | `cutoff_hz` | Cutoff frequency | Lower = darker |
 | `enabled` | Bypass when false | Dry only |
 
+## Technical
+This filter is a **second-order IIR biquad low-pass** implemented with the standard difference equation (`Direct Form` state update). Coefficients are derived from an analog prototype transformed to digital via the **bilinear transform (BLT)**.
+
+The practical coefficient model is the same family used in Robert Bristow-Johnson's well-known "Audio EQ Cookbook" formulas (cutoff + Q mapped to stable biquad coefficients). This is the established baseline for efficient real-time tone-shaping filters in music/audio engines.
+
 ## Typical use
 - Remove hiss or harshness
 - Create warm, muffled tones
