@@ -6,14 +6,18 @@ All-pass filters have flat magnitude response but frequency-dependent phase. In 
 ## Mathematical Form
 One common delay-based all-pass form is:
 
-```text
-y[n] = -a * x[n] + x[n - M] + a * y[n - M]
+```math
+y[n] = -a\,x[n] + x[n-M] + a\,y[n-M]
 ```
 
-Its magnitude response is ideally unity while phase varies with frequency.
+Its ideal magnitude response is flat:
+
+```math
+\left|H\left(e^{j\omega}\right)\right| = 1
+```
 
 ## Variable Key
-- `x[n]`: input sample
-- `y[n]`: output sample
-- `a`: all-pass coefficient (`|a| < 1`)
-- `M`: delay in samples
+- $`x[n]`$: input sample
+- $`y[n]`$: output sample
+- $`a`$: all-pass coefficient, $`|a| < 1`$
+- $`M`$: delay (samples)
