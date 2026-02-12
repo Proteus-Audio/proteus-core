@@ -1,0 +1,64 @@
+[
+	{
+		"DistortionSettings": {
+			"enabled": true,
+			"gain": 1.2,
+			"threshold": 0.5
+		}
+	},
+	{
+		"ConvolutionReverbSettings": {
+			"enabled": true,
+			"dry_wet": 1.0,
+			"impulse_response": null,
+			"impulse_response_attachment": null,
+			"impulse_response_path": "/Users/innocentsmith/Dev/rust/proteus/test_audio/GothicChurch.wav",
+			"impulse_response_tail_db": null,
+			"impulse_response_tail": null
+		}
+	},
+	{
+		"CompressorSettings": {
+			"enabled": true,
+			"threshold_db": -50.0,
+			"ratio": 4.0,
+			"attack_ms": 10.0,
+			"release_ms": 100.0,
+			"makeup_gain_db": 0.0
+		}
+	},
+	{
+		"CompressorSettings": {
+			"enabled": true,
+			"threshold_db": -10.0,
+			"ratio": 10.0,
+			"attack_ms": 10.0,
+			"release_ms": 100.0,
+			"makeup_gain_db": 0.0
+		}
+	},
+	{
+		"GainSettings": {
+			"enabled": true,
+			"gain": "30db"
+		}
+	},
+	{
+		"LimiterSettings": {
+			"enabled": true,
+			"threshold_db": -1.0,
+			"knee_width_db": 1.0,
+			"attack_ms": 5.0,
+			"release_ms": 100.0
+		}
+	},
+	{
+		"LimiterSettings": {
+			"enabled": true,
+			"threshold_db": -1.0,
+			"knee_width_db": 0.1,
+			"attack_ms": 0.0,
+			"release_ms": 100.0
+		}
+	}
+]
