@@ -14,6 +14,20 @@ Welcome. This index links to short, practical explanations of the DSP `AudioEffe
 - `audio-effects-compressor.md`
 - `audio-effects-limiter.md`
 
+## Algorithms
+
+- `algorithm-schroeder-moorer-reverb.md`
+- `algorithm-comb-filter.md`
+- `algorithm-all-pass-filter.md`
+- `algorithm-partitioned-fft-convolution.md`
+- `algorithm-overlap-add.md`
+- `algorithm-biquad-iir-filter.md`
+- `algorithm-bilinear-transform.md`
+- `algorithm-hard-clipping-waveshaping.md`
+- `algorithm-feed-forward-compressor.md`
+- `algorithm-soft-knee-limiter.md`
+- `algorithm-linear-gain-stage.md`
+
 ## Diagnostics / Notes
 
 - `convolution-reverb-boundary-discontinuity.md`
