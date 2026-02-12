@@ -33,6 +33,11 @@ Clean:      Distorted (clipped):
 | `gain` | number or string | Linear gain or dB string (e.g. `2.0`, `"6db"`) |
 | `threshold` | number or string | Linear clamp level or dB string (e.g. `0.5`, `"-6db"`) |
 
+## Technical
+The current algorithm is **hard clipping waveshaping**: pre-gain the sample, then clip to a symmetric threshold. In nonlinear-systems terms, this is a static nonlinearity with no memory, which introduces odd/even harmonics based on waveform symmetry and drive.
+
+This has long precedent in digital audio distortion units as the simplest "drive + clip" architecture. It is intentionally minimal and deterministic compared with more complex analog-model methods (tube/transistor circuit simulation, dynamic waveshapers, oversampled anti-alias designs), prioritizing low CPU and predictable output limits.
+
 ## Typical use
 - Add warmth or aggression
 - Make quiet details more audible

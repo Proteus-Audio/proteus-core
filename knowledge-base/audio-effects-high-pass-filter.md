@@ -40,6 +40,11 @@ Gain
 | `cutoff_hz` | Cutoff frequency | Higher = thinner |
 | `enabled` | Bypass when false | Dry only |
 
+## Technical
+This effect is a **second-order IIR biquad high-pass** filter using the same BLT-based coefficient generation approach as the low-pass variant, with per-channel recursive state.
+
+Historically and practically, this is the standard digital equivalent of analog RC/high-pass sections for DAW and playback pipelines: efficient O(1) per-sample cost, controllable slope/resonance via Q, and behavior aligned with the common RBJ biquad design formulas used across audio software.
+
 ## Typical use
 - Remove rumble or mic handling noise
 - Clean up low‑end buildup
