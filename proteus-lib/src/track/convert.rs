@@ -31,6 +31,19 @@ pub fn convert_signed_32bit_to_f32(sample: i32) -> f32 {
     sample as f32 / 2f32.powi(31)
 }
 
+/// Return the decoded buffer format label used by logging.
+pub fn decoded_format_label(decoded: &AudioBufferRef<'_>) -> &'static str {
+    match decoded {
+        AudioBufferRef::U16(_) => "U16",
+        AudioBufferRef::S16(_) => "S16",
+        AudioBufferRef::U24(_) => "U24",
+        AudioBufferRef::S24(_) => "S24",
+        AudioBufferRef::S32(_) => "S32",
+        AudioBufferRef::F32(_) => "F32",
+        _ => "(unsupported)",
+    }
+}
+
 /// Extract samples for a single channel from a decoded packet.
 pub fn process_channel(decoded: AudioBufferRef<'_>, channel: usize) -> Vec<f32> {
     match decoded {

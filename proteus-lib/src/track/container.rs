@@ -1,6 +1,6 @@
 //! Buffering implementation for multiple tracks in a shared container stream.
 
-use log::warn;
+use log::{info, warn};
 use std::collections::HashMap;
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
@@ -13,7 +13,7 @@ use symphonia::core::units::{Time, TimeBase};
 use crate::audio::buffer::TrackBufferMap;
 
 use super::buffer::{add_samples_to_buffer_map, mark_track_as_finished};
-use super::convert::process_channel;
+use super::convert::{decoded_format_label, process_channel};
 
 /// Arguments required to buffer multiple tracks from a shared container stream.
 pub struct ContainerTrackArgs {
@@ -152,6 +152,7 @@ pub fn buffer_container_tracks(
 
         let mut finished_track_ids: Vec<u32> = Vec::new();
         let mut last_seen_secs: HashMap<u32, f64> = HashMap::new();
+        let mut logged_formats: HashMap<u32, &'static str> = HashMap::new();
         let mut max_seen_secs: f64 = 0.0;
         let eos_seconds = (track_eos_ms.max(0.0) / 1000.0) as f64;
 
@@ -231,6 +232,11 @@ pub fn buffer_container_tracks(
 
             match decoder.decode(&packet) {
                 Ok(decoded) => {
+                    logged_formats.entry(track_id).or_insert_with(|| {
+                        let format = decoded_format_label(&decoded);
+                        info!("Decoded track {} buffer format: {}", track_id, format);
+                        format
+                    });
                     let mut channel_samples = Vec::new();
 
                     for channel in 0..channels {
