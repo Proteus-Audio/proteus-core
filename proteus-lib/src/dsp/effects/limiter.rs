@@ -6,6 +6,7 @@ use std::time::Duration;
 use rodio::source::{Limit, LimitSettings, SeekError, Source};
 use serde::{Deserialize, Serialize};
 
+use super::level::deserialize_db_gain;
 use super::EffectContext;
 
 const DEFAULT_THRESHOLD_DB: f32 = -1.0;
@@ -17,9 +18,17 @@ const DEFAULT_RELEASE_MS: f32 = 100.0;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct LimiterSettings {
-    #[serde(alias = "threshold", alias = "threshold_db")]
+    #[serde(
+        alias = "threshold",
+        alias = "threshold_db",
+        deserialize_with = "deserialize_db_gain"
+    )]
     pub threshold_db: f32,
-    #[serde(alias = "knee_width", alias = "knee_width_db")]
+    #[serde(
+        alias = "knee_width",
+        alias = "knee_width_db",
+        deserialize_with = "deserialize_db_gain"
+    )]
     pub knee_width_db: f32,
     #[serde(alias = "attack_ms", alias = "attack")]
     pub attack_ms: f32,
@@ -344,5 +353,33 @@ mod tests {
         for (a, b) in out_full.iter().zip(out_split.iter()) {
             assert!(approx_eq(*a, *b, 1e-5));
         }
+    }
+
+    #[test]
+    fn limiter_deserializes_db_and_linear_strings() {
+        let json = r#"{
+            "enabled": true,
+            "threshold_db": "0.5",
+            "knee_width_db": 2.0,
+            "attack_ms": 3.0,
+            "release_ms": 30.0
+        }"#;
+
+        let effect: LimiterEffect = serde_json::from_str(json).expect("deserialize limiter");
+        assert!(approx_eq(effect.settings.threshold_db, -6.0206, 1e-3));
+    }
+
+    #[test]
+    fn limiter_rejects_non_positive_linear_threshold_string() {
+        let json = r#"{
+            "enabled": true,
+            "threshold_db": "0",
+            "knee_width_db": 2.0,
+            "attack_ms": 3.0,
+            "release_ms": 30.0
+        }"#;
+
+        let err = serde_json::from_str::<LimiterEffect>(json).expect_err("invalid limiter");
+        assert!(err.to_string().contains("invalid gain value"));
     }
 }

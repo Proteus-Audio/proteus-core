@@ -8,7 +8,7 @@ use std::sync::{mpsc::RecvTimeoutError, Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use log::{info, warn};
+use log::{error, info, warn};
 
 use crate::container::prot::Prot;
 use crate::diagnostics::reporter::{Report, Reporter};
@@ -42,6 +42,25 @@ pub struct ReverbSettingsSnapshot {
 }
 
 const OUTPUT_METER_REFRESH_HZ: f32 = 30.0;
+const OUTPUT_STREAM_OPEN_RETRIES: usize = 20;
+const OUTPUT_STREAM_OPEN_RETRY_MS: u64 = 100;
+
+struct PlaybackThreadGuard {
+    exists: Arc<AtomicBool>,
+}
+
+impl PlaybackThreadGuard {
+    fn new(exists: Arc<AtomicBool>) -> Self {
+        exists.store(true, Ordering::Relaxed);
+        Self { exists }
+    }
+}
+
+impl Drop for PlaybackThreadGuard {
+    fn drop(&mut self) {
+        self.exists.store(false, Ordering::Relaxed);
+    }
+}
 
 /// Primary playback controller.
 ///
@@ -262,6 +281,7 @@ impl Player {
                 AudioEffect::LowPassFilter(_) => "LowPassFilter".to_string(),
                 AudioEffect::HighPassFilter(_) => "HighPassFilter".to_string(),
                 AudioEffect::Distortion(_) => "Distortion".to_string(),
+                AudioEffect::Gain(_) => "Gain".to_string(),
                 AudioEffect::Compressor(_) => "Compressor".to_string(),
                 AudioEffect::Limiter(_) => "Limiter".to_string(),
             })
@@ -447,7 +467,7 @@ impl Player {
             // ===================== //
             // Set playback_thread_exists to true
             // ===================== //
-            playback_thread_exists.store(true, Ordering::Relaxed);
+            let _thread_guard = PlaybackThreadGuard::new(playback_thread_exists.clone());
 
             // ===================== //
             // Initialize engine & sink
@@ -465,8 +485,34 @@ impl Player {
                 dsp_metrics,
                 effects_reset,
             );
-            let _stream = OutputStreamBuilder::open_default_stream().unwrap();
-            let mixer = _stream.mixer().clone();
+            let mut stream = None;
+            for attempt in 1..=OUTPUT_STREAM_OPEN_RETRIES {
+                match OutputStreamBuilder::open_default_stream() {
+                    Ok(s) => {
+                        stream = Some(s);
+                        break;
+                    }
+                    Err(err) => {
+                        if attempt == OUTPUT_STREAM_OPEN_RETRIES {
+                            error!(
+                                "failed to open default output stream after {} attempts: {}",
+                                OUTPUT_STREAM_OPEN_RETRIES,
+                                err
+                            );
+                            return;
+                        }
+                        warn!(
+                            "open_default_stream attempt {}/{} failed: {}",
+                            attempt,
+                            OUTPUT_STREAM_OPEN_RETRIES,
+                            err
+                        );
+                        thread::sleep(Duration::from_millis(OUTPUT_STREAM_OPEN_RETRY_MS));
+                    }
+                }
+            }
+            let stream = stream.expect("stream should exist after successful retry loop");
+            let mixer = stream.mixer().clone();
 
             let mut sink = sink_mutex.lock().unwrap();
             *sink = Sink::connect_new(&mixer);
@@ -807,7 +853,7 @@ impl Player {
             // ===================== //
             // Set playback_thread_exists to false
             // ===================== //
-            playback_thread_exists.store(false, Ordering::Relaxed);
+            drop(_thread_guard);
         });
     }
 

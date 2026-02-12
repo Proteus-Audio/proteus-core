@@ -1,4 +1,4 @@
-//! Distortion effect based on rodio's distortion source.
+//! Simple gain effect.
 
 use serde::{Deserialize, Serialize};
 
@@ -6,63 +6,57 @@ use super::level::deserialize_linear_gain;
 use super::EffectContext;
 
 const DEFAULT_GAIN: f32 = 1.0;
-const DEFAULT_THRESHOLD: f32 = 1.0;
 
-/// Serialized configuration for distortion parameters.
+/// Serialized configuration for gain parameters.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
-pub struct DistortionSettings {
+pub struct GainSettings {
     #[serde(deserialize_with = "deserialize_linear_gain")]
     pub gain: f32,
-    #[serde(deserialize_with = "deserialize_linear_gain")]
-    pub threshold: f32,
 }
 
-impl DistortionSettings {
-    /// Create a distortion settings payload.
-    pub fn new(gain: f32, threshold: f32) -> Self {
-        Self { gain, threshold }
+impl GainSettings {
+    /// Create a gain settings payload.
+    pub fn new(gain: f32) -> Self {
+        Self { gain }
     }
 }
 
-impl Default for DistortionSettings {
+impl Default for GainSettings {
     fn default() -> Self {
-        Self {
-            gain: DEFAULT_GAIN,
-            threshold: DEFAULT_THRESHOLD,
-        }
+        Self { gain: DEFAULT_GAIN }
     }
 }
 
-/// Configured distortion effect.
+/// Configured gain effect.
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(default)]
-pub struct DistortionEffect {
+pub struct GainEffect {
     pub enabled: bool,
     #[serde(flatten)]
-    pub settings: DistortionSettings,
+    pub settings: GainSettings,
 }
 
-impl std::fmt::Debug for DistortionEffect {
+impl std::fmt::Debug for GainEffect {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("DistortionEffect")
+        f.debug_struct("GainEffect")
             .field("enabled", &self.enabled)
             .field("settings", &self.settings)
             .finish()
     }
 }
 
-impl Default for DistortionEffect {
+impl Default for GainEffect {
     fn default() -> Self {
         Self {
             enabled: false,
-            settings: DistortionSettings::default(),
+            settings: GainSettings::default(),
         }
     }
 }
 
-impl DistortionEffect {
-    /// Process interleaved samples through the distortion effect.
+impl GainEffect {
+    /// Process interleaved samples through the gain effect.
     ///
     /// # Arguments
     /// - `samples`: Interleaved input samples.
@@ -77,27 +71,26 @@ impl DistortionEffect {
         }
 
         let gain = sanitize_gain(self.settings.gain);
-        let threshold = sanitize_threshold(self.settings.threshold);
         if samples.is_empty() {
             return Vec::new();
         }
 
         let mut out = Vec::with_capacity(samples.len());
         for &sample in samples {
-            let v = sample * gain;
-            out.push(v.clamp(-threshold, threshold));
+            out.push(sample * gain);
         }
 
         out
     }
 
-    /// Reset any internal state (none for distortion).
+    /// Reset any internal state (none for gain).
     pub fn reset_state(&mut self) {}
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use super::super::level::db_to_linear;
 
     fn context() -> EffectContext {
         EffectContext {
@@ -110,34 +103,37 @@ mod tests {
     }
 
     #[test]
-    fn distortion_disabled_passthrough() {
-        let mut effect = DistortionEffect::default();
+    fn gain_disabled_passthrough() {
+        let mut effect = GainEffect::default();
         let samples = vec![0.25_f32, -0.25, 0.5, -0.5];
         let output = effect.process(&samples, &context(), false);
         assert_eq!(output, samples);
     }
 
     #[test]
-    fn distortion_clamps_output() {
-        let mut effect = DistortionEffect::default();
+    fn gain_scales_samples() {
+        let mut effect = GainEffect::default();
         effect.enabled = true;
         effect.settings.gain = 2.0;
-        effect.settings.threshold = 0.5;
-        let samples = vec![0.4_f32, -0.4, 0.6, -0.6];
+        let samples = vec![0.25_f32, -0.25, 0.5, -0.5];
         let output = effect.process(&samples, &context(), false);
-        assert_eq!(output.len(), samples.len());
-        assert_eq!(output[0], 0.5);
-        assert_eq!(output[1], -0.5);
-        assert_eq!(output[2], 0.5);
-        assert_eq!(output[3], -0.5);
+        assert_eq!(output, vec![0.5_f32, -0.5, 1.0, -1.0]);
     }
 
     #[test]
-    fn distortion_deserializes_db_gain() {
-        let json = r#"{"enabled":true,"gain":"6db","threshold":"-6db"}"#;
-        let effect: DistortionEffect = serde_json::from_str(json).expect("deserialize distortion");
-        assert!(effect.settings.gain > 1.0);
-        assert!(effect.settings.threshold > 0.0);
+    fn gain_deserializes_db_strings() {
+        let json = r#"{"enabled":true,"gain":"6db"}"#;
+        let effect: GainEffect = serde_json::from_str(json).expect("deserialize gain");
+        let expected = db_to_linear(6.0);
+        assert!((effect.settings.gain - expected).abs() < 1e-6);
+    }
+
+    #[test]
+    fn gain_deserializes_negative_db_strings() {
+        let json = r#"{"enabled":true,"gain":"-2db"}"#;
+        let effect: GainEffect = serde_json::from_str(json).expect("deserialize gain");
+        let expected = db_to_linear(-2.0);
+        assert!((effect.settings.gain - expected).abs() < 1e-6);
     }
 }
 
@@ -146,17 +142,5 @@ fn sanitize_gain(gain: f32) -> f32 {
         gain
     } else {
         DEFAULT_GAIN
-    }
-}
-
-fn sanitize_threshold(threshold: f32) -> f32 {
-    if !threshold.is_finite() {
-        return DEFAULT_THRESHOLD;
-    }
-    let t = threshold.abs();
-    if t <= f32::EPSILON {
-        DEFAULT_THRESHOLD
-    } else {
-        t
     }
 }

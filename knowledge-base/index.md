@@ -10,6 +10,7 @@ Welcome. This index links to short, practical explanations of the DSP `AudioEffe
 - `audio-effects-low-pass-filter.md`
 - `audio-effects-high-pass-filter.md`
 - `audio-effects-distortion.md`
+- `audio-effects-gain.md`
 - `audio-effects-compressor.md`
 - `audio-effects-limiter.md`
 

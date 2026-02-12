@@ -2,6 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use super::level::{db_to_linear, deserialize_db_gain, linear_to_db};
 use super::EffectContext;
 
 const DEFAULT_THRESHOLD_DB: f32 = -18.0;
@@ -14,14 +15,23 @@ const DEFAULT_MAKEUP_DB: f32 = 0.0;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct CompressorSettings {
-    #[serde(alias = "threshold", alias = "threshold_db")]
+    #[serde(
+        alias = "threshold",
+        alias = "threshold_db",
+        deserialize_with = "deserialize_db_gain"
+    )]
     pub threshold_db: f32,
     pub ratio: f32,
     #[serde(alias = "attack_ms", alias = "attack")]
     pub attack_ms: f32,
     #[serde(alias = "release_ms", alias = "release")]
     pub release_ms: f32,
-    #[serde(alias = "makeup_db", alias = "makeup_gain_db")]
+    #[serde(
+        alias = "makeup_db",
+        alias = "makeup_gain",
+        alias = "makeup_gain_db",
+        deserialize_with = "deserialize_db_gain"
+    )]
     pub makeup_gain_db: f32,
 }
 
@@ -256,15 +266,6 @@ fn compute_gain_db(level_db: f32, threshold_db: f32, ratio: f32) -> f32 {
     }
 }
 
-fn linear_to_db(value: f32) -> f32 {
-    let v = value.max(f32::MIN_POSITIVE);
-    20.0 * v.log10()
-}
-
-fn db_to_linear(db: f32) -> f32 {
-    10.0_f32.powf(db / 20.0)
-}
-
 fn time_to_coeff(time_ms: f32, sample_rate: u32) -> f32 {
     if time_ms <= 0.0 || !time_ms.is_finite() {
         return 0.0;
@@ -345,5 +346,40 @@ mod tests {
         let target_gain_db = (-6.0 + (level_db + 6.0) / 2.0) - level_db;
         let expected = db_to_linear(target_gain_db);
         assert!(output.iter().all(|value| approx_eq(*value, expected, 1e-3)));
+    }
+
+    #[test]
+    fn compressor_deserializes_db_and_linear_strings() {
+        let json = r#"{
+            "enabled": true,
+            "threshold_db": "-12db",
+            "ratio": 2.0,
+            "attack_ms": 5.0,
+            "release_ms": 50.0,
+            "makeup_gain_db": "2.0"
+        }"#;
+
+        let effect: CompressorEffect = serde_json::from_str(json).expect("deserialize compressor");
+        assert!(approx_eq(effect.settings.threshold_db, -12.0, 1e-6));
+        assert!(approx_eq(
+            effect.settings.makeup_gain_db,
+            linear_to_db(2.0),
+            1e-6
+        ));
+    }
+
+    #[test]
+    fn compressor_rejects_non_positive_linear_string_for_db_fields() {
+        let json = r#"{
+            "enabled": true,
+            "threshold_db": "-2",
+            "ratio": 2.0,
+            "attack_ms": 5.0,
+            "release_ms": 50.0,
+            "makeup_gain_db": "0"
+        }"#;
+
+        let err = serde_json::from_str::<CompressorEffect>(json).expect_err("invalid compressor");
+        assert!(err.to_string().contains("invalid gain value"));
     }
 }

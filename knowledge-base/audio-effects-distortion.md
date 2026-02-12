@@ -25,13 +25,13 @@ Clean:      Distorted (clipped):
 /      \____/        \____
 ```
 
-## Controls (conceptual)
+## JSON controls
 
-| Control | What it changes | Audible effect |
+| Field | Type | Meaning |
 | --- | --- | --- |
-| `drive` | Input gain into shaper | More drive = more grit |
-| `mix` | Dry/wet blend | Subtle to aggressive |
-| `enabled` | Bypass when false | Dry only |
+| `enabled` | bool | Bypass when false |
+| `gain` | number or string | Linear gain or dB string (e.g. `2.0`, `"6db"`) |
+| `threshold` | number or string | Linear clamp level or dB string (e.g. `0.5`, `"-6db"`) |
 
 ## Typical use
 - Add warmth or aggression

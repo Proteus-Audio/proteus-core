@@ -29,6 +29,7 @@ fn effect_label(effect: &AudioEffect) -> &'static str {
         AudioEffect::LowPassFilter(_) => "LowPassFilter",
         AudioEffect::HighPassFilter(_) => "HighPassFilter",
         AudioEffect::Distortion(_) => "Distortion",
+        AudioEffect::Gain(_) => "Gain",
         AudioEffect::Compressor(_) => "Compressor",
         AudioEffect::Limiter(_) => "Limiter",
     }

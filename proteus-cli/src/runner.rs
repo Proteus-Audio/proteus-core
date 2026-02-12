@@ -16,8 +16,8 @@ use crossterm::{
 use log::{error, info};
 use proteus_lib::dsp::effects::{
     AudioEffect, CompressorEffect, ConvolutionReverbEffect, DelayReverbEffect,
-    DiffusionReverbEffect, DistortionEffect, HighPassFilterEffect, LimiterEffect,
-    LowPassFilterEffect,
+    DiffusionReverbEffect, DistortionEffect, GainEffect, HighPassFilterEffect,
+    LimiterEffect, LowPassFilterEffect,
 };
 use proteus_lib::playback::player;
 use ratatui::{backend::CrosstermBackend, Terminal};
@@ -370,6 +370,7 @@ fn default_effects_chain() -> Vec<AudioEffect> {
         AudioEffect::LowPassFilter(LowPassFilterEffect::default()),
         AudioEffect::HighPassFilter(HighPassFilterEffect::default()),
         AudioEffect::Distortion(DistortionEffect::default()),
+        AudioEffect::Gain(GainEffect::default()),
         AudioEffect::Compressor(CompressorEffect::default()),
         AudioEffect::Limiter(LimiterEffect::default()),
     ]

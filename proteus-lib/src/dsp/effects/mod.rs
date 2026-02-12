@@ -10,7 +10,9 @@ pub mod compressor;
 pub mod convolution_reverb;
 pub mod diffusion_reverb;
 pub mod distortion;
+pub mod gain;
 pub mod high_pass;
+mod level;
 pub mod limiter;
 pub mod low_pass;
 
@@ -25,6 +27,7 @@ pub use compressor::{CompressorEffect, CompressorSettings};
 pub use convolution_reverb::{ConvolutionReverbEffect, ConvolutionReverbSettings};
 pub use diffusion_reverb::{DiffusionReverbEffect, DiffusionReverbSettings};
 pub use distortion::{DistortionEffect, DistortionSettings};
+pub use gain::{GainEffect, GainSettings};
 pub use high_pass::{HighPassFilterEffect, HighPassFilterSettings};
 pub use limiter::{LimiterEffect, LimiterSettings};
 pub use low_pass::{LowPassFilterEffect, LowPassFilterSettings};
@@ -57,6 +60,8 @@ pub enum AudioEffect {
     HighPassFilter(HighPassFilterEffect),
     #[serde(rename = "DistortionSettings")]
     Distortion(DistortionEffect),
+    #[serde(rename = "GainSettings")]
+    Gain(GainEffect),
     #[serde(rename = "CompressorSettings")]
     Compressor(CompressorEffect),
     #[serde(rename = "LimiterSettings")]
@@ -83,6 +88,7 @@ impl AudioEffect {
             AudioEffect::LowPassFilter(effect) => effect.process(samples, context, drain),
             AudioEffect::HighPassFilter(effect) => effect.process(samples, context, drain),
             AudioEffect::Distortion(effect) => effect.process(samples, context, drain),
+            AudioEffect::Gain(effect) => effect.process(samples, context, drain),
             AudioEffect::Compressor(effect) => effect.process(samples, context, drain),
             AudioEffect::Limiter(effect) => effect.process(samples, context, drain),
         }
@@ -99,6 +105,7 @@ impl AudioEffect {
             AudioEffect::LowPassFilter(effect) => effect.reset_state(),
             AudioEffect::HighPassFilter(effect) => effect.reset_state(),
             AudioEffect::Distortion(effect) => effect.reset_state(),
+            AudioEffect::Gain(effect) => effect.reset_state(),
             AudioEffect::Compressor(effect) => effect.reset_state(),
             AudioEffect::Limiter(effect) => effect.reset_state(),
         }
@@ -117,6 +124,7 @@ impl AudioEffect {
             AudioEffect::LowPassFilter(_) => {}
             AudioEffect::HighPassFilter(_) => {}
             AudioEffect::Distortion(_) => {}
+            AudioEffect::Gain(_) => {}
             AudioEffect::Compressor(_) => {}
             AudioEffect::Limiter(_) => {}
         }
@@ -202,6 +210,7 @@ mod tests {
             AudioEffect::LowPassFilter(LowPassFilterEffect::default()),
             AudioEffect::HighPassFilter(HighPassFilterEffect::default()),
             AudioEffect::Distortion(DistortionEffect::default()),
+            AudioEffect::Gain(GainEffect::default()),
             AudioEffect::Compressor(CompressorEffect::default()),
             AudioEffect::Limiter(LimiterEffect::default()),
         ];
@@ -222,6 +231,7 @@ mod tests {
             {"LowPassFilterSettings":{"enabled":true,"freq":800,"bandwidth":0.7}},
             {"HighPassFilterSettings":{"enabled":true,"frequency_hz":1200,"q":0.9}},
             {"DistortionSettings":{"enabled":true,"gain":2.0,"threshold":0.4}},
+            {"GainSettings":{"enabled":true,"gain":1.25}},
             {"CompressorSettings":{"enabled":true,"threshold":-12.0,"ratio":2.0,
                 "attack":5.0,"release":50.0,"makeup_db":3.0}},
             {"LimiterSettings":{"enabled":true,"threshold_db":-3.0,"knee_width":2.0,
@@ -230,6 +240,6 @@ mod tests {
         "#;
 
         let decoded: Vec<AudioEffect> = serde_json::from_str(json).expect("deserialize effects");
-        assert_eq!(decoded.len(), 9);
+        assert_eq!(decoded.len(), 10);
     }
 }
