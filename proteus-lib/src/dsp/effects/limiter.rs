@@ -24,7 +24,11 @@ pub struct LimiterSettings {
         deserialize_with = "deserialize_db_gain"
     )]
     pub threshold_db: f32,
-    #[serde(alias = "knee_width", alias = "knee_width_db")]
+    #[serde(
+        alias = "knee_width",
+        alias = "knee_width_db",
+        deserialize_with = "deserialize_db_gain"
+    )]
     pub knee_width_db: f32,
     #[serde(alias = "attack_ms", alias = "attack")]
     pub attack_ms: f32,

@@ -28,6 +28,7 @@ pub struct CompressorSettings {
     pub release_ms: f32,
     #[serde(
         alias = "makeup_db",
+        alias = "makeup_gain",
         alias = "makeup_gain_db",
         deserialize_with = "deserialize_db_gain"
     )]
