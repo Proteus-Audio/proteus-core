@@ -374,6 +374,30 @@ impl Prot {
         0
     }
 
+    /// Return the number of possible unique selections based on track settings.
+    pub fn count_possible_combinations(&self) -> Option<u128> {
+        if let Some(file_paths) = &self.file_paths {
+            return count_paths_track_combinations(file_paths);
+        }
+
+        let play_settings = self.play_settings.as_ref()?;
+        match play_settings {
+            PlaySettingsFile::Legacy(file) => {
+                count_legacy_track_combinations(file.settings.inner())
+            }
+            PlaySettingsFile::V1(file) => {
+                count_settings_track_combinations(&file.settings.inner().tracks)
+            }
+            PlaySettingsFile::V2(file) => {
+                count_settings_track_combinations(&file.settings.inner().tracks)
+            }
+            PlaySettingsFile::V3(file) => {
+                count_settings_track_combinations(&file.settings.inner().tracks)
+            }
+            PlaySettingsFile::Unknown { .. } => None,
+        }
+    }
+
     /// Return the unique file paths used for a multi-file container.
     pub fn get_file_paths_dictionary(&self) -> Vec<String> {
         match &self.file_paths_dictionary {
@@ -394,6 +418,52 @@ pub struct PathsTrack {
     pub pan: f32,
     /// Number of selections to pick per refresh.
     pub selections_count: u32,
+}
+
+fn count_settings_track_combinations(tracks: &[SettingsTrack]) -> Option<u128> {
+    let mut total: u128 = 1;
+    for track in tracks {
+        let choices = track.ids.len() as u128;
+        let selections = track.selections_count;
+        let count = checked_pow(choices, selections)?;
+        total = total.checked_mul(count)?;
+    }
+    Some(total)
+}
+
+fn count_paths_track_combinations(tracks: &[PathsTrack]) -> Option<u128> {
+    let mut total: u128 = 1;
+    for track in tracks {
+        let choices = track.file_paths.len() as u128;
+        let selections = track.selections_count;
+        let count = checked_pow(choices, selections)?;
+        total = total.checked_mul(count)?;
+    }
+    Some(total)
+}
+
+fn count_legacy_track_combinations(settings: &PlaySettingsLegacy) -> Option<u128> {
+    let mut total: u128 = 1;
+    for track in &settings.tracks {
+        let choices = track.length.unwrap_or(0) as u128;
+        let count = checked_pow(choices, 1)?;
+        total = total.checked_mul(count)?;
+    }
+    Some(total)
+}
+
+fn checked_pow(base: u128, exp: u32) -> Option<u128> {
+    if exp == 0 {
+        return Some(1);
+    }
+    if base == 0 {
+        return Some(1);
+    }
+    let mut result: u128 = 1;
+    for _ in 0..exp {
+        result = result.checked_mul(base)?;
+    }
+    Some(result)
 }
 
 impl PathsTrack {
