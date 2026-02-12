@@ -89,8 +89,8 @@ impl GainEffect {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::level::db_to_linear;
+    use super::*;
 
     fn context() -> EffectContext {
         EffectContext {

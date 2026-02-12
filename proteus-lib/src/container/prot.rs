@@ -2,6 +2,7 @@
 
 use matroska::Matroska;
 use rand::Rng;
+use std::collections::HashMap;
 
 use log::{error, info, warn};
 
@@ -355,6 +356,25 @@ impl Prot {
     /// Get the longest selected duration (seconds).
     pub fn get_duration(&self) -> &f64 {
         &self.duration
+    }
+
+    /// Return per-track `(level, pan)` settings keyed by track key.
+    pub fn get_track_mix_settings(&self) -> HashMap<u16, (f32, f32)> {
+        let mut settings = HashMap::new();
+
+        let tracks = match self.play_settings.as_ref() {
+            Some(PlaySettingsFile::V1(file)) => Some(&file.settings.inner().tracks),
+            Some(PlaySettingsFile::V2(file)) => Some(&file.settings.inner().tracks),
+            _ => None,
+        };
+
+        if let Some(tracks) = tracks {
+            for (index, track) in tracks.iter().enumerate() {
+                settings.insert(index as u16, (track.level, track.pan));
+            }
+        }
+
+        settings
     }
 
     /// Return the number of selected tracks.

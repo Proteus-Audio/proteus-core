@@ -103,7 +103,11 @@ fn open_decoder(file_path: &str) -> Result<(Box<dyn Decoder>, Box<dyn FormatRead
         .extension()
         .and_then(|ext| ext.to_str())
     {
-        let hint_extension = if extension == "prot" { "mka" } else { extension };
+        let hint_extension = if extension == "prot" {
+            "mka"
+        } else {
+            extension
+        };
         hint.with_extension(hint_extension);
     }
 
