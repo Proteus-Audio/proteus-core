@@ -17,7 +17,7 @@ use crate::dsp::effects::AudioEffect;
 pub struct Prot {
     pub info: Info,
     file_path: Option<String>,
-    file_paths: Option<Vec<Vec<String>>>,
+    file_paths: Option<Vec<PathsTrack>>,
     file_paths_dictionary: Option<Vec<String>>,
     track_ids: Option<Vec<u32>>,
     track_paths: Option<Vec<String>>,
@@ -56,12 +56,12 @@ impl Prot {
     }
 
     /// Build a container from multiple standalone file path sets.
-    pub fn new_from_file_paths(file_paths: &Vec<Vec<String>>) -> Self {
+    pub fn new_from_file_paths(file_paths: Vec<PathsTrack>) -> Self {
         let mut file_paths_dictionary = Vec::new();
         // Add all file paths to file_paths_dictionary
         // but do not add duplicates
-        for file_path in file_paths {
-            for path in file_path {
+        for track in file_paths.clone() {
+            for path in &track.file_paths {
                 if !file_paths_dictionary.contains(path) {
                     file_paths_dictionary.push(path.clone());
                 }
@@ -73,7 +73,7 @@ impl Prot {
         let mut this = Self {
             info,
             file_path: None,
-            file_paths: Some(file_paths.clone()),
+            file_paths: Some(file_paths),
             file_paths_dictionary: Some(file_paths_dictionary),
             track_ids: None,
             track_paths: None,
@@ -89,6 +89,15 @@ impl Prot {
         this
     }
 
+    /// Legacy constructor for backwards compatibility.
+    pub fn new_from_file_paths_legacy(file_paths: &Vec<Vec<String>>) -> Self {
+        let mut paths_track_list = Vec::new();
+        for track in file_paths {
+            paths_track_list.push(PathsTrack::new_from_file_paths(track.clone()));
+        }
+        Self::new_from_file_paths(paths_track_list)
+    }
+
     // fn get_duration_from_file_path(file_path: &String) -> f64 {
     //     let file = std::fs::File::open(file_path).unwrap();
     //     let symphonia: Symphonia = Symphonia::open(file).expect("Could not open file");
@@ -101,25 +110,34 @@ impl Prot {
         if let Some(file_paths) = &self.file_paths {
             // Choose random file path from each file_paths array
             let mut track_paths: Vec<String> = Vec::new();
-            for file_path in file_paths {
-                let random_number = rand::thread_rng().gen_range(0..file_path.len());
-                let track_path = file_path[random_number].clone();
-
-                let index_in_dictionary = self
-                    .file_paths_dictionary
-                    .as_ref()
-                    .unwrap()
-                    .iter()
-                    .position(|x| *x == track_path)
-                    .unwrap();
-                let duration = self.info.get_duration(index_in_dictionary as u32).unwrap();
-
-                if duration > longest_duration {
-                    longest_duration = duration;
-                    self.duration = longest_duration;
+            for track in file_paths {
+                if track.file_paths.is_empty() {
+                    continue;
                 }
+                let selections = track.selections_count as usize;
+                if selections == 0 {
+                    continue;
+                }
+                for _ in 0..selections {
+                    let random_number = rand::thread_rng().gen_range(0..track.file_paths.len());
+                    let track_path = track.file_paths[random_number].clone();
 
-                track_paths.push(track_path);
+                    let index_in_dictionary = self
+                        .file_paths_dictionary
+                        .as_ref()
+                        .unwrap()
+                        .iter()
+                        .position(|x| *x == track_path)
+                        .unwrap();
+                    let duration = self.info.get_duration(index_in_dictionary as u32).unwrap();
+
+                    if duration > longest_duration {
+                        longest_duration = duration;
+                        self.duration = longest_duration;
+                    }
+
+                    track_paths.push(track_path);
+                }
             }
 
             self.track_paths = Some(track_paths);
@@ -341,6 +359,10 @@ impl Prot {
 
     /// Return the number of selected tracks.
     pub fn get_length(&self) -> usize {
+        if let Some(track_paths) = &self.track_paths {
+            return track_paths.len();
+        }
+
         if let Some(file_paths) = &self.file_paths {
             return file_paths.len();
         }
@@ -357,6 +379,31 @@ impl Prot {
         match &self.file_paths_dictionary {
             Some(dictionary) => dictionary.to_vec(),
             None => Vec::new(),
+        }
+    }
+}
+
+/// Standalone file-path track configuration.
+#[derive(Debug, Clone)]
+pub struct PathsTrack {
+    /// Candidate file paths for this track.
+    pub file_paths: Vec<String>,
+    /// Track gain scalar.
+    pub level: f32,
+    /// Track pan position.
+    pub pan: f32,
+    /// Number of selections to pick per refresh.
+    pub selections_count: u32,
+}
+
+impl PathsTrack {
+    /// Create a new PathsTrack from a vector of file paths.
+    pub fn new_from_file_paths(file_paths: Vec<String>) -> Self {
+        PathsTrack {
+            file_paths,
+            level: 1.0,
+            pan: 0.0,
+            selections_count: 1,
         }
     }
 }

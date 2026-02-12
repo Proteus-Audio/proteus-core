@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 
 use log::{error, info, warn};
 
-use crate::container::prot::Prot;
+use crate::container::prot::{PathsTrack, Prot};
 use crate::diagnostics::reporter::{Report, Reporter};
 use crate::dsp::effects::convolution_reverb::{parse_impulse_response_string, ImpulseResponseSpec};
 use crate::playback::output_meter::OutputMeter;
@@ -101,13 +101,27 @@ impl Player {
     }
 
     /// Create a new player for a set of standalone file paths.
-    pub fn new_from_file_paths(file_paths: &Vec<Vec<String>>) -> Self {
+    pub fn new_from_file_paths(file_paths: Vec<PathsTrack>) -> Self {
         let this = Self::new_from_path_or_paths(None, Some(file_paths));
         this
     }
 
+    /// Create a new player for a set of standalone file paths.
+    pub fn new_from_file_paths_legacy(file_paths: Vec<Vec<String>>) -> Self {
+        let this = Self::new_from_path_or_paths(
+            None,
+            Some(
+                file_paths
+                    .into_iter()
+                    .map(|paths| PathsTrack::new_from_file_paths(paths))
+                    .collect(),
+            ),
+        );
+        this
+    }
+
     /// Create a player from either a container path or standalone file paths.
-    pub fn new_from_path_or_paths(path: Option<&String>, paths: Option<&Vec<Vec<String>>>) -> Self {
+    pub fn new_from_path_or_paths(path: Option<&String>, paths: Option<Vec<PathsTrack>>) -> Self {
         let (prot, info) = match path {
             Some(path) => {
                 let prot = Arc::new(Mutex::new(Prot::new(path)));
@@ -496,16 +510,13 @@ impl Player {
                         if attempt == OUTPUT_STREAM_OPEN_RETRIES {
                             error!(
                                 "failed to open default output stream after {} attempts: {}",
-                                OUTPUT_STREAM_OPEN_RETRIES,
-                                err
+                                OUTPUT_STREAM_OPEN_RETRIES, err
                             );
                             return;
                         }
                         warn!(
                             "open_default_stream attempt {}/{} failed: {}",
-                            attempt,
-                            OUTPUT_STREAM_OPEN_RETRIES,
-                            err
+                            attempt, OUTPUT_STREAM_OPEN_RETRIES, err
                         );
                         thread::sleep(Duration::from_millis(OUTPUT_STREAM_OPEN_RETRY_MS));
                     }
@@ -584,7 +595,6 @@ impl Player {
                     sink.append(silence_buffer);
                     drop(sink);
                 }
-
             }
 
             // ===================== //
@@ -619,7 +629,8 @@ impl Player {
                 }
                 if state == PlayerState::Resuming {
                     let fade_length = if startup_fade_pending.replace(false) {
-                        let startup_fade_ms = buffer_settings_for_state.lock().unwrap().startup_fade_ms;
+                        let startup_fade_ms =
+                            buffer_settings_for_state.lock().unwrap().startup_fade_ms;
                         (startup_fade_ms / 1000.0).max(0.0)
                     } else {
                         0.1

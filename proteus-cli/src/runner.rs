@@ -16,8 +16,8 @@ use crossterm::{
 use log::{error, info};
 use proteus_lib::dsp::effects::{
     AudioEffect, CompressorEffect, ConvolutionReverbEffect, DelayReverbEffect,
-    DiffusionReverbEffect, DistortionEffect, GainEffect, HighPassFilterEffect,
-    LimiterEffect, LowPassFilterEffect,
+    DiffusionReverbEffect, DistortionEffect, GainEffect, HighPassFilterEffect, LimiterEffect,
+    LowPassFilterEffect,
 };
 use proteus_lib::playback::player;
 use ratatui::{backend::CrosstermBackend, Terminal};
@@ -126,7 +126,7 @@ pub fn run(args: &ArgMatches, log_buffer: Arc<Mutex<VecDeque<LogLine>>>) -> Resu
     let mut player = if is_container {
         player::Player::new(&file_path)
     } else {
-        player::Player::new_from_file_paths(file_paths.as_ref())
+        player::Player::new_from_file_paths_legacy(file_paths)
     };
     let start_buffer_ms = args
         .get_one::<String>("start-buffer-ms")
