@@ -17,7 +17,7 @@ Its ideal magnitude response is flat:
 ```
 
 ## Variable Key
-- `$x[n]$`: input sample
+- $`x[n]`$: input sample
 - `$y[n]$`: output sample
 - `$a$`: all-pass coefficient, `$|a| < 1$`
 - `$M$`: delay (samples)
