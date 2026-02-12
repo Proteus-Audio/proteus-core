@@ -134,7 +134,7 @@ mod tests {
 
     #[test]
     fn distortion_deserializes_db_gain() {
-        let json = r#"{\"enabled\":true,\"gain\":\"6db\",\"threshold\":\"-6db\"}"#;
+        let json = r#"{"enabled":true,"gain":"6db","threshold":"-6db"}"#;
         let effect: DistortionEffect = serde_json::from_str(json).expect("deserialize distortion");
         assert!(effect.settings.gain > 1.0);
         assert!(effect.settings.threshold > 0.0);

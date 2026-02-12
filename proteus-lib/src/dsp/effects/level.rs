@@ -101,7 +101,11 @@ fn parse_linear_or_db_str_to_db(value: &str) -> Option<f32> {
     if let Some(db) = parse_db_suffix(value) {
         return Some(db);
     }
-    parse_number(value).map(linear_to_db)
+    let linear = parse_number(value)?;
+    if !linear.is_finite() || linear <= 0.0 {
+        return None;
+    }
+    Some(linear_to_db(linear))
 }
 
 fn parse_db_suffix(value: &str) -> Option<f32> {
@@ -120,4 +124,27 @@ fn parse_number(value: &str) -> Option<f32> {
         return None;
     }
     trimmed.parse::<f32>().ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn db_string_converts_to_linear() {
+        let v = parse_linear_or_db_str_to_linear("-6db").expect("parse db");
+        assert!((v - db_to_linear(-6.0)).abs() < 1e-6);
+    }
+
+    #[test]
+    fn linear_string_converts_to_db() {
+        let v = parse_linear_or_db_str_to_db("0.5").expect("parse linear");
+        assert!((v - linear_to_db(0.5)).abs() < 1e-6);
+    }
+
+    #[test]
+    fn non_positive_linear_string_rejected_for_db_fields() {
+        assert!(parse_linear_or_db_str_to_db("-2").is_none());
+        assert!(parse_linear_or_db_str_to_db("0").is_none());
+    }
 }

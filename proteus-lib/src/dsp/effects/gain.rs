@@ -122,7 +122,7 @@ mod tests {
 
     #[test]
     fn gain_deserializes_db_strings() {
-        let json = r#"{\"enabled\":true,\"gain\":\"6db\"}"#;
+        let json = r#"{"enabled":true,"gain":"6db"}"#;
         let effect: GainEffect = serde_json::from_str(json).expect("deserialize gain");
         let expected = db_to_linear(6.0);
         assert!((effect.settings.gain - expected).abs() < 1e-6);
@@ -130,7 +130,7 @@ mod tests {
 
     #[test]
     fn gain_deserializes_negative_db_strings() {
-        let json = r#"{\"enabled\":true,\"gain\":\"-2db\"}"#;
+        let json = r#"{"enabled":true,"gain":"-2db"}"#;
         let effect: GainEffect = serde_json::from_str(json).expect("deserialize gain");
         let expected = db_to_linear(-2.0);
         assert!((effect.settings.gain - expected).abs() < 1e-6);

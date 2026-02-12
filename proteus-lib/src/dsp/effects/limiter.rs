@@ -354,4 +354,32 @@ mod tests {
             assert!(approx_eq(*a, *b, 1e-5));
         }
     }
+
+    #[test]
+    fn limiter_deserializes_db_and_linear_strings() {
+        let json = r#"{
+            "enabled": true,
+            "threshold_db": "0.5",
+            "knee_width_db": 2.0,
+            "attack_ms": 3.0,
+            "release_ms": 30.0
+        }"#;
+
+        let effect: LimiterEffect = serde_json::from_str(json).expect("deserialize limiter");
+        assert!(approx_eq(effect.settings.threshold_db, -6.0206, 1e-3));
+    }
+
+    #[test]
+    fn limiter_rejects_non_positive_linear_threshold_string() {
+        let json = r#"{
+            "enabled": true,
+            "threshold_db": "0",
+            "knee_width_db": 2.0,
+            "attack_ms": 3.0,
+            "release_ms": 30.0
+        }"#;
+
+        let err = serde_json::from_str::<LimiterEffect>(json).expect_err("invalid limiter");
+        assert!(err.to_string().contains("invalid gain value"));
+    }
 }

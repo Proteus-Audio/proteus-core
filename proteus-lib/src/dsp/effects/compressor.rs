@@ -347,4 +347,39 @@ mod tests {
         let expected = db_to_linear(target_gain_db);
         assert!(output.iter().all(|value| approx_eq(*value, expected, 1e-3)));
     }
+
+    #[test]
+    fn compressor_deserializes_db_and_linear_strings() {
+        let json = r#"{
+            "enabled": true,
+            "threshold_db": "-12db",
+            "ratio": 2.0,
+            "attack_ms": 5.0,
+            "release_ms": 50.0,
+            "makeup_gain_db": "2.0"
+        }"#;
+
+        let effect: CompressorEffect = serde_json::from_str(json).expect("deserialize compressor");
+        assert!(approx_eq(effect.settings.threshold_db, -12.0, 1e-6));
+        assert!(approx_eq(
+            effect.settings.makeup_gain_db,
+            linear_to_db(2.0),
+            1e-6
+        ));
+    }
+
+    #[test]
+    fn compressor_rejects_non_positive_linear_string_for_db_fields() {
+        let json = r#"{
+            "enabled": true,
+            "threshold_db": "-2",
+            "ratio": 2.0,
+            "attack_ms": 5.0,
+            "release_ms": 50.0,
+            "makeup_gain_db": "0"
+        }"#;
+
+        let err = serde_json::from_str::<CompressorEffect>(json).expect_err("invalid compressor");
+        assert!(err.to_string().contains("invalid gain value"));
+    }
 }
