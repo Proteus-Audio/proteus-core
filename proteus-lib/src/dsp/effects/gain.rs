@@ -1,6 +1,8 @@
 //! Simple gain effect.
 
-use serde::{Deserialize, Serialize};
+use serde::de::{Error as DeError, Visitor};
+use serde::{Deserialize, Deserializer, Serialize};
+use std::fmt;
 
 use super::EffectContext;
 
@@ -10,6 +12,7 @@ const DEFAULT_GAIN: f32 = 1.0;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct GainSettings {
+    #[serde(deserialize_with = "deserialize_gain")]
     pub gain: f32,
 }
 
@@ -116,6 +119,22 @@ mod tests {
         let output = effect.process(&samples, &context(), false);
         assert_eq!(output, vec![0.5_f32, -0.5, 1.0, -1.0]);
     }
+
+    #[test]
+    fn gain_deserializes_db_strings() {
+        let json = r#"{\"enabled\":true,\"gain\":\"6db\"}"#;
+        let effect: GainEffect = serde_json::from_str(json).expect("deserialize gain");
+        let expected = db_to_linear(6.0);
+        assert!((effect.settings.gain - expected).abs() < 1e-6);
+    }
+
+    #[test]
+    fn gain_deserializes_negative_db_strings() {
+        let json = r#"{\"enabled\":true,\"gain\":\"-2db\"}"#;
+        let effect: GainEffect = serde_json::from_str(json).expect("deserialize gain");
+        let expected = db_to_linear(-2.0);
+        assert!((effect.settings.gain - expected).abs() < 1e-6);
+    }
 }
 
 fn sanitize_gain(gain: f32) -> f32 {
@@ -124,4 +143,77 @@ fn sanitize_gain(gain: f32) -> f32 {
     } else {
         DEFAULT_GAIN
     }
+}
+
+fn deserialize_gain<'de, D>(deserializer: D) -> Result<f32, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    struct GainVisitor;
+
+    impl<'de> Visitor<'de> for GainVisitor {
+        type Value = f32;
+
+        fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+            formatter.write_str("a number or a string like \"6db\"")
+        }
+
+        fn visit_f64<E>(self, value: f64) -> Result<Self::Value, E>
+        where
+            E: DeError,
+        {
+            Ok(value as f32)
+        }
+
+        fn visit_i64<E>(self, value: i64) -> Result<Self::Value, E>
+        where
+            E: DeError,
+        {
+            Ok(value as f32)
+        }
+
+        fn visit_u64<E>(self, value: u64) -> Result<Self::Value, E>
+        where
+            E: DeError,
+        {
+            Ok(value as f32)
+        }
+
+        fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
+        where
+            E: DeError,
+        {
+            parse_gain_str(value).ok_or_else(|| {
+                DeError::custom(format!("invalid gain value \"{}\"", value))
+            })
+        }
+
+        fn visit_string<E>(self, value: String) -> Result<Self::Value, E>
+        where
+            E: DeError,
+        {
+            self.visit_str(&value)
+        }
+    }
+
+    deserializer.deserialize_any(GainVisitor)
+}
+
+fn parse_gain_str(value: &str) -> Option<f32> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let lower = trimmed.to_ascii_lowercase();
+    if let Some(db_part) = lower.strip_suffix("db") {
+        let db = db_part.trim().parse::<f32>().ok()?;
+        return Some(db_to_linear(db));
+    }
+
+    trimmed.parse::<f32>().ok()
+}
+
+fn db_to_linear(db: f32) -> f32 {
+    10.0_f32.powf(db / 20.0)
 }
