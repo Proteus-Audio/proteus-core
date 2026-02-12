@@ -17,8 +17,8 @@ y[n] = x[n] + b\,x[n-D]
 ```
 
 ## Variable Key
-- `$x[n]$`: input sample
-- `$y[n]$`: output sample
-- `$g$`: feedback gain
-- `$b$`: feedforward gain
-- `$D$`: delay (samples)
+- $`x[n]`$: input sample
+- $`y[n]`$: output sample
+- $`g`$: feedback gain
+- $`b`$: feedforward gain
+- $`D`$: delay (samples)

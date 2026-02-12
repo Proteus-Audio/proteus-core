@@ -31,13 +31,13 @@ y[n] = x[n] \cdot 10^{\frac{G[n]+M}{20}}
 ```
 
 ## Variable Key
-- `$x_c[n]$`: input sample for channel `$c$`
-- `$x[n]$`: input sample after channel/frame selection
-- `$y[n]$`: output sample
-- `$L[n]$`: detected level (dB)
-- `$T$`: threshold (dB)
-- `$R$`: ratio
-- `$G_t[n]$`: target gain reduction (dB)
-- `$G[n]$`: smoothed gain reduction (dB)
-- `$M$`: makeup gain (dB)
-- `$\alpha$`: smoothing coefficient (attack or release dependent)
+- $`x_c[n]`$: input sample for channel $`c`$
+- $`x[n]`$: input sample after channel/frame selection
+- $`y[n]`$: output sample
+- $`L[n]`$: detected level (dB)
+- $`T`$: threshold (dB)
+- $`R`$: ratio
+- $`G_t[n]`$: target gain reduction (dB)
+- $`G[n]`$: smoothed gain reduction (dB)
+- $`M`$: makeup gain (dB)
+- $`\alpha`$: smoothing coefficient (attack or release dependent)

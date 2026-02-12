@@ -16,7 +16,7 @@ g = 10^{\frac{G_{\mathrm{dB}}}{20}}
 ```
 
 ## Variable Key
-- `$x[n]$`: input sample
-- `$y[n]$`: output sample
-- `$g$`: linear gain factor
-- `$G_{\mathrm{dB}}$`: gain in decibels
+- $`x[n]`$: input sample
+- $`y[n]`$: output sample
+- $`g`$: linear gain factor
+- $`G_{\mathrm{dB}}`$: gain in decibels

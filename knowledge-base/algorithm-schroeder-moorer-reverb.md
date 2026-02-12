@@ -17,10 +17,10 @@ y_a[n] = -a\,x[n] + x[n-M] + a\,y_a[n-M]
 Typical networks sum several comb filters in parallel and follow them with one or more all-pass stages in series.
 
 ## Variable Key
-- `$x[n]$`: input sample
-- `$y_c[n]$`: comb output
-- `$y_a[n]$`: all-pass output
-- `$g$`: comb feedback gain, `$|g| < 1$`
-- `$a$`: all-pass coefficient, `$|a| < 1$`
-- `$D$`: comb delay (samples)
-- `$M$`: all-pass delay (samples)
+- $`x[n]`$: input sample
+- $`y_c[n]`$: comb output
+- $`y_a[n]`$: all-pass output
+- $`g`$: comb feedback gain, $`|g| < 1`$
+- $`a`$: all-pass coefficient, $`|a| < 1`$
+- $`D`$: comb delay (samples)
+- $`M`$: all-pass delay (samples)

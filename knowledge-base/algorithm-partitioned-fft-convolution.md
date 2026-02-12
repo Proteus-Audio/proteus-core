@@ -10,21 +10,21 @@ Time-domain convolution:
 y[n] = \sum_{k=0}^{L-1} h[k]x[n-k]
 ```
 
-Partitioned frequency-domain block form (block index `$p$`):
+Partitioned frequency-domain block form (block index $`p`$):
 
 ```math
 Y_p(\omega) = \sum_{i=0}^{P-1} H_i(\omega)X_{p-i}(\omega)
 ```
 
-Then `$y_p[n]$` is recovered by inverse FFT and overlap-add.
+Then $`y_p[n]`$ is recovered by inverse FFT and overlap-add.
 
 ## Variable Key
-- `$x[n]$`: input signal
-- `$h[k]$`: impulse response (FIR coefficients)
-- `$y[n]$`: output signal
-- `$X_p(\omega)$`: FFT of input block `$p$`
-- `$H_i(\omega)$`: FFT of IR partition `$i$`
-- `$Y_p(\omega)$`: output spectrum of block `$p$`
-- `$L$`: IR length (samples)
-- `$P$`: number of partitions
-- `$\omega$`: angular frequency
+- $`x[n]`$: input signal
+- $`h[k]`$: impulse response (FIR coefficients)
+- $`y[n]`$: output signal
+- $`X_p(\omega)`$: FFT of input block $`p`$
+- $`H_i(\omega)`$: FFT of IR partition $`i`$
+- $`Y_p(\omega)`$: output spectrum of block $`p`$
+- $`L`$: IR length (samples)
+- $`P`$: number of partitions
+- $`\omega`$: angular frequency
