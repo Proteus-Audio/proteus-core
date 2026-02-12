@@ -15,10 +15,12 @@ pub use crate::dsp::effects::{
 pub mod legacy;
 pub mod v1;
 pub mod v2;
+pub mod v3;
 
 pub use legacy::{PlaySettingsLegacy, PlaySettingsLegacyFile, PlaySettingsTrackLegacy};
 pub use v1::{PlaySettingsV1, PlaySettingsV1File};
 pub use v2::{PlaySettingsV2, PlaySettingsV2File};
+pub use v3::{PlaySettingsV3, PlaySettingsV3File};
 
 /// Effect settings variants that can appear in the settings file.
 pub type EffectSettings = AudioEffect;
@@ -31,6 +33,12 @@ pub struct SettingsTrack {
     pub ids: Vec<u32>,
     pub name: String,
     pub safe_name: String,
+    #[serde(default = "default_selections_count")]
+    pub selections_count: u32,
+}
+
+fn default_selections_count() -> u32 {
+    1
 }
 
 /// Wrapper allowing `play_settings` to be nested or flat.
@@ -57,6 +65,7 @@ pub enum PlaySettingsFile {
     Legacy(PlaySettingsLegacyFile),
     V1(PlaySettingsV1File),
     V2(PlaySettingsV2File),
+    V3(PlaySettingsV3File),
     Unknown {
         encoder_version: Option<String>,
         raw: serde_json::Value,
@@ -70,6 +79,7 @@ impl PlaySettingsFile {
             PlaySettingsFile::Legacy(_) => None,
             PlaySettingsFile::V1(_) => Some("1"),
             PlaySettingsFile::V2(_) => Some("2"),
+            PlaySettingsFile::V3(_) => Some("3"),
             PlaySettingsFile::Unknown {
                 encoder_version, ..
             } => encoder_version.as_deref(),
@@ -92,6 +102,8 @@ impl<'de> Deserialize<'de> for PlaySettingsFile {
                         "1".to_string()
                     } else if (val - 2.0).abs() < f64::EPSILON {
                         "2".to_string()
+                    } else if (val - 3.0).abs() < f64::EPSILON {
+                        "3".to_string()
                     } else {
                         number.to_string()
                     }
@@ -109,6 +121,8 @@ impl<'de> Deserialize<'de> for PlaySettingsFile {
                 .map(PlaySettingsFile::V1),
             Some("2") => serde_json::from_value::<PlaySettingsV2File>(value.clone())
                 .map(PlaySettingsFile::V2),
+            Some("3") => serde_json::from_value::<PlaySettingsV3File>(value.clone())
+                .map(PlaySettingsFile::V3),
             Some(version) => {
                 warn!("Unknown encoder version: {:?}", version);
                 return Ok(PlaySettingsFile::Unknown {
@@ -162,6 +176,7 @@ impl Serialize for PlaySettingsFile {
             PlaySettingsFile::Legacy(file) => file.serialize(serializer),
             PlaySettingsFile::V1(file) => with_version(file, "1", serializer),
             PlaySettingsFile::V2(file) => with_version(file, "2", serializer),
+            PlaySettingsFile::V3(file) => with_version(file, "3", serializer),
             PlaySettingsFile::Unknown { raw, .. } => raw.serialize(serializer),
         }
     }

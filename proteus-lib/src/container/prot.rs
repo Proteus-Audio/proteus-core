@@ -161,6 +161,15 @@ impl Prot {
                         &mut self.duration,
                     );
                 }
+                PlaySettingsFile::V3(file) => {
+                    collect_tracks_from_ids(
+                        &file.settings.inner().tracks,
+                        &mut track_index_array,
+                        &mut longest_duration,
+                        &self.info,
+                        &mut self.duration,
+                    );
+                }
                 PlaySettingsFile::Unknown { .. } => {
                     error!("Unknown file format");
                 }
@@ -217,6 +226,9 @@ impl Prot {
                 self.effects = Some(file.settings.inner().effects.clone());
             }
             PlaySettingsFile::V2(file) => {
+                self.effects = Some(file.settings.inner().effects.clone());
+            }
+            PlaySettingsFile::V3(file) => {
                 self.effects = Some(file.settings.inner().effects.clone());
             }
             _ => {}
@@ -360,15 +372,21 @@ fn collect_tracks_from_ids(
         if track.ids.is_empty() {
             continue;
         }
-        let random_number = rand::thread_rng().gen_range(0..track.ids.len());
-        let index = track.ids[random_number];
-        if let Some(track_duration) = info.get_duration(index) {
-            if track_duration > *longest_duration {
-                *longest_duration = track_duration;
-                *total_duration = *longest_duration;
-            }
+        let selections = track.selections_count as usize;
+        if selections == 0 {
+            continue;
         }
-        track_index_array.push(index);
+        for _ in 0..selections {
+            let random_number = rand::thread_rng().gen_range(0..track.ids.len());
+            let index = track.ids[random_number];
+            if let Some(track_duration) = info.get_duration(index) {
+                if track_duration > *longest_duration {
+                    *longest_duration = track_duration;
+                    *total_duration = *longest_duration;
+                }
+            }
+            track_index_array.push(index);
+        }
     }
 }
 

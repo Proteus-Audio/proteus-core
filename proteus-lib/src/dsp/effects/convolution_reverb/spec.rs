@@ -44,6 +44,7 @@ fn parse_convolution_settings(
     let effects = match play_settings {
         PlaySettingsFile::V1(file) => &file.settings.inner().effects,
         PlaySettingsFile::V2(file) => &file.settings.inner().effects,
+        PlaySettingsFile::V3(file) => &file.settings.inner().effects,
         _ => return None,
     };
 
