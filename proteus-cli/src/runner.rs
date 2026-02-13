@@ -331,13 +331,24 @@ struct PeaksOutput {
 }
 
 fn run_peaks(file_path: &str, limited: bool) -> i32 {
-    let peaks = proteus_lib::peaks::get_peaks(file_path, limited);
+    let peaks = match proteus_lib::peaks::extract_peaks_from_audio(file_path, limited) {
+        Ok(peaks) => peaks,
+        Err(err) => {
+            error!("Failed to extract peaks: {}", err);
+            return -1;
+        }
+    };
+
     let channels = peaks
+        .channels
         .into_iter()
         .map(|channel| PeaksChannel {
             peaks: channel
                 .into_iter()
-                .map(|(max, min)| PeakWindow { max, min })
+                .map(|peak| PeakWindow {
+                    max: peak.max,
+                    min: peak.min,
+                })
                 .collect(),
         })
         .collect();
