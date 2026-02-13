@@ -2,7 +2,7 @@
 
 use matroska::Matroska;
 use rand::Rng;
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use log::{error, info, warn};
 
@@ -12,6 +12,24 @@ use crate::dsp::effects::convolution_reverb::{
     parse_impulse_response_spec, parse_impulse_response_tail_db, ImpulseResponseSpec,
 };
 use crate::dsp::effects::AudioEffect;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ShuffleSource {
+    TrackId(u32),
+    FilePath(String),
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct ShuffleScheduleEntry {
+    pub at_ms: u64,
+    pub sources: Vec<ShuffleSource>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct ShuffleRuntimePlan {
+    pub current_sources: Vec<ShuffleSource>,
+    pub upcoming_events: Vec<ShuffleScheduleEntry>,
+}
 
 /// Parsed `.prot` container with resolved tracks and playback metadata.
 #[derive(Debug, Clone)]
@@ -23,6 +41,7 @@ pub struct Prot {
     track_ids: Option<Vec<u32>>,
     track_paths: Option<Vec<String>>,
     duration: f64,
+    shuffle_schedule: Vec<ShuffleScheduleEntry>,
     play_settings: Option<PlaySettingsFile>,
     impulse_response_spec: Option<ImpulseResponseSpec>,
     impulse_response_tail_db: Option<f32>,
@@ -44,6 +63,7 @@ impl Prot {
             track_ids: None,
             track_paths: None,
             duration: 0.0,
+            shuffle_schedule: Vec::new(),
             play_settings: None,
             impulse_response_spec: None,
             impulse_response_tail_db: None,
@@ -79,6 +99,7 @@ impl Prot {
             track_ids: None,
             track_paths: None,
             duration: 0.0,
+            shuffle_schedule: Vec::new(),
             play_settings: None,
             impulse_response_spec: None,
             impulse_response_tail_db: None,
@@ -106,42 +127,23 @@ impl Prot {
 
     /// Rebuild the active track list (e.g., after shuffle).
     pub fn refresh_tracks(&mut self) {
-        let mut longest_duration = 0.0;
+        self.track_ids = None;
+        self.track_paths = None;
+        self.shuffle_schedule.clear();
+        self.duration = 0.0;
 
         if let Some(file_paths) = &self.file_paths {
-            // Choose random file path from each file_paths array
-            let mut track_paths: Vec<String> = Vec::new();
-            for track in file_paths {
-                if track.file_paths.is_empty() {
-                    continue;
-                }
-                let selections = track.selections_count as usize;
-                if selections == 0 {
-                    continue;
-                }
-                for _ in 0..selections {
-                    let random_number = rand::thread_rng().gen_range(0..track.file_paths.len());
-                    let track_path = track.file_paths[random_number].clone();
+            let (schedule, longest_duration) = build_paths_shuffle_schedule(
+                file_paths,
+                &self.info,
+                self.file_paths_dictionary.as_deref().unwrap_or(&[]),
+            );
+            self.shuffle_schedule = schedule;
+            self.duration = longest_duration;
 
-                    let index_in_dictionary = self
-                        .file_paths_dictionary
-                        .as_ref()
-                        .unwrap()
-                        .iter()
-                        .position(|x| *x == track_path)
-                        .unwrap();
-                    let duration = self.info.get_duration(index_in_dictionary as u32).unwrap();
-
-                    if duration > longest_duration {
-                        longest_duration = duration;
-                        self.duration = longest_duration;
-                    }
-
-                    track_paths.push(track_path);
-                }
+            if let Some(entry) = self.shuffle_schedule.first() {
+                self.track_paths = Some(sources_to_track_paths(&entry.sources));
             }
-
-            self.track_paths = Some(track_paths);
 
             return;
         }
@@ -150,10 +152,11 @@ impl Prot {
             return;
         }
 
-        let mut track_index_array: Vec<u32> = Vec::new();
         match self.play_settings.as_ref() {
             Some(play_settings) => match play_settings {
                 PlaySettingsFile::Legacy(file) => {
+                    let mut longest_duration = 0.0;
+                    let mut track_index_array: Vec<u32> = Vec::new();
                     collect_legacy_tracks(
                         file.settings.inner(),
                         &mut track_index_array,
@@ -161,33 +164,32 @@ impl Prot {
                         &self.info,
                         &mut self.duration,
                     );
+                    self.track_ids = Some(track_index_array.clone());
+                    self.shuffle_schedule = vec![ShuffleScheduleEntry {
+                        at_ms: 0,
+                        sources: track_index_array
+                            .into_iter()
+                            .map(ShuffleSource::TrackId)
+                            .collect(),
+                    }];
                 }
                 PlaySettingsFile::V1(file) => {
-                    collect_tracks_from_ids(
-                        &file.settings.inner().tracks,
-                        &mut track_index_array,
-                        &mut longest_duration,
-                        &self.info,
-                        &mut self.duration,
-                    );
+                    let (schedule, longest_duration) =
+                        build_id_shuffle_schedule(&file.settings.inner().tracks, &self.info);
+                    self.shuffle_schedule = schedule;
+                    self.duration = longest_duration;
                 }
                 PlaySettingsFile::V2(file) => {
-                    collect_tracks_from_ids(
-                        &file.settings.inner().tracks,
-                        &mut track_index_array,
-                        &mut longest_duration,
-                        &self.info,
-                        &mut self.duration,
-                    );
+                    let (schedule, longest_duration) =
+                        build_id_shuffle_schedule(&file.settings.inner().tracks, &self.info);
+                    self.shuffle_schedule = schedule;
+                    self.duration = longest_duration;
                 }
                 PlaySettingsFile::V3(file) => {
-                    collect_tracks_from_ids(
-                        &file.settings.inner().tracks,
-                        &mut track_index_array,
-                        &mut longest_duration,
-                        &self.info,
-                        &mut self.duration,
-                    );
+                    let (schedule, longest_duration) =
+                        build_id_shuffle_schedule(&file.settings.inner().tracks, &self.info);
+                    self.shuffle_schedule = schedule;
+                    self.duration = longest_duration;
                 }
                 PlaySettingsFile::Unknown { .. } => {
                     error!("Unknown file format");
@@ -198,7 +200,9 @@ impl Prot {
             }
         }
 
-        self.track_ids = Some(track_index_array);
+        if let Some(entry) = self.shuffle_schedule.first() {
+            self.track_ids = Some(sources_to_track_ids(&entry.sources));
+        }
     }
 
     /// Return effects parsed from play_settings, if any.
@@ -358,6 +362,36 @@ impl Prot {
         &self.duration
     }
 
+    pub(crate) fn build_runtime_shuffle_plan(&self, start_time: f64) -> ShuffleRuntimePlan {
+        if self.shuffle_schedule.is_empty() {
+            let mut sources = Vec::new();
+            if let Some(track_ids) = &self.track_ids {
+                sources.extend(track_ids.iter().copied().map(ShuffleSource::TrackId));
+            } else if let Some(track_paths) = &self.track_paths {
+                sources.extend(track_paths.iter().cloned().map(ShuffleSource::FilePath));
+            }
+            return ShuffleRuntimePlan {
+                current_sources: sources,
+                upcoming_events: Vec::new(),
+            };
+        }
+
+        let start_ms = seconds_to_ms(start_time);
+        let mut current_index = 0usize;
+        for (index, entry) in self.shuffle_schedule.iter().enumerate() {
+            if entry.at_ms <= start_ms {
+                current_index = index;
+            } else {
+                break;
+            }
+        }
+
+        ShuffleRuntimePlan {
+            current_sources: self.shuffle_schedule[current_index].sources.clone(),
+            upcoming_events: self.shuffle_schedule[(current_index + 1)..].to_vec(),
+        }
+    }
+
     /// Return per-track `(level, pan)` settings keyed by track key.
     pub fn get_track_mix_settings(&self) -> HashMap<u16, (f32, f32)> {
         let mut settings = HashMap::new();
@@ -438,6 +472,8 @@ pub struct PathsTrack {
     pub pan: f32,
     /// Number of selections to pick per refresh.
     pub selections_count: u32,
+    /// Timestamps where this track is reshuffled.
+    pub shuffle_points: Vec<String>,
 }
 
 fn count_settings_track_combinations(tracks: &[SettingsTrack]) -> Option<u128> {
@@ -494,17 +530,22 @@ impl PathsTrack {
             level: 1.0,
             pan: 0.0,
             selections_count: 1,
+            shuffle_points: Vec::new(),
         }
     }
 }
 
-fn collect_tracks_from_ids(
+fn build_id_shuffle_schedule(
     tracks: &[SettingsTrack],
-    track_index_array: &mut Vec<u32>,
-    longest_duration: &mut f64,
     info: &Info,
-    total_duration: &mut f64,
-) {
+) -> (Vec<ShuffleScheduleEntry>, f64) {
+    let mut shuffle_timestamps = BTreeSet::new();
+    let mut slot_candidates: Vec<Vec<u32>> = Vec::new();
+    let mut slot_points: Vec<HashSet<u64>> = Vec::new();
+    let mut current_ids: Vec<u32> = Vec::new();
+    let mut longest_duration = 0.0_f64;
+    shuffle_timestamps.insert(0);
+
     for track in tracks {
         if track.ids.is_empty() {
             continue;
@@ -513,18 +554,219 @@ fn collect_tracks_from_ids(
         if selections == 0 {
             continue;
         }
+        let points = parse_shuffle_points(&track.shuffle_points);
+        for point in &points {
+            shuffle_timestamps.insert(*point);
+        }
+        let point_set: HashSet<u64> = points.into_iter().collect();
         for _ in 0..selections {
-            let random_number = rand::thread_rng().gen_range(0..track.ids.len());
-            let index = track.ids[random_number];
-            if let Some(track_duration) = info.get_duration(index) {
-                if track_duration > *longest_duration {
-                    *longest_duration = track_duration;
-                    *total_duration = *longest_duration;
-                }
+            slot_candidates.push(track.ids.clone());
+            slot_points.push(point_set.clone());
+            let choice = random_id(&track.ids);
+            if let Some(duration) = info.get_duration(choice) {
+                longest_duration = longest_duration.max(duration);
             }
-            track_index_array.push(index);
+            current_ids.push(choice);
         }
     }
+
+    let mut schedule = Vec::new();
+    if current_ids.is_empty() {
+        return (schedule, longest_duration);
+    }
+
+    schedule.push(ShuffleScheduleEntry {
+        at_ms: 0,
+        sources: current_ids
+            .iter()
+            .copied()
+            .map(ShuffleSource::TrackId)
+            .collect(),
+    });
+
+    for timestamp in shuffle_timestamps.into_iter().filter(|point| *point > 0) {
+        for slot_index in 0..current_ids.len() {
+            if slot_points[slot_index].contains(&timestamp) {
+                current_ids[slot_index] = random_id(&slot_candidates[slot_index]);
+                if let Some(duration) = info.get_duration(current_ids[slot_index]) {
+                    longest_duration = longest_duration.max(duration);
+                }
+            }
+        }
+        schedule.push(ShuffleScheduleEntry {
+            at_ms: timestamp,
+            sources: current_ids
+                .iter()
+                .copied()
+                .map(ShuffleSource::TrackId)
+                .collect(),
+        });
+    }
+
+    (schedule, longest_duration)
+}
+
+fn build_paths_shuffle_schedule(
+    tracks: &[PathsTrack],
+    info: &Info,
+    dictionary: &[String],
+) -> (Vec<ShuffleScheduleEntry>, f64) {
+    let mut shuffle_timestamps = BTreeSet::new();
+    let mut slot_candidates: Vec<Vec<String>> = Vec::new();
+    let mut slot_points: Vec<HashSet<u64>> = Vec::new();
+    let mut current_paths: Vec<String> = Vec::new();
+    let mut longest_duration = 0.0_f64;
+    let dictionary_lookup: HashMap<&str, u32> = dictionary
+        .iter()
+        .enumerate()
+        .map(|(index, path)| (path.as_str(), index as u32))
+        .collect();
+    shuffle_timestamps.insert(0);
+
+    for track in tracks {
+        if track.file_paths.is_empty() {
+            continue;
+        }
+        let selections = track.selections_count as usize;
+        if selections == 0 {
+            continue;
+        }
+        let points = parse_shuffle_points(&track.shuffle_points);
+        for point in &points {
+            shuffle_timestamps.insert(*point);
+        }
+        let point_set: HashSet<u64> = points.into_iter().collect();
+        for _ in 0..selections {
+            slot_candidates.push(track.file_paths.clone());
+            slot_points.push(point_set.clone());
+            let choice = random_path(&track.file_paths);
+            if let Some(index) = dictionary_lookup.get(choice.as_str()).copied() {
+                if let Some(duration) = info.get_duration(index) {
+                    longest_duration = longest_duration.max(duration);
+                }
+            }
+            current_paths.push(choice);
+        }
+    }
+
+    let mut schedule = Vec::new();
+    if current_paths.is_empty() {
+        return (schedule, longest_duration);
+    }
+
+    schedule.push(ShuffleScheduleEntry {
+        at_ms: 0,
+        sources: current_paths
+            .iter()
+            .cloned()
+            .map(ShuffleSource::FilePath)
+            .collect(),
+    });
+
+    for timestamp in shuffle_timestamps.into_iter().filter(|point| *point > 0) {
+        for slot_index in 0..current_paths.len() {
+            if slot_points[slot_index].contains(&timestamp) {
+                current_paths[slot_index] = random_path(&slot_candidates[slot_index]);
+                if let Some(index) = dictionary_lookup
+                    .get(current_paths[slot_index].as_str())
+                    .copied()
+                {
+                    if let Some(duration) = info.get_duration(index) {
+                        longest_duration = longest_duration.max(duration);
+                    }
+                }
+            }
+        }
+        schedule.push(ShuffleScheduleEntry {
+            at_ms: timestamp,
+            sources: current_paths
+                .iter()
+                .cloned()
+                .map(ShuffleSource::FilePath)
+                .collect(),
+        });
+    }
+
+    (schedule, longest_duration)
+}
+
+fn parse_shuffle_points(points: &[String]) -> Vec<u64> {
+    let mut parsed = Vec::new();
+    for point in points {
+        match parse_timestamp_ms(point) {
+            Some(value) => parsed.push(value),
+            None => warn!("Invalid shuffle point timestamp: {}", point),
+        }
+    }
+    parsed.sort_unstable();
+    parsed.dedup();
+    parsed
+}
+
+fn parse_timestamp_ms(value: &str) -> Option<u64> {
+    let parts: Vec<&str> = value.trim().split(':').collect();
+    if parts.is_empty() || parts.len() > 3 {
+        return None;
+    }
+
+    let seconds_component = parts.last()?.parse::<f64>().ok()?;
+    if seconds_component.is_sign_negative() {
+        return None;
+    }
+
+    let minutes = if parts.len() >= 2 {
+        parts[parts.len() - 2].parse::<u64>().ok()?
+    } else {
+        0
+    };
+    let hours = if parts.len() == 3 {
+        parts[0].parse::<u64>().ok()?
+    } else {
+        0
+    };
+
+    let total_seconds = (hours as f64 * 3600.0) + (minutes as f64 * 60.0) + seconds_component;
+    if total_seconds.is_sign_negative() || !total_seconds.is_finite() {
+        return None;
+    }
+    Some((total_seconds * 1000.0).round() as u64)
+}
+
+fn seconds_to_ms(seconds: f64) -> u64 {
+    if !seconds.is_finite() || seconds <= 0.0 {
+        return 0;
+    }
+    (seconds * 1000.0).round() as u64
+}
+
+fn random_id(ids: &[u32]) -> u32 {
+    let random_index = rand::thread_rng().gen_range(0..ids.len());
+    ids[random_index]
+}
+
+fn random_path(paths: &[String]) -> String {
+    let random_index = rand::thread_rng().gen_range(0..paths.len());
+    paths[random_index].clone()
+}
+
+fn sources_to_track_ids(sources: &[ShuffleSource]) -> Vec<u32> {
+    sources
+        .iter()
+        .filter_map(|source| match source {
+            ShuffleSource::TrackId(track_id) => Some(*track_id),
+            ShuffleSource::FilePath(_) => None,
+        })
+        .collect()
+}
+
+fn sources_to_track_paths(sources: &[ShuffleSource]) -> Vec<String> {
+    sources
+        .iter()
+        .filter_map(|source| match source {
+            ShuffleSource::TrackId(_) => None,
+            ShuffleSource::FilePath(path) => Some(path.clone()),
+        })
+        .collect()
 }
 
 fn collect_legacy_tracks(

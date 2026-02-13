@@ -3,7 +3,7 @@
 use dasp_ring_buffer::Bounded;
 use log::error;
 use rodio::buffer::SamplesBuffer;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
@@ -12,7 +12,7 @@ use std::time::Duration;
 use std::time::Instant;
 
 use crate::audio::buffer::TrackBuffer;
-use crate::container::prot::Prot;
+use crate::container::prot::{Prot, ShuffleScheduleEntry, ShuffleSource};
 use crate::dsp::effects::{convolution_reverb, AudioEffect, EffectContext};
 use crate::track::{buffer_container_tracks, buffer_track, ContainerTrackArgs, TrackArgs};
 
@@ -133,52 +133,22 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer, f
 
         let prot_locked = prot.clone();
 
-        let prot = prot_locked.lock().unwrap();
-        let container_tracks = prot.container_track_entries();
-        let enumerated_list = if container_tracks.is_some() {
-            Vec::new()
-        } else {
-            prot.enumerated_list()
+        let (container_path, mut shuffle_plan) = {
+            let prot = prot_locked.lock().unwrap();
+            (
+                prot.get_container_path(),
+                prot.build_runtime_shuffle_plan(start_time),
+            )
         };
-        let prot_key_count = prot.get_keys().len();
-        drop(prot);
+        let mut active_sources = shuffle_plan.current_sources.clone();
+        let upcoming_events: Vec<ShuffleScheduleEntry> =
+            shuffle_plan.upcoming_events.drain(..).collect();
+        let mut next_shuffle_event_index = 0usize;
+        let mut active_track_keys: Vec<u16> = (0..active_sources.len()).map(|i| i as u16).collect();
+        let mut next_track_key: u16 = active_track_keys.len() as u16;
 
         #[cfg(not(feature = "debug"))]
         let _ = &dsp_metrics;
-
-        if let Some((file_path, track_entries)) = container_tracks {
-            buffer_container_tracks(
-                ContainerTrackArgs {
-                    file_path,
-                    track_entries,
-                    buffer_map: buffer_map.clone(),
-                    buffer_notify: Some(buffer_notify.clone()),
-                    track_weights: Some(track_weights.clone()),
-                    finished_tracks: finished_tracks.clone(),
-                    start_time,
-                    channels: audio_info.channels as u8,
-                    track_eos_ms: buffer_settings.lock().unwrap().track_eos_ms,
-                },
-                abort.clone(),
-            );
-        } else {
-            for (key, file_path, track_id) in enumerated_list {
-                buffer_track(
-                    TrackArgs {
-                        file_path: file_path.clone(),
-                        track_id,
-                        track_key: key,
-                        buffer_map: buffer_map.clone(),
-                        buffer_notify: Some(buffer_notify.clone()),
-                        track_weights: None,
-                        finished_tracks: finished_tracks.clone(),
-                        start_time,
-                        channels: audio_info.channels as u8,
-                    },
-                    abort.clone(),
-                );
-            }
-        }
 
         let hash_buffer_copy = buffer_map.clone();
 
@@ -218,6 +188,117 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer, f
         let mut started = start_samples == 0;
         let mut mix_buffer = vec![0.0_f32; min_mix_samples];
         let warmup_samples = min_mix_samples;
+        let track_buffer_size = (audio_info.sample_rate as usize * 10).max(start_samples * 2);
+        let slot_channel_gains: Vec<Vec<f32>> = {
+            let gains = track_channel_gains.lock().unwrap();
+            active_track_keys
+                .iter()
+                .map(|key| {
+                    gains
+                        .get(key)
+                        .cloned()
+                        .unwrap_or_else(|| vec![1.0; audio_info.channels.max(1) as usize])
+                })
+                .collect()
+        };
+        let mut playback_frames =
+            (start_time.max(0.0) * audio_info.sample_rate.max(1) as f64).round() as u64;
+
+        let spawn_source_track =
+            |slot_index: usize, track_key: u16, source: &ShuffleSource, event_seconds: f64| {
+                {
+                    let mut map = hash_buffer_copy.lock().unwrap();
+                    map.insert(
+                        track_key,
+                        Arc::new(Mutex::new(Bounded::from(vec![0.0; track_buffer_size]))),
+                    );
+                }
+                {
+                    let mut weights = track_weights.lock().unwrap();
+                    weights.insert(track_key, 1.0);
+                }
+                {
+                    let mut gains = track_channel_gains.lock().unwrap();
+                    gains.insert(
+                        track_key,
+                        slot_channel_gains
+                            .get(slot_index)
+                            .cloned()
+                            .unwrap_or_else(|| vec![1.0; audio_info.channels.max(1) as usize]),
+                    );
+                }
+                let track_args = match source {
+                    ShuffleSource::TrackId(track_id) => {
+                        let Some(container_path) = container_path.as_ref() else {
+                            return;
+                        };
+                        TrackArgs {
+                            file_path: container_path.clone(),
+                            track_id: Some(*track_id),
+                            track_key,
+                            buffer_map: buffer_map.clone(),
+                            buffer_notify: Some(buffer_notify.clone()),
+                            track_weights: None,
+                            finished_tracks: finished_tracks.clone(),
+                            start_time: event_seconds,
+                            channels: audio_info.channels as u8,
+                        }
+                    }
+                    ShuffleSource::FilePath(path) => TrackArgs {
+                        file_path: path.clone(),
+                        track_id: None,
+                        track_key,
+                        buffer_map: buffer_map.clone(),
+                        buffer_notify: Some(buffer_notify.clone()),
+                        track_weights: None,
+                        finished_tracks: finished_tracks.clone(),
+                        start_time: event_seconds,
+                        channels: audio_info.channels as u8,
+                    },
+                };
+                buffer_track(track_args, abort.clone());
+            };
+
+        let use_container_buffering = container_path.is_some()
+            && upcoming_events.is_empty()
+            && active_sources
+                .iter()
+                .all(|source| matches!(source, ShuffleSource::TrackId(_)));
+        if use_container_buffering {
+            let track_entries: Vec<(u16, u32)> = active_sources
+                .iter()
+                .enumerate()
+                .filter_map(|(slot_index, source)| match source {
+                    ShuffleSource::TrackId(track_id) => active_track_keys
+                        .get(slot_index)
+                        .copied()
+                        .map(|key| (key, *track_id)),
+                    ShuffleSource::FilePath(_) => None,
+                })
+                .collect();
+            if !track_entries.is_empty() {
+                buffer_container_tracks(
+                    ContainerTrackArgs {
+                        file_path: container_path.clone().unwrap_or_default(),
+                        track_entries,
+                        buffer_map: buffer_map.clone(),
+                        buffer_notify: Some(buffer_notify.clone()),
+                        track_weights: Some(track_weights.clone()),
+                        finished_tracks: finished_tracks.clone(),
+                        start_time,
+                        channels: audio_info.channels as u8,
+                        track_eos_ms: buffer_settings.lock().unwrap().track_eos_ms,
+                    },
+                    abort.clone(),
+                );
+            }
+        } else {
+            for (slot_index, source) in active_sources.iter().enumerate() {
+                if let Some(track_key) = active_track_keys.get(slot_index).copied() {
+                    spawn_source_track(slot_index, track_key, source, start_time);
+                }
+            }
+        }
 
         if warmup_samples > 0 {
             let warmup_start = Instant::now();
@@ -244,10 +325,47 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer, f
                 break;
             }
 
+            let current_playback_ms = if audio_info.sample_rate > 0 {
+                (playback_frames.saturating_mul(1000)) / audio_info.sample_rate as u64
+            } else {
+                0
+            };
+            while next_shuffle_event_index < upcoming_events.len()
+                && upcoming_events[next_shuffle_event_index].at_ms <= current_playback_ms
+            {
+                let event = &upcoming_events[next_shuffle_event_index];
+                let event_seconds = event.at_ms as f64 / 1000.0;
+                for slot_index in 0..event.sources.len() {
+                    if slot_index >= active_sources.len() {
+                        continue;
+                    }
+                    if event.sources[slot_index] == active_sources[slot_index] {
+                        continue;
+                    }
+                    let new_key = next_track_key;
+                    next_track_key = next_track_key.saturating_add(1);
+                    active_sources[slot_index] = event.sources[slot_index].clone();
+                    active_track_keys[slot_index] = new_key;
+                    spawn_source_track(
+                        slot_index,
+                        new_key,
+                        &active_sources[slot_index],
+                        event_seconds,
+                    );
+                }
+                next_shuffle_event_index += 1;
+            }
+            let active_key_set: HashSet<u16> = active_track_keys.iter().copied().collect();
+
             let buffer_snapshot: Vec<(u16, TrackBuffer)> = {
                 let map = hash_buffer_copy.lock().unwrap();
                 map.iter().map(|(k, v)| (*k, v.clone())).collect()
             };
+            let active_buffer_snapshot: Vec<(u16, TrackBuffer)> = buffer_snapshot
+                .iter()
+                .filter(|(track_key, _)| active_key_set.contains(track_key))
+                .map(|(track_key, buffer)| (*track_key, buffer.clone()))
+                .collect();
             let weights_snapshot: HashMap<u16, f32> = {
                 let weights = track_weights.lock().unwrap();
                 weights.clone()
@@ -263,11 +381,14 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer, f
             for (track_key, buffer) in buffer_snapshot.iter() {
                 let len = buffer.lock().unwrap().len();
                 if len == 0 {
-                    if finished_snapshot.contains(track_key) {
+                    if finished_snapshot.contains(track_key) && !active_key_set.contains(track_key)
+                    {
                         removable_tracks.push(*track_key);
                         continue;
                     }
-                    all_buffers_full = false;
+                    if active_key_set.contains(track_key) {
+                        all_buffers_full = false;
+                    }
                 }
             }
 
@@ -278,13 +399,16 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer, f
                 }
             }
 
-            if buffer_snapshot.is_empty() && effects_buffer.lock().unwrap().len() == 0 {
+            if active_buffer_snapshot.is_empty()
+                && effects_buffer.lock().unwrap().len() == 0
+                && next_shuffle_event_index >= upcoming_events.len()
+            {
                 break;
             }
 
             if !started {
                 let finished = finished_tracks.lock().unwrap();
-                let ready = buffer_snapshot.iter().all(|(track_key, buffer)| {
+                let ready = active_buffer_snapshot.iter().all(|(track_key, buffer)| {
                     let len = buffer.lock().unwrap().len();
                     finished.contains(track_key) || len >= start_samples
                 });
@@ -331,14 +455,17 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer, f
             }
 
             let effects_len = effects_buffer.lock().unwrap().len();
-            let all_tracks_finished = finished_snapshot.len() >= prot_key_count;
-            let active_min_len = buffer_snapshot
+            let all_tracks_finished = active_track_keys
+                .iter()
+                .all(|track_key| finished_snapshot.contains(track_key))
+                && next_shuffle_event_index >= upcoming_events.len();
+            let active_min_len = active_buffer_snapshot
                 .iter()
                 .filter(|(track_key, _)| !finished_snapshot.contains(track_key))
                 .map(|(_, buffer)| buffer.lock().unwrap().len())
                 .min()
                 .unwrap_or(0);
-            let finished_min_len = buffer_snapshot
+            let finished_min_len = active_buffer_snapshot
                 .iter()
                 .filter(|(track_key, _)| finished_snapshot.contains(track_key))
                 .map(|(_, buffer)| buffer.lock().unwrap().len())
@@ -347,7 +474,7 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer, f
             let has_tail = effects_len > 0;
             let should_output_tail = has_tail;
             let should_mix_tracks = !has_tail
-                && !buffer_snapshot.is_empty()
+                && !active_buffer_snapshot.is_empty()
                 && ((!all_tracks_finished && active_min_len >= min_mix_samples)
                     || (all_tracks_finished && finished_min_len > 0));
 
@@ -357,7 +484,7 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer, f
                 && last_startup_log.elapsed().as_millis() >= 200
             {
                 let mut sizes: Vec<String> = Vec::new();
-                for (track_key, buffer) in buffer_snapshot.iter() {
+                for (track_key, buffer) in active_buffer_snapshot.iter() {
                     let len = buffer.lock().unwrap().len();
                     sizes.push(format!("{}={}", track_key, len));
                 }
@@ -381,7 +508,7 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer, f
                         active_min_len,
                         finished_min_len,
                         effects_len,
-                        buffer_snapshot.len(),
+                        active_buffer_snapshot.len(),
                         finished_snapshot.len()
                     );
                     last_underrun_log = Instant::now();
@@ -392,7 +519,7 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer, f
                 }
             }
 
-            if buffer_snapshot.is_empty() && effects_len == 0 && all_tracks_finished {
+            if active_buffer_snapshot.is_empty() && effects_len == 0 && all_tracks_finished {
                 let drained = {
                     let mut effects_guard = effects.lock().unwrap();
                     let mut current = Vec::new();
@@ -416,21 +543,36 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer, f
                 let sample_rate = audio_info.sample_rate as u32;
 
                 let samples = if should_mix_tracks {
-                    let current_chunk = if !all_tracks_finished && active_min_len >= min_mix_samples
+                    let mut current_chunk =
+                        if !all_tracks_finished && active_min_len >= min_mix_samples {
+                            min_mix_samples
+                        } else if all_tracks_finished && finished_min_len > 0 {
+                            finished_min_len
+                        } else {
+                            0
+                        };
+                    if next_shuffle_event_index < upcoming_events.len()
+                        && audio_info.sample_rate > 0
                     {
-                        min_mix_samples
-                    } else if all_tracks_finished && finished_min_len > 0 {
-                        finished_min_len
-                    } else {
-                        0
-                    };
-                    let current_chunk = current_chunk.min(mix_buffer.len());
+                        let next_event_ms = upcoming_events[next_shuffle_event_index].at_ms;
+                        if next_event_ms > current_playback_ms {
+                            let remaining_ms = next_event_ms - current_playback_ms;
+                            let frames_until_event =
+                                (remaining_ms.saturating_mul(audio_info.sample_rate as u64)) / 1000;
+                            let samples_until_event =
+                                frames_until_event as usize * input_channels.max(1) as usize;
+                            if samples_until_event > 0 {
+                                current_chunk = current_chunk.min(samples_until_event);
+                            }
+                        }
+                    }
+                    current_chunk = current_chunk.min(mix_buffer.len());
 
                     if current_chunk == 0 {
                         Vec::new()
                     } else {
                         mix_buffer.fill(0.0);
-                        for (track_key, buffer) in buffer_snapshot.iter() {
+                        for (track_key, buffer) in active_buffer_snapshot.iter() {
                             let weight = weights_snapshot.get(track_key).copied().unwrap_or(1.0);
                             let channel_gains =
                                 channel_gains_snapshot.get(track_key).map(Vec::as_slice);
@@ -690,9 +832,9 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer, f
                             metrics.pop_count = pop_count;
                             metrics.clip_count = clip_count;
                             metrics.nan_count = nan_count;
-                            metrics.track_key_count = buffer_snapshot.len();
+                            metrics.track_key_count = active_buffer_snapshot.len();
                             metrics.finished_track_count = finished_snapshot.len();
-                            metrics.prot_key_count = prot_key_count;
+                            metrics.prot_key_count = active_track_keys.len();
                         }
 
                         processed
@@ -710,6 +852,7 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer, f
                 };
 
                 if !samples.is_empty() {
+                    let frame_count = samples.len() as u64 / input_channels.max(1) as u64;
                     let length_in_seconds = samples.len() as f64
                         / audio_info.sample_rate as f64
                         / audio_info.channels as f64;
@@ -721,6 +864,7 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer, f
                             error!("Failed to send samples: {}", e);
                         }
                     }
+                    playback_frames = playback_frames.saturating_add(frame_count);
                     did_work = true;
                 }
             }
