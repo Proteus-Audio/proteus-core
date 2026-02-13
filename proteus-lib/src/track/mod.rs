@@ -2,7 +2,7 @@
 
 mod buffer;
 mod container;
-mod convert;
+pub(crate) mod convert;
 mod single;
 
 pub use container::{buffer_container_tracks, ContainerTrackArgs};

@@ -1,47 +1,11 @@
 use log::warn;
-use symphonia::core::audio::{AudioBufferRef, Channels, Signal};
+use symphonia::core::audio::Channels;
 use symphonia::core::errors::Error;
 
 use crate::tools::tools::open_file;
+use crate::track::convert::for_each_channel_sample;
 
 use super::{PeakWindow, PeaksData, PeaksError};
-
-fn convert_signed_24bit_to_f32(sample: i32) -> f32 {
-    let shifted_sample = sample << 8 >> 8;
-    shifted_sample as f32 / 2f32.powi(23)
-}
-
-fn convert_unsigned_24bit_to_f32(sample: u32) -> f32 {
-    let shifted_sample = sample as i32 - 2i32.pow(23);
-    shifted_sample as f32 / 2f32.powi(23)
-}
-
-fn convert_signed_16bit_to_f32(sample: i16) -> f32 {
-    sample as f32 / 2f32.powi(15)
-}
-
-fn convert_unsigned_16bit_to_f32(sample: u16) -> f32 {
-    let shifted_sample = sample as i16 - 2i16.pow(15);
-    shifted_sample as f32 / 2f32.powi(15)
-}
-
-fn convert_signed_8bit_to_f32(sample: i8) -> f32 {
-    sample as f32 / 2f32.powi(7)
-}
-
-fn convert_unsigned_8bit_to_f32(sample: u8) -> f32 {
-    let shifted_sample = sample as i16 - 2i16.pow(7);
-    shifted_sample as f32 / 2f32.powi(7)
-}
-
-fn convert_signed_32bit_to_f32(sample: i32) -> f32 {
-    sample as f32 / 2f32.powi(31)
-}
-
-fn convert_unsigned_32bit_to_f32(sample: u32) -> f32 {
-    let shifted_sample = sample as i64 - 2i64.pow(31);
-    shifted_sample as f32 / 2f32.powi(31)
-}
 
 #[derive(Debug)]
 struct ChannelAccumulator {
@@ -146,108 +110,14 @@ pub(super) fn extract_peaks_from_audio(
                 let decoded_channels = decoded.spec().channels.count();
                 let channel_limit = channels.min(decoded_channels);
 
-                match decoded {
-                    AudioBufferRef::U8(buf) => process_channels(
-                        channel_limit,
-                        &mut accumulators,
-                        window_size,
-                        |channel, push| {
-                            for &sample in buf.chan(channel) {
-                                push(convert_unsigned_8bit_to_f32(sample));
-                            }
-                        },
-                    ),
-                    AudioBufferRef::S8(buf) => process_channels(
-                        channel_limit,
-                        &mut accumulators,
-                        window_size,
-                        |channel, push| {
-                            for &sample in buf.chan(channel) {
-                                push(convert_signed_8bit_to_f32(sample));
-                            }
-                        },
-                    ),
-                    AudioBufferRef::U16(buf) => process_channels(
-                        channel_limit,
-                        &mut accumulators,
-                        window_size,
-                        |channel, push| {
-                            for &sample in buf.chan(channel) {
-                                push(convert_unsigned_16bit_to_f32(sample));
-                            }
-                        },
-                    ),
-                    AudioBufferRef::S16(buf) => process_channels(
-                        channel_limit,
-                        &mut accumulators,
-                        window_size,
-                        |channel, push| {
-                            for &sample in buf.chan(channel) {
-                                push(convert_signed_16bit_to_f32(sample));
-                            }
-                        },
-                    ),
-                    AudioBufferRef::U24(buf) => process_channels(
-                        channel_limit,
-                        &mut accumulators,
-                        window_size,
-                        |channel, push| {
-                            for sample in buf.chan(channel) {
-                                push(convert_unsigned_24bit_to_f32(sample.0));
-                            }
-                        },
-                    ),
-                    AudioBufferRef::S24(buf) => process_channels(
-                        channel_limit,
-                        &mut accumulators,
-                        window_size,
-                        |channel, push| {
-                            for sample in buf.chan(channel) {
-                                push(convert_signed_24bit_to_f32(sample.0));
-                            }
-                        },
-                    ),
-                    AudioBufferRef::U32(buf) => process_channels(
-                        channel_limit,
-                        &mut accumulators,
-                        window_size,
-                        |channel, push| {
-                            for &sample in buf.chan(channel) {
-                                push(convert_unsigned_32bit_to_f32(sample));
-                            }
-                        },
-                    ),
-                    AudioBufferRef::S32(buf) => process_channels(
-                        channel_limit,
-                        &mut accumulators,
-                        window_size,
-                        |channel, push| {
-                            for &sample in buf.chan(channel) {
-                                push(convert_signed_32bit_to_f32(sample));
-                            }
-                        },
-                    ),
-                    AudioBufferRef::F32(buf) => process_channels(
-                        channel_limit,
-                        &mut accumulators,
-                        window_size,
-                        |channel, push| {
-                            for &sample in buf.chan(channel) {
-                                push(sample);
-                            }
-                        },
-                    ),
-                    AudioBufferRef::F64(buf) => process_channels(
-                        channel_limit,
-                        &mut accumulators,
-                        window_size,
-                        |channel, push| {
-                            for &sample in buf.chan(channel) {
-                                push(sample as f32);
-                            }
-                        },
-                    ),
-                }
+                process_channels(
+                    channel_limit,
+                    &mut accumulators,
+                    window_size,
+                    |channel, push| {
+                        for_each_channel_sample(&decoded, channel, |sample| push(sample))
+                    },
+                );
             }
             Err(Error::DecodeError(err)) => {
                 warn!("decode error: {}", err);
