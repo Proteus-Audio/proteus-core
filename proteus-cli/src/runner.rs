@@ -408,7 +408,7 @@ fn run_peaks_write(input_audio: &str, output_peaks: &str) -> i32 {
 
 fn run_peaks_read(peaks_file: &str, start: Option<f64>, end: Option<f64>) -> i32 {
     let peaks = match (start, end) {
-        (None, None) => match proteus_lib::peaks::get_peaks(peaks_file) {
+        (None, None) => match proteus_lib::peaks::get_all_peaks(peaks_file) {
             Ok(peaks) => peaks,
             Err(err) => {
                 error!("Failed to read peaks: {}", err);

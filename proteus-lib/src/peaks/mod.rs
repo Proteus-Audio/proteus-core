@@ -21,6 +21,23 @@ pub struct PeaksData {
     pub channels: Vec<Vec<PeakWindow>>,
 }
 
+/// Query options for reading peaks from a binary peaks file.
+#[derive(Debug, Clone, Default)]
+pub struct GetPeaksOptions {
+    /// Start timestamp in seconds (inclusive). If omitted, reads from file start.
+    pub start_seconds: Option<f64>,
+    /// End timestamp in seconds (exclusive). If omitted, reads to file end.
+    pub end_seconds: Option<f64>,
+    /// Maximum number of peak windows to return per channel.
+    ///
+    /// If the range contains fewer peaks than requested, all peaks are returned.
+    pub target_peaks: Option<usize>,
+    /// Maximum number of channels to return.
+    ///
+    /// Channels are selected from index 0 upward.
+    pub channels: Option<usize>,
+}
+
 /// Decode an audio file and write its peaks to a binary file.
 ///
 /// # Arguments
@@ -38,14 +55,29 @@ pub fn write_peaks(input_audio_file: &str, output_peaks_file: &str) -> Result<()
 ///
 /// # Arguments
 /// * `peaks_file` - Path to a binary peaks file previously written by [`write_peaks`].
+/// * `options` - Query options for range, peak count, and channel count.
+///
+/// # Returns
+/// Per-channel peak data after applying range/channel/downsample options.
+///
+/// # Errors
+/// Returns an error if the file cannot be read or has an invalid peaks format.
+pub fn get_peaks(peaks_file: &str, options: GetPeaksOptions) -> Result<PeaksData, PeaksError> {
+    format::read_peaks_with_options(peaks_file, &options)
+}
+
+/// Read all channels and all peaks from a binary peaks file.
+///
+/// # Arguments
+/// * `peaks_file` - Path to a binary peaks file previously written by [`write_peaks`].
 ///
 /// # Returns
 /// Full per-channel peak data.
 ///
 /// # Errors
 /// Returns an error if the file cannot be read or has an invalid peaks format.
-pub fn get_peaks(peaks_file: &str) -> Result<PeaksData, PeaksError> {
-    format::read_peaks_file(peaks_file)
+pub fn get_all_peaks(peaks_file: &str) -> Result<PeaksData, PeaksError> {
+    get_peaks(peaks_file, GetPeaksOptions::default())
 }
 
 /// Read peaks from a binary peaks file for a specific time range in seconds.
@@ -65,7 +97,14 @@ pub fn get_peaks_in_range(
     start_seconds: f64,
     end_seconds: f64,
 ) -> Result<PeaksData, PeaksError> {
-    format::read_peaks_in_range(peaks_file, start_seconds, end_seconds)
+    get_peaks(
+        peaks_file,
+        GetPeaksOptions {
+            start_seconds: Some(start_seconds),
+            end_seconds: Some(end_seconds),
+            ..Default::default()
+        },
+    )
 }
 
 /// Decode an audio file directly into in-memory peaks.

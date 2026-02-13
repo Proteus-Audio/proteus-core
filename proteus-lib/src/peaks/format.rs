@@ -1,7 +1,7 @@
 use std::fs::File;
 use std::io::{BufReader, BufWriter, Read, Seek, SeekFrom, Write};
 
-use super::{PeakWindow, PeaksData, PeaksError};
+use super::{GetPeaksOptions, PeakWindow, PeaksData, PeaksError};
 
 const MAGIC: [u8; 8] = *b"PPEAKS01";
 const VERSION: u16 = 1;
@@ -63,42 +63,80 @@ pub(crate) fn write_peaks_file(path: &str, peaks: &PeaksData) -> Result<(), Peak
     Ok(())
 }
 
-pub(crate) fn read_peaks_file(path: &str) -> Result<PeaksData, PeaksError> {
+pub(crate) fn read_peaks_with_options(
+    path: &str,
+    options: &GetPeaksOptions,
+) -> Result<PeaksData, PeaksError> {
+    if options.target_peaks == Some(0) {
+        return Err(PeaksError::InvalidFormat(
+            "target_peaks must be greater than zero".to_string(),
+        ));
+    }
+
+    if options.channels == Some(0) {
+        return Err(PeaksError::InvalidFormat(
+            "channels must be greater than zero".to_string(),
+        ));
+    }
+
     let mut reader = BufReader::new(File::open(path)?);
     let header = read_header(&mut reader)?;
-    read_peaks_by_indices(&mut reader, &header, 0, header.peak_count)
+    let (start_peak, end_peak) =
+        compute_peak_range(&header, options.start_seconds, options.end_seconds)?;
+    let mut peaks = read_peaks_by_indices(&mut reader, &header, start_peak, end_peak)?;
+
+    if let Some(requested_channels) = options.channels {
+        peaks
+            .channels
+            .truncate(requested_channels.min(peaks.channels.len()));
+    }
+
+    if let Some(target_peaks) = options.target_peaks {
+        downsample_peaks(&mut peaks, target_peaks);
+    }
+
+    Ok(peaks)
 }
 
-pub(crate) fn read_peaks_in_range(
-    path: &str,
-    start_seconds: f64,
-    end_seconds: f64,
-) -> Result<PeaksData, PeaksError> {
-    if !start_seconds.is_finite() || !end_seconds.is_finite() {
+fn compute_peak_range(
+    header: &Header,
+    start_seconds: Option<f64>,
+    end_seconds: Option<f64>,
+) -> Result<(u64, u64), PeaksError> {
+    let mut start = start_seconds.unwrap_or(0.0);
+    let mut end = end_seconds.unwrap_or(f64::MAX);
+
+    if !start.is_finite() || !end.is_finite() {
         return Err(PeaksError::InvalidFormat(
             "timestamps must be finite numbers".to_string(),
         ));
     }
 
-    if start_seconds < 0.0 || end_seconds < 0.0 {
+    if start < 0.0 || end < 0.0 {
         return Err(PeaksError::InvalidFormat(
             "timestamps must be >= 0.0".to_string(),
         ));
     }
 
-    if end_seconds < start_seconds {
+    if end < start {
         return Err(PeaksError::InvalidFormat(
             "end_seconds must be >= start_seconds".to_string(),
         ));
     }
 
-    let mut reader = BufReader::new(File::open(path)?);
-    let header = read_header(&mut reader)?;
     let samples_per_peak = u64::from(header.window_size);
     let sample_rate = f64::from(header.sample_rate);
 
-    let start_sample = (start_seconds * sample_rate).floor() as u64;
-    let end_sample = (end_seconds * sample_rate).ceil() as u64;
+    if end == f64::MAX {
+        end = header.peak_count as f64 * f64::from(header.window_size) / sample_rate;
+    }
+
+    // Keep values stable for very large ranges.
+    start = start.min(u64::MAX as f64 / sample_rate);
+    end = end.min(u64::MAX as f64 / sample_rate);
+
+    let start_sample = (start * sample_rate).floor() as u64;
+    let end_sample = (end * sample_rate).ceil() as u64;
 
     let start_peak = start_sample / samples_per_peak;
     let mut end_peak = end_sample.div_ceil(samples_per_peak);
@@ -108,7 +146,50 @@ pub(crate) fn read_peaks_in_range(
     end_peak = end_peak.min(peak_count);
     let clamped_end = end_peak.max(clamped_start);
 
-    read_peaks_by_indices(&mut reader, &header, clamped_start, clamped_end)
+    Ok((clamped_start, clamped_end))
+}
+
+fn downsample_peaks(peaks: &mut PeaksData, target_peaks: usize) {
+    if peaks.channels.is_empty() {
+        return;
+    }
+
+    let existing_peaks = peaks.channels[0].len();
+    if existing_peaks <= target_peaks {
+        return;
+    }
+
+    for channel in &mut peaks.channels {
+        *channel = average_reduce_channel(channel, target_peaks);
+    }
+}
+
+fn average_reduce_channel(channel: &[PeakWindow], target_peaks: usize) -> Vec<PeakWindow> {
+    let source_len = channel.len();
+    if source_len <= target_peaks {
+        return channel.to_vec();
+    }
+
+    let mut reduced = Vec::with_capacity(target_peaks);
+    for i in 0..target_peaks {
+        let start = i * source_len / target_peaks;
+        let end = ((i + 1) * source_len / target_peaks).max(start + 1);
+        let window = &channel[start..end.min(source_len)];
+
+        let mut sum_max = 0.0_f32;
+        let mut sum_min = 0.0_f32;
+        for peak in window {
+            sum_max += peak.max;
+            sum_min += peak.min;
+        }
+        let count = window.len() as f32;
+        reduced.push(PeakWindow {
+            max: sum_max / count,
+            min: sum_min / count,
+        });
+    }
+
+    reduced
 }
 
 fn read_peaks_by_indices<R: Read + Seek>(
@@ -319,6 +400,110 @@ mod tests {
         assert_eq!(slice.channels[0].len(), 2);
         assert_eq!(slice.channels[0][0].max, 2.0);
         assert_eq!(slice.channels[0][1].max, 3.0);
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn reads_with_options_channel_limit_and_reduction() {
+        let path = test_file_path();
+        let data = PeaksData {
+            sample_rate: 20,
+            window_size: 1,
+            channels: vec![
+                vec![
+                    PeakWindow {
+                        max: 1.0,
+                        min: -1.0,
+                    },
+                    PeakWindow {
+                        max: 3.0,
+                        min: -3.0,
+                    },
+                    PeakWindow {
+                        max: 5.0,
+                        min: -5.0,
+                    },
+                    PeakWindow {
+                        max: 7.0,
+                        min: -7.0,
+                    },
+                ],
+                vec![
+                    PeakWindow {
+                        max: 10.0,
+                        min: -10.0,
+                    },
+                    PeakWindow {
+                        max: 20.0,
+                        min: -20.0,
+                    },
+                    PeakWindow {
+                        max: 30.0,
+                        min: -30.0,
+                    },
+                    PeakWindow {
+                        max: 40.0,
+                        min: -40.0,
+                    },
+                ],
+            ],
+        };
+
+        write_peaks_file(path.to_str().unwrap(), &data).expect("write");
+        let slice = read_peaks_with_options(
+            path.to_str().unwrap(),
+            &GetPeaksOptions {
+                start_seconds: Some(0.0),
+                end_seconds: Some(0.2),
+                target_peaks: Some(2),
+                channels: Some(1),
+            },
+        )
+        .expect("read with options");
+
+        assert_eq!(slice.channels.len(), 1);
+        assert_eq!(slice.channels[0].len(), 2);
+        assert_eq!(slice.channels[0][0].max, 2.0); // average of 1.0 and 3.0
+        assert_eq!(slice.channels[0][1].max, 6.0); // average of 5.0 and 7.0
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn returns_all_when_target_larger_than_available() {
+        let path = test_file_path();
+        let data = PeaksData {
+            sample_rate: 10,
+            window_size: 2,
+            channels: vec![vec![
+                PeakWindow {
+                    max: 1.0,
+                    min: -1.0,
+                },
+                PeakWindow {
+                    max: 2.0,
+                    min: -2.0,
+                },
+            ]],
+        };
+
+        write_peaks_file(path.to_str().unwrap(), &data).expect("write");
+        let slice = read_peaks_with_options(
+            path.to_str().unwrap(),
+            &GetPeaksOptions {
+                start_seconds: Some(0.0),
+                end_seconds: Some(1.0),
+                target_peaks: Some(10),
+                channels: Some(1),
+            },
+        )
+        .expect("read with options");
+
+        assert_eq!(slice.channels.len(), 1);
+        assert_eq!(slice.channels[0].len(), 2);
+        assert_eq!(slice.channels[0][0].max, 1.0);
+        assert_eq!(slice.channels[0][1].max, 2.0);
 
         let _ = std::fs::remove_file(path);
     }
