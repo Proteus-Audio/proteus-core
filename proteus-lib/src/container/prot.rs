@@ -2,6 +2,7 @@
 
 use matroska::Matroska;
 use rand::Rng;
+use std::collections::HashMap;
 
 use log::{error, info, warn};
 
@@ -17,7 +18,7 @@ use crate::dsp::effects::AudioEffect;
 pub struct Prot {
     pub info: Info,
     file_path: Option<String>,
-    file_paths: Option<Vec<Vec<String>>>,
+    file_paths: Option<Vec<PathsTrack>>,
     file_paths_dictionary: Option<Vec<String>>,
     track_ids: Option<Vec<u32>>,
     track_paths: Option<Vec<String>>,
@@ -56,12 +57,12 @@ impl Prot {
     }
 
     /// Build a container from multiple standalone file path sets.
-    pub fn new_from_file_paths(file_paths: &Vec<Vec<String>>) -> Self {
+    pub fn new_from_file_paths(file_paths: Vec<PathsTrack>) -> Self {
         let mut file_paths_dictionary = Vec::new();
         // Add all file paths to file_paths_dictionary
         // but do not add duplicates
-        for file_path in file_paths {
-            for path in file_path {
+        for track in file_paths.clone() {
+            for path in &track.file_paths {
                 if !file_paths_dictionary.contains(path) {
                     file_paths_dictionary.push(path.clone());
                 }
@@ -73,7 +74,7 @@ impl Prot {
         let mut this = Self {
             info,
             file_path: None,
-            file_paths: Some(file_paths.clone()),
+            file_paths: Some(file_paths),
             file_paths_dictionary: Some(file_paths_dictionary),
             track_ids: None,
             track_paths: None,
@@ -89,6 +90,15 @@ impl Prot {
         this
     }
 
+    /// Legacy constructor for backwards compatibility.
+    pub fn new_from_file_paths_legacy(file_paths: &Vec<Vec<String>>) -> Self {
+        let mut paths_track_list = Vec::new();
+        for track in file_paths {
+            paths_track_list.push(PathsTrack::new_from_file_paths(track.clone()));
+        }
+        Self::new_from_file_paths(paths_track_list)
+    }
+
     // fn get_duration_from_file_path(file_path: &String) -> f64 {
     //     let file = std::fs::File::open(file_path).unwrap();
     //     let symphonia: Symphonia = Symphonia::open(file).expect("Could not open file");
@@ -101,25 +111,34 @@ impl Prot {
         if let Some(file_paths) = &self.file_paths {
             // Choose random file path from each file_paths array
             let mut track_paths: Vec<String> = Vec::new();
-            for file_path in file_paths {
-                let random_number = rand::thread_rng().gen_range(0..file_path.len());
-                let track_path = file_path[random_number].clone();
-
-                let index_in_dictionary = self
-                    .file_paths_dictionary
-                    .as_ref()
-                    .unwrap()
-                    .iter()
-                    .position(|x| *x == track_path)
-                    .unwrap();
-                let duration = self.info.get_duration(index_in_dictionary as u32).unwrap();
-
-                if duration > longest_duration {
-                    longest_duration = duration;
-                    self.duration = longest_duration;
+            for track in file_paths {
+                if track.file_paths.is_empty() {
+                    continue;
                 }
+                let selections = track.selections_count as usize;
+                if selections == 0 {
+                    continue;
+                }
+                for _ in 0..selections {
+                    let random_number = rand::thread_rng().gen_range(0..track.file_paths.len());
+                    let track_path = track.file_paths[random_number].clone();
 
-                track_paths.push(track_path);
+                    let index_in_dictionary = self
+                        .file_paths_dictionary
+                        .as_ref()
+                        .unwrap()
+                        .iter()
+                        .position(|x| *x == track_path)
+                        .unwrap();
+                    let duration = self.info.get_duration(index_in_dictionary as u32).unwrap();
+
+                    if duration > longest_duration {
+                        longest_duration = duration;
+                        self.duration = longest_duration;
+                    }
+
+                    track_paths.push(track_path);
+                }
             }
 
             self.track_paths = Some(track_paths);
@@ -153,6 +172,15 @@ impl Prot {
                     );
                 }
                 PlaySettingsFile::V2(file) => {
+                    collect_tracks_from_ids(
+                        &file.settings.inner().tracks,
+                        &mut track_index_array,
+                        &mut longest_duration,
+                        &self.info,
+                        &mut self.duration,
+                    );
+                }
+                PlaySettingsFile::V3(file) => {
                     collect_tracks_from_ids(
                         &file.settings.inner().tracks,
                         &mut track_index_array,
@@ -217,6 +245,9 @@ impl Prot {
                 self.effects = Some(file.settings.inner().effects.clone());
             }
             PlaySettingsFile::V2(file) => {
+                self.effects = Some(file.settings.inner().effects.clone());
+            }
+            PlaySettingsFile::V3(file) => {
                 self.effects = Some(file.settings.inner().effects.clone());
             }
             _ => {}
@@ -327,8 +358,31 @@ impl Prot {
         &self.duration
     }
 
+    /// Return per-track `(level, pan)` settings keyed by track key.
+    pub fn get_track_mix_settings(&self) -> HashMap<u16, (f32, f32)> {
+        let mut settings = HashMap::new();
+
+        let tracks = match self.play_settings.as_ref() {
+            Some(PlaySettingsFile::V1(file)) => Some(&file.settings.inner().tracks),
+            Some(PlaySettingsFile::V2(file)) => Some(&file.settings.inner().tracks),
+            _ => None,
+        };
+
+        if let Some(tracks) = tracks {
+            for (index, track) in tracks.iter().enumerate() {
+                settings.insert(index as u16, (track.level, track.pan));
+            }
+        }
+
+        settings
+    }
+
     /// Return the number of selected tracks.
     pub fn get_length(&self) -> usize {
+        if let Some(track_paths) = &self.track_paths {
+            return track_paths.len();
+        }
+
         if let Some(file_paths) = &self.file_paths {
             return file_paths.len();
         }
@@ -340,11 +394,106 @@ impl Prot {
         0
     }
 
+    /// Return the number of possible unique selections based on track settings.
+    pub fn count_possible_combinations(&self) -> Option<u128> {
+        if let Some(file_paths) = &self.file_paths {
+            return count_paths_track_combinations(file_paths);
+        }
+
+        let play_settings = self.play_settings.as_ref()?;
+        match play_settings {
+            PlaySettingsFile::Legacy(file) => {
+                count_legacy_track_combinations(file.settings.inner())
+            }
+            PlaySettingsFile::V1(file) => {
+                count_settings_track_combinations(&file.settings.inner().tracks)
+            }
+            PlaySettingsFile::V2(file) => {
+                count_settings_track_combinations(&file.settings.inner().tracks)
+            }
+            PlaySettingsFile::V3(file) => {
+                count_settings_track_combinations(&file.settings.inner().tracks)
+            }
+            PlaySettingsFile::Unknown { .. } => None,
+        }
+    }
+
     /// Return the unique file paths used for a multi-file container.
     pub fn get_file_paths_dictionary(&self) -> Vec<String> {
         match &self.file_paths_dictionary {
             Some(dictionary) => dictionary.to_vec(),
             None => Vec::new(),
+        }
+    }
+}
+
+/// Standalone file-path track configuration.
+#[derive(Debug, Clone)]
+pub struct PathsTrack {
+    /// Candidate file paths for this track.
+    pub file_paths: Vec<String>,
+    /// Track gain scalar.
+    pub level: f32,
+    /// Track pan position.
+    pub pan: f32,
+    /// Number of selections to pick per refresh.
+    pub selections_count: u32,
+}
+
+fn count_settings_track_combinations(tracks: &[SettingsTrack]) -> Option<u128> {
+    let mut total: u128 = 1;
+    for track in tracks {
+        let choices = track.ids.len() as u128;
+        let selections = track.selections_count;
+        let count = checked_pow(choices, selections)?;
+        total = total.checked_mul(count)?;
+    }
+    Some(total)
+}
+
+fn count_paths_track_combinations(tracks: &[PathsTrack]) -> Option<u128> {
+    let mut total: u128 = 1;
+    for track in tracks {
+        let choices = track.file_paths.len() as u128;
+        let selections = track.selections_count;
+        let count = checked_pow(choices, selections)?;
+        total = total.checked_mul(count)?;
+    }
+    Some(total)
+}
+
+fn count_legacy_track_combinations(settings: &PlaySettingsLegacy) -> Option<u128> {
+    let mut total: u128 = 1;
+    for track in &settings.tracks {
+        let choices = track.length.unwrap_or(0) as u128;
+        let count = checked_pow(choices, 1)?;
+        total = total.checked_mul(count)?;
+    }
+    Some(total)
+}
+
+fn checked_pow(base: u128, exp: u32) -> Option<u128> {
+    if exp == 0 {
+        return Some(1);
+    }
+    if base == 0 {
+        return Some(1);
+    }
+    let mut result: u128 = 1;
+    for _ in 0..exp {
+        result = result.checked_mul(base)?;
+    }
+    Some(result)
+}
+
+impl PathsTrack {
+    /// Create a new PathsTrack from a vector of file paths.
+    pub fn new_from_file_paths(file_paths: Vec<String>) -> Self {
+        PathsTrack {
+            file_paths,
+            level: 1.0,
+            pan: 0.0,
+            selections_count: 1,
         }
     }
 }
@@ -360,15 +509,21 @@ fn collect_tracks_from_ids(
         if track.ids.is_empty() {
             continue;
         }
-        let random_number = rand::thread_rng().gen_range(0..track.ids.len());
-        let index = track.ids[random_number];
-        if let Some(track_duration) = info.get_duration(index) {
-            if track_duration > *longest_duration {
-                *longest_duration = track_duration;
-                *total_duration = *longest_duration;
-            }
+        let selections = track.selections_count as usize;
+        if selections == 0 {
+            continue;
         }
-        track_index_array.push(index);
+        for _ in 0..selections {
+            let random_number = rand::thread_rng().gen_range(0..track.ids.len());
+            let index = track.ids[random_number];
+            if let Some(track_duration) = info.get_duration(index) {
+                if track_duration > *longest_duration {
+                    *longest_duration = track_duration;
+                    *total_duration = *longest_duration;
+                }
+            }
+            track_index_array.push(index);
+        }
     }
 }
 

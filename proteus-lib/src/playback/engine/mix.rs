@@ -42,6 +42,7 @@ pub struct MixThreadArgs {
     pub buffer_notify: Arc<std::sync::Condvar>,
     pub effects_buffer: Arc<Mutex<Bounded<Vec<f32>>>>,
     pub track_weights: Arc<Mutex<HashMap<u16, f32>>>,
+    pub track_channel_gains: Arc<Mutex<HashMap<u16, Vec<f32>>>>,
     pub effects_reset: Arc<AtomicU64>,
     pub finished_tracks: Arc<Mutex<Vec<u16>>>,
     pub prot: Arc<Mutex<Prot>>,
@@ -62,6 +63,7 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer, f
         buffer_notify,
         effects_buffer,
         track_weights,
+        track_channel_gains,
         effects_reset,
         finished_tracks,
         prot,
@@ -206,9 +208,8 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer, f
             })
         };
         if has_convolution {
-            let batch_samples = convolution_reverb::preferred_batch_samples(
-                audio_info.channels.max(1) as usize,
-            );
+            let batch_samples =
+                convolution_reverb::preferred_batch_samples(audio_info.channels.max(1) as usize);
             if batch_samples > 0 {
                 min_mix_samples =
                     ((min_mix_samples + batch_samples - 1) / batch_samples) * batch_samples;
@@ -250,6 +251,10 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer, f
             let weights_snapshot: HashMap<u16, f32> = {
                 let weights = track_weights.lock().unwrap();
                 weights.clone()
+            };
+            let channel_gains_snapshot: HashMap<u16, Vec<f32>> = {
+                let gains = track_channel_gains.lock().unwrap();
+                gains.clone()
             };
             let mut removable_tracks: Vec<u16> = Vec::new();
 
@@ -427,11 +432,20 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer, f
                         mix_buffer.fill(0.0);
                         for (track_key, buffer) in buffer_snapshot.iter() {
                             let weight = weights_snapshot.get(track_key).copied().unwrap_or(1.0);
+                            let channel_gains =
+                                channel_gains_snapshot.get(track_key).map(Vec::as_slice);
+                            let channel_count = input_channels.max(1) as usize;
                             let mut buffer = buffer.lock().unwrap();
                             let take = buffer.len().min(current_chunk);
-                            for sample in mix_buffer.iter_mut().take(take) {
+                            for (sample_index, sample) in
+                                mix_buffer.iter_mut().take(take).enumerate()
+                            {
                                 if let Some(value) = buffer.pop() {
-                                    *sample += value * weight;
+                                    let gain = channel_gains
+                                        .and_then(|gains| gains.get(sample_index % channel_count))
+                                        .copied()
+                                        .unwrap_or(1.0);
+                                    *sample += value * weight * gain;
                                 }
                             }
                         }

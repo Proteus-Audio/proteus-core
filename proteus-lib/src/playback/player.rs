@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 
 use log::{error, info, warn};
 
-use crate::container::prot::Prot;
+use crate::container::prot::{PathsTrack, Prot};
 use crate::diagnostics::reporter::{Report, Reporter};
 use crate::dsp::effects::convolution_reverb::{parse_impulse_response_string, ImpulseResponseSpec};
 use crate::playback::output_meter::OutputMeter;
@@ -101,13 +101,27 @@ impl Player {
     }
 
     /// Create a new player for a set of standalone file paths.
-    pub fn new_from_file_paths(file_paths: &Vec<Vec<String>>) -> Self {
+    pub fn new_from_file_paths(file_paths: Vec<PathsTrack>) -> Self {
         let this = Self::new_from_path_or_paths(None, Some(file_paths));
         this
     }
 
+    /// Create a new player for a set of standalone file paths.
+    pub fn new_from_file_paths_legacy(file_paths: Vec<Vec<String>>) -> Self {
+        let this = Self::new_from_path_or_paths(
+            None,
+            Some(
+                file_paths
+                    .into_iter()
+                    .map(|paths| PathsTrack::new_from_file_paths(paths))
+                    .collect(),
+            ),
+        );
+        this
+    }
+
     /// Create a player from either a container path or standalone file paths.
-    pub fn new_from_path_or_paths(path: Option<&String>, paths: Option<&Vec<Vec<String>>>) -> Self {
+    pub fn new_from_path_or_paths(path: Option<&String>, paths: Option<Vec<PathsTrack>>) -> Self {
         let (prot, info) = match path {
             Some(path) => {
                 let prot = Arc::new(Mutex::new(Prot::new(path)));
@@ -389,6 +403,14 @@ impl Player {
         settings.start_sink_chunks = chunks;
     }
 
+    /// Configure the maximum sink chunks queued before producer backpressure.
+    ///
+    /// Set to `0` to disable this guard.
+    pub fn set_max_sink_chunks(&self, chunks: usize) {
+        let mut settings = self.buffer_settings.lock().unwrap();
+        settings.max_sink_chunks = chunks;
+    }
+
     /// Configure the startup silence pre-roll (ms).
     pub fn set_startup_silence_ms(&self, ms: f32) {
         let mut settings = self.buffer_settings.lock().unwrap();
@@ -496,16 +518,13 @@ impl Player {
                         if attempt == OUTPUT_STREAM_OPEN_RETRIES {
                             error!(
                                 "failed to open default output stream after {} attempts: {}",
-                                OUTPUT_STREAM_OPEN_RETRIES,
-                                err
+                                OUTPUT_STREAM_OPEN_RETRIES, err
                             );
                             return;
                         }
                         warn!(
                             "open_default_stream attempt {}/{} failed: {}",
-                            attempt,
-                            OUTPUT_STREAM_OPEN_RETRIES,
-                            err
+                            attempt, OUTPUT_STREAM_OPEN_RETRIES, err
                         );
                         thread::sleep(Duration::from_millis(OUTPUT_STREAM_OPEN_RETRY_MS));
                     }
@@ -584,7 +603,6 @@ impl Player {
                     sink.append(silence_buffer);
                     drop(sink);
                 }
-
             }
 
             // ===================== //
@@ -619,7 +637,8 @@ impl Player {
                 }
                 if state == PlayerState::Resuming {
                     let fade_length = if startup_fade_pending.replace(false) {
-                        let startup_fade_ms = buffer_settings_for_state.lock().unwrap().startup_fade_ms;
+                        let startup_fade_ms =
+                            buffer_settings_for_state.lock().unwrap().startup_fade_ms;
                         (startup_fade_ms / 1000.0).max(0.0)
                     } else {
                         0.1
@@ -698,6 +717,32 @@ impl Player {
             let update_sink = |(mixer, length_in_seconds): (SamplesBuffer, f64)| {
                 if playback_id_atomic.load(Ordering::SeqCst) != playback_id {
                     return;
+                }
+                let max_sink_chunks = {
+                    let settings = buffer_settings_for_state.lock().unwrap();
+                    settings.max_sink_chunks
+                };
+                if max_sink_chunks > 0 {
+                    loop {
+                        if abort.load(Ordering::SeqCst) {
+                            return;
+                        }
+                        if playback_id_atomic.load(Ordering::SeqCst) != playback_id {
+                            return;
+                        }
+                        let sink_len = {
+                            let sink = sink_mutex.lock().unwrap();
+                            sink.len()
+                        };
+                        if sink_len < max_sink_chunks {
+                            break;
+                        }
+                        update_chunk_lengths();
+                        if !check_details() {
+                            return;
+                        }
+                        thread::sleep(Duration::from_millis(5));
+                    }
                 }
                 let (delay_ms, late) = {
                     let mut timing = append_timing.lock().unwrap();

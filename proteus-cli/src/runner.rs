@@ -16,8 +16,8 @@ use crossterm::{
 use log::{error, info};
 use proteus_lib::dsp::effects::{
     AudioEffect, CompressorEffect, ConvolutionReverbEffect, DelayReverbEffect,
-    DiffusionReverbEffect, DistortionEffect, GainEffect, HighPassFilterEffect,
-    LimiterEffect, LowPassFilterEffect,
+    DiffusionReverbEffect, DistortionEffect, GainEffect, HighPassFilterEffect, LimiterEffect,
+    LowPassFilterEffect,
 };
 use proteus_lib::playback::player;
 use ratatui::{backend::CrosstermBackend, Terminal};
@@ -39,11 +39,7 @@ pub fn run(args: &ArgMatches, log_buffer: Arc<Mutex<VecDeque<LogLine>>>) -> Resu
                 let print = sub_args.get_flag("print");
                 run_info(file_path, print)
             }
-            "peaks" => {
-                let file_path = sub_args.get_one::<String>("INPUT").unwrap();
-                let limited = sub_args.get_flag("limited");
-                run_peaks(file_path, limited)
-            }
+            "peaks" => run_peaks(sub_args),
             "verify" => {
                 let (verify_cmd, verify_args) = match sub_args.subcommand() {
                     Some((cmd, args)) => (cmd, args),
@@ -126,7 +122,7 @@ pub fn run(args: &ArgMatches, log_buffer: Arc<Mutex<VecDeque<LogLine>>>) -> Resu
     let mut player = if is_container {
         player::Player::new(&file_path)
     } else {
-        player::Player::new_from_file_paths(file_paths.as_ref())
+        player::Player::new_from_file_paths_legacy(file_paths)
     };
     let start_buffer_ms = args
         .get_one::<String>("start-buffer-ms")
@@ -140,6 +136,12 @@ pub fn run(args: &ArgMatches, log_buffer: Arc<Mutex<VecDeque<LogLine>>>) -> Resu
         .parse::<usize>()
         .unwrap();
     player.set_start_sink_chunks(start_sink_chunks);
+    let max_sink_chunks = args
+        .get_one::<String>("max-sink-chunks")
+        .unwrap()
+        .parse::<usize>()
+        .unwrap();
+    player.set_max_sink_chunks(max_sink_chunks);
     let startup_silence_ms = args
         .get_one::<String>("startup-silence-ms")
         .unwrap()
@@ -324,14 +326,148 @@ struct PeaksOutput {
     channels: Vec<PeaksChannel>,
 }
 
-fn run_peaks(file_path: &str, limited: bool) -> i32 {
-    let peaks = proteus_lib::peaks::get_peaks(file_path, limited);
+fn run_peaks(args: &ArgMatches) -> i32 {
+    match args.subcommand() {
+        Some(("json", sub_args)) => {
+            let file_path = sub_args.get_one::<String>("INPUT").unwrap();
+            let limited = sub_args.get_flag("limited");
+            run_peaks_json(file_path, limited)
+        }
+        Some(("write", sub_args)) => {
+            let input_audio = sub_args.get_one::<String>("INPUT").unwrap();
+            let output_peaks = sub_args.get_one::<String>("OUTPUT").unwrap();
+            run_peaks_write(input_audio, output_peaks)
+        }
+        Some(("read", sub_args)) => {
+            let peaks_file = sub_args.get_one::<String>("INPUT").unwrap();
+            let start = match sub_args.get_one::<String>("start") {
+                Some(value) => match value.parse::<f64>() {
+                    Ok(parsed) => Some(parsed),
+                    Err(err) => {
+                        error!("Invalid --start value '{}': {}", value, err);
+                        return -1;
+                    }
+                },
+                None => None,
+            };
+            let end = match sub_args.get_one::<String>("end") {
+                Some(value) => match value.parse::<f64>() {
+                    Ok(parsed) => Some(parsed),
+                    Err(err) => {
+                        error!("Invalid --end value '{}': {}", value, err);
+                        return -1;
+                    }
+                },
+                None => None,
+            };
+            let target_peaks = match sub_args.get_one::<String>("peaks") {
+                Some(value) => match value.parse::<usize>() {
+                    Ok(parsed) => Some(parsed),
+                    Err(err) => {
+                        error!("Invalid --peaks value '{}': {}", value, err);
+                        return -1;
+                    }
+                },
+                None => None,
+            };
+            let channel_count = match sub_args.get_one::<String>("channels") {
+                Some(value) => match value.parse::<usize>() {
+                    Ok(parsed) => Some(parsed),
+                    Err(err) => {
+                        error!("Invalid --channels value '{}': {}", value, err);
+                        return -1;
+                    }
+                },
+                None => None,
+            };
+            run_peaks_read(peaks_file, start, end, target_peaks, channel_count)
+        }
+        Some((unknown, _)) => {
+            error!("Unknown peaks subcommand: {}", unknown);
+            -1
+        }
+        None => {
+            if let Some(file_path) = args.get_one::<String>("INPUT") {
+                // Backwards compatibility for existing usage:
+                // `proteus-cli peaks <audio> [--limited]`
+                let limited = args.get_flag("limited");
+                return run_peaks_json(file_path, limited);
+            }
+
+            error!(
+                "Missing peaks command. Use `peaks json <input>`, `peaks write <input> <output>`, or `peaks read <input>`"
+            );
+            -1
+        }
+    }
+}
+
+fn run_peaks_json(file_path: &str, limited: bool) -> i32 {
+    let peaks = match proteus_lib::peaks::extract_peaks_from_audio(file_path, limited) {
+        Ok(peaks) => peaks,
+        Err(err) => {
+            error!("Failed to extract peaks: {}", err);
+            return -1;
+        }
+    };
+    print_peaks_json(&peaks)
+}
+
+fn run_peaks_write(input_audio: &str, output_peaks: &str) -> i32 {
+    match proteus_lib::peaks::write_peaks(input_audio, output_peaks) {
+        Ok(()) => {
+            println!("Wrote peaks to {}", output_peaks);
+            0
+        }
+        Err(err) => {
+            error!("Failed to write peaks: {}", err);
+            -1
+        }
+    }
+}
+
+fn run_peaks_read(
+    peaks_file: &str,
+    start: Option<f64>,
+    end: Option<f64>,
+    target_peaks: Option<usize>,
+    channel_count: Option<usize>,
+) -> i32 {
+    if (start.is_some() && end.is_none()) || (start.is_none() && end.is_some()) {
+        error!("Both --start and --end must be provided together");
+        return -1;
+    }
+
+    let peaks = match proteus_lib::peaks::get_peaks(
+        peaks_file,
+        proteus_lib::peaks::GetPeaksOptions {
+            start_seconds: start,
+            end_seconds: end,
+            target_peaks,
+            channels: channel_count,
+        },
+    ) {
+        Ok(peaks) => peaks,
+        Err(err) => {
+            error!("Failed to read peaks: {}", err);
+            return -1;
+        }
+    };
+
+    print_peaks_json(&peaks)
+}
+
+fn print_peaks_json(peaks: &proteus_lib::peaks::PeaksData) -> i32 {
     let channels = peaks
-        .into_iter()
+        .channels
+        .iter()
         .map(|channel| PeaksChannel {
             peaks: channel
-                .into_iter()
-                .map(|(max, min)| PeakWindow { max, min })
+                .iter()
+                .map(|peak| PeakWindow {
+                    max: peak.max,
+                    min: peak.min,
+                })
                 .collect(),
         })
         .collect();
