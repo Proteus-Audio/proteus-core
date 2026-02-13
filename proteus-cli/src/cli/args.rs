@@ -210,17 +210,66 @@ pub fn build_cli() -> Command {
                 ),
             true,
         ))
-        .subcommand(with_input_arg(
+        .subcommand(
             Command::new("peaks")
-                .about("Output per-channel waveform peaks as JSON")
+                .about("Extract, write, and read waveform peaks")
+                .arg(
+                    Arg::new("INPUT")
+                        .help("Legacy mode: input audio file path for JSON peak output")
+                        .required(false)
+                        .index(1),
+                )
                 .arg(
                     Arg::new("limited")
                         .long("limited")
                         .action(ArgAction::SetTrue)
                         .help("Only process a single channel"),
-                ),
-            true,
-        ))
+                )
+                .subcommand(with_input_arg(
+                    Command::new("json")
+                        .about("Decode audio and output per-channel waveform peaks as JSON")
+                        .arg(
+                            Arg::new("limited")
+                                .long("limited")
+                                .action(ArgAction::SetTrue)
+                                .help("Only process a single channel"),
+                        ),
+                    true,
+                ))
+                .subcommand(
+                    Command::new("write")
+                        .about("Decode audio and write a binary peaks file")
+                        .arg(
+                            Arg::new("INPUT")
+                                .help("Input audio file path")
+                                .required(true)
+                                .index(1),
+                        )
+                        .arg(
+                            Arg::new("OUTPUT")
+                                .help("Output binary peaks file path")
+                                .required(true)
+                                .index(2),
+                        ),
+                )
+                .subcommand(with_input_arg(
+                    Command::new("read")
+                        .about("Read a binary peaks file and output JSON")
+                        .arg(
+                            Arg::new("start")
+                                .long("start")
+                                .value_name("SECONDS")
+                                .help("Start timestamp in seconds (requires --end)"),
+                        )
+                        .arg(
+                            Arg::new("end")
+                                .long("end")
+                                .value_name("SECONDS")
+                                .help("End timestamp in seconds (requires --start)"),
+                        ),
+                    true,
+                )),
+        )
         .subcommand(
             Command::new("create")
                 .about("Emit default JSON payloads")
