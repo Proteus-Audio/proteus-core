@@ -360,7 +360,27 @@ fn run_peaks(args: &ArgMatches) -> i32 {
                 },
                 None => None,
             };
-            run_peaks_read(peaks_file, start, end)
+            let target_peaks = match sub_args.get_one::<String>("peaks") {
+                Some(value) => match value.parse::<usize>() {
+                    Ok(parsed) => Some(parsed),
+                    Err(err) => {
+                        error!("Invalid --peaks value '{}': {}", value, err);
+                        return -1;
+                    }
+                },
+                None => None,
+            };
+            let channel_count = match sub_args.get_one::<String>("channels") {
+                Some(value) => match value.parse::<usize>() {
+                    Ok(parsed) => Some(parsed),
+                    Err(err) => {
+                        error!("Invalid --channels value '{}': {}", value, err);
+                        return -1;
+                    }
+                },
+                None => None,
+            };
+            run_peaks_read(peaks_file, start, end, target_peaks, channel_count)
         }
         Some((unknown, _)) => {
             error!("Unknown peaks subcommand: {}", unknown);
@@ -406,26 +426,30 @@ fn run_peaks_write(input_audio: &str, output_peaks: &str) -> i32 {
     }
 }
 
-fn run_peaks_read(peaks_file: &str, start: Option<f64>, end: Option<f64>) -> i32 {
-    let peaks = match (start, end) {
-        (None, None) => match proteus_lib::peaks::get_all_peaks(peaks_file) {
-            Ok(peaks) => peaks,
-            Err(err) => {
-                error!("Failed to read peaks: {}", err);
-                return -1;
-            }
+fn run_peaks_read(
+    peaks_file: &str,
+    start: Option<f64>,
+    end: Option<f64>,
+    target_peaks: Option<usize>,
+    channel_count: Option<usize>,
+) -> i32 {
+    if (start.is_some() && end.is_none()) || (start.is_none() && end.is_some()) {
+        error!("Both --start and --end must be provided together");
+        return -1;
+    }
+
+    let peaks = match proteus_lib::peaks::get_peaks(
+        peaks_file,
+        proteus_lib::peaks::GetPeaksOptions {
+            start_seconds: start,
+            end_seconds: end,
+            target_peaks,
+            channels: channel_count,
         },
-        (Some(start_seconds), Some(end_seconds)) => {
-            match proteus_lib::peaks::get_peaks_in_range(peaks_file, start_seconds, end_seconds) {
-                Ok(peaks) => peaks,
-                Err(err) => {
-                    error!("Failed to read peaks in range: {}", err);
-                    return -1;
-                }
-            }
-        }
-        _ => {
-            error!("Both --start and --end must be provided together");
+    ) {
+        Ok(peaks) => peaks,
+        Err(err) => {
+            error!("Failed to read peaks: {}", err);
             return -1;
         }
     };

@@ -266,6 +266,18 @@ pub fn build_cli() -> Command {
                                 .long("end")
                                 .value_name("SECONDS")
                                 .help("End timestamp in seconds (requires --start)"),
+                        )
+                        .arg(
+                            Arg::new("peaks")
+                                .long("peaks")
+                                .value_name("COUNT")
+                                .help("Target number of peaks to return per channel"),
+                        )
+                        .arg(
+                            Arg::new("channels")
+                                .long("channels")
+                                .value_name("COUNT")
+                                .help("Maximum number of channels to return"),
                         ),
                     true,
                 )),
