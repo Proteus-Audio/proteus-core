@@ -76,6 +76,7 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer, f
 
     thread::spawn(move || {
         const MIN_MIX_MS: f32 = 300.0;
+        const SHUFFLE_CROSSFADE_MS: f64 = 5.0;
         #[cfg(feature = "debug")]
         let mut avg_dsp_ms = 0.0_f64;
         #[cfg(feature = "debug")]
@@ -146,6 +147,10 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer, f
         let mut next_shuffle_event_index = 0usize;
         let mut active_track_keys: Vec<u16> = (0..active_sources.len()).map(|i| i as u16).collect();
         let mut next_track_key: u16 = active_track_keys.len() as u16;
+        let crossfade_frames = ((audio_info.sample_rate as f64 * SHUFFLE_CROSSFADE_MS) / 1000.0)
+            .round()
+            .max(1.0) as u32;
+        let mut fading_tracks: HashMap<u16, (u32, u32)> = HashMap::new();
 
         #[cfg(not(feature = "debug"))]
         let _ = &dsp_metrics;
@@ -342,6 +347,9 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer, f
                     if event.sources[slot_index] == active_sources[slot_index] {
                         continue;
                     }
+                    if let Some(old_key) = active_track_keys.get(slot_index).copied() {
+                        fading_tracks.insert(old_key, (crossfade_frames, crossfade_frames));
+                    }
                     let new_key = next_track_key;
                     next_track_key = next_track_key.saturating_add(1);
                     active_sources[slot_index] = event.sources[slot_index].clone();
@@ -356,6 +364,12 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer, f
                 next_shuffle_event_index += 1;
             }
             let active_key_set: HashSet<u16> = active_track_keys.iter().copied().collect();
+            let fading_key_set: HashSet<u16> = fading_tracks.keys().copied().collect();
+            let retained_key_set: HashSet<u16> = active_key_set
+                .iter()
+                .copied()
+                .chain(fading_key_set.iter().copied())
+                .collect();
 
             let buffer_snapshot: Vec<(u16, TrackBuffer)> = {
                 let map = hash_buffer_copy.lock().unwrap();
@@ -364,6 +378,11 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer, f
             let active_buffer_snapshot: Vec<(u16, TrackBuffer)> = buffer_snapshot
                 .iter()
                 .filter(|(track_key, _)| active_key_set.contains(track_key))
+                .map(|(track_key, buffer)| (*track_key, buffer.clone()))
+                .collect();
+            let fading_buffer_snapshot: Vec<(u16, TrackBuffer)> = buffer_snapshot
+                .iter()
+                .filter(|(track_key, _)| fading_key_set.contains(track_key))
                 .map(|(track_key, buffer)| (*track_key, buffer.clone()))
                 .collect();
             let weights_snapshot: HashMap<u16, f32> = {
@@ -381,7 +400,8 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer, f
             for (track_key, buffer) in buffer_snapshot.iter() {
                 let len = buffer.lock().unwrap().len();
                 if len == 0 {
-                    if finished_snapshot.contains(track_key) && !active_key_set.contains(track_key)
+                    if finished_snapshot.contains(track_key)
+                        && !retained_key_set.contains(track_key)
                     {
                         removable_tracks.push(*track_key);
                         continue;
@@ -396,6 +416,7 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer, f
                 let mut map = hash_buffer_copy.lock().unwrap();
                 for track_id in removable_tracks.drain(..) {
                     map.remove(&track_id);
+                    fading_tracks.remove(&track_id);
                 }
             }
 
@@ -590,6 +611,49 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer, f
                                     *sample += value * weight * gain;
                                 }
                             }
+                        }
+                        if !fading_buffer_snapshot.is_empty() {
+                            let channel_count = input_channels.max(1) as usize;
+                            let chunk_frames = (current_chunk / channel_count).max(1) as u32;
+                            for (track_key, buffer) in fading_buffer_snapshot.iter() {
+                                let Some((frames_remaining, total_frames)) =
+                                    fading_tracks.get(track_key).copied()
+                                else {
+                                    continue;
+                                };
+                                if total_frames == 0 {
+                                    continue;
+                                }
+                                let weight =
+                                    weights_snapshot.get(track_key).copied().unwrap_or(1.0);
+                                let channel_gains =
+                                    channel_gains_snapshot.get(track_key).map(Vec::as_slice);
+                                let mut buffer = buffer.lock().unwrap();
+                                let take = buffer.len().min(current_chunk);
+                                for (sample_index, sample) in
+                                    mix_buffer.iter_mut().take(take).enumerate()
+                                {
+                                    let Some(value) = buffer.pop() else {
+                                        continue;
+                                    };
+                                    let frame_index = (sample_index / channel_count) as u32;
+                                    if frame_index >= frames_remaining {
+                                        continue;
+                                    }
+                                    let fade_gain = frames_remaining.saturating_sub(frame_index)
+                                        as f32
+                                        / total_frames as f32;
+                                    let gain = channel_gains
+                                        .and_then(|gains| gains.get(sample_index % channel_count))
+                                        .copied()
+                                        .unwrap_or(1.0);
+                                    *sample += value * weight * gain * fade_gain;
+                                }
+                                if let Some((remaining, _)) = fading_tracks.get_mut(track_key) {
+                                    *remaining = remaining.saturating_sub(chunk_frames);
+                                }
+                            }
+                            fading_tracks.retain(|_, (remaining, _)| *remaining > 0);
                         }
 
                         #[cfg(feature = "debug")]
