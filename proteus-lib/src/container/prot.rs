@@ -480,8 +480,11 @@ fn count_settings_track_combinations(tracks: &[SettingsTrack]) -> Option<u128> {
     let mut total: u128 = 1;
     for track in tracks {
         let choices = track.ids.len() as u128;
-        let selections = track.selections_count;
-        let count = checked_pow(choices, selections)?;
+        let reshuffle_events = parse_shuffle_points(&track.shuffle_points).len() as u32;
+        let total_draws = track
+            .selections_count
+            .checked_mul(reshuffle_events.checked_add(1)?)?;
+        let count = checked_pow(choices, total_draws)?;
         total = total.checked_mul(count)?;
     }
     Some(total)
@@ -491,8 +494,11 @@ fn count_paths_track_combinations(tracks: &[PathsTrack]) -> Option<u128> {
     let mut total: u128 = 1;
     for track in tracks {
         let choices = track.file_paths.len() as u128;
-        let selections = track.selections_count;
-        let count = checked_pow(choices, selections)?;
+        let reshuffle_events = parse_shuffle_points(&track.shuffle_points).len() as u32;
+        let total_draws = track
+            .selections_count
+            .checked_mul(reshuffle_events.checked_add(1)?)?;
+        let count = checked_pow(choices, total_draws)?;
         total = total.checked_mul(count)?;
     }
     Some(total)
@@ -789,5 +795,60 @@ fn collect_legacy_tracks(
             }
         }
         track_index_array.push(index);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn settings_track(
+        ids: Vec<u32>,
+        selections_count: u32,
+        shuffle_points: Vec<&str>,
+    ) -> SettingsTrack {
+        SettingsTrack {
+            level: 1.0,
+            pan: 0.0,
+            ids,
+            name: "Track".to_string(),
+            safe_name: "Track".to_string(),
+            selections_count,
+            shuffle_points: shuffle_points.into_iter().map(|v| v.to_string()).collect(),
+        }
+    }
+
+    #[test]
+    fn count_settings_combinations_without_shuffle_points() {
+        let tracks = vec![settings_track(vec![1, 2, 3], 2, vec![])];
+        assert_eq!(count_settings_track_combinations(&tracks), Some(9));
+    }
+
+    #[test]
+    fn count_settings_combinations_with_shuffle_points() {
+        let tracks = vec![settings_track(vec![1, 2, 3], 2, vec!["0:30", "1:00"])];
+        assert_eq!(count_settings_track_combinations(&tracks), Some(729));
+    }
+
+    #[test]
+    fn count_settings_combinations_uses_unique_valid_shuffle_points() {
+        let tracks = vec![settings_track(
+            vec![1, 2, 3, 4],
+            1,
+            vec!["1:00", "bad", "1:00"],
+        )];
+        assert_eq!(count_settings_track_combinations(&tracks), Some(16));
+    }
+
+    #[test]
+    fn count_paths_combinations_with_shuffle_points() {
+        let tracks = vec![PathsTrack {
+            file_paths: vec!["a.wav".to_string(), "b.wav".to_string()],
+            level: 1.0,
+            pan: 0.0,
+            selections_count: 1,
+            shuffle_points: vec!["0:15".to_string(), "0:45".to_string()],
+        }];
+        assert_eq!(count_paths_track_combinations(&tracks), Some(8));
     }
 }
