@@ -320,6 +320,34 @@ impl Prot {
         Vec::new()
     }
 
+    /// Return the full timestamped shuffle schedule for display.
+    ///
+    /// Each entry is `(time_seconds, selected_ids_or_paths)`.
+    pub fn get_shuffle_schedule(&self) -> Vec<(f64, Vec<String>)> {
+        if self.shuffle_schedule.is_empty() {
+            let current = self.get_ids();
+            if current.is_empty() {
+                return Vec::new();
+            }
+            return vec![(0.0, current)];
+        }
+
+        self.shuffle_schedule
+            .iter()
+            .map(|entry| {
+                let ids = entry
+                    .sources
+                    .iter()
+                    .map(|source| match source {
+                        ShuffleSource::TrackId(track_id) => track_id.to_string(),
+                        ShuffleSource::FilePath(path) => path.clone(),
+                    })
+                    .collect();
+                (entry.at_ms as f64 / 1000.0, ids)
+            })
+            .collect()
+    }
+
     /// Return a list of `(key, path, optional track_id)` for buffering.
     pub fn enumerated_list(&self) -> Vec<(u16, String, Option<u32>)> {
         let mut list: Vec<(u16, String, Option<u32>)> = Vec::new();

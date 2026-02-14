@@ -1112,6 +1112,14 @@ impl Player {
         return prot.get_ids();
     }
 
+    /// Get the full timestamped shuffle schedule used by playback.
+    ///
+    /// Each entry is `(time_seconds, selected_ids_or_paths)`.
+    pub fn get_shuffle_schedule(&self) -> Vec<(f64, Vec<String>)> {
+        let prot = self.prot.lock().unwrap();
+        prot.get_shuffle_schedule()
+    }
+
     /// Enable periodic reporting of playback status for UI consumers.
     pub fn set_reporting(
         &mut self,
