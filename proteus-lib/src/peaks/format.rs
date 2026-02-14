@@ -81,8 +81,10 @@ pub(crate) fn read_peaks_with_options(
 
     let mut reader = BufReader::new(File::open(path)?);
     let header = read_header(&mut reader)?;
+    let (requested_start_sample, requested_end_sample) =
+        compute_requested_sample_range(&header, options.start_seconds, options.end_seconds)?;
     let (start_peak, end_peak) =
-        compute_peak_range(&header, options.start_seconds, options.end_seconds)?;
+        compute_peak_range(&header, requested_start_sample, requested_end_sample);
     let mut peaks = read_peaks_by_indices(&mut reader, &header, start_peak, end_peak)?;
 
     if let Some(requested_channels) = options.channels {
@@ -92,13 +94,24 @@ pub(crate) fn read_peaks_with_options(
     }
 
     if let Some(target_peaks) = options.target_peaks {
-        downsample_peaks(&mut peaks, target_peaks);
+        if options.start_seconds.is_some() && options.end_seconds.is_some() {
+            peaks = time_align_peaks(
+                &peaks,
+                &header,
+                start_peak,
+                requested_start_sample,
+                requested_end_sample,
+                target_peaks,
+            );
+        } else {
+            downsample_peaks(&mut peaks, target_peaks);
+        }
     }
 
     Ok(peaks)
 }
 
-fn compute_peak_range(
+fn compute_requested_sample_range(
     header: &Header,
     start_seconds: Option<f64>,
     end_seconds: Option<f64>,
@@ -124,11 +137,10 @@ fn compute_peak_range(
         ));
     }
 
-    let samples_per_peak = u64::from(header.window_size);
     let sample_rate = f64::from(header.sample_rate);
 
     if end == f64::MAX {
-        end = header.peak_count as f64 * f64::from(header.window_size) / sample_rate;
+        end = total_samples(header) as f64 / sample_rate;
     }
 
     // Keep values stable for very large ranges.
@@ -138,6 +150,11 @@ fn compute_peak_range(
     let start_sample = (start * sample_rate).floor() as u64;
     let end_sample = (end * sample_rate).ceil() as u64;
 
+    Ok((start_sample, end_sample))
+}
+
+fn compute_peak_range(header: &Header, start_sample: u64, end_sample: u64) -> (u64, u64) {
+    let samples_per_peak = u64::from(header.window_size);
     let start_peak = start_sample / samples_per_peak;
     let mut end_peak = end_sample.div_ceil(samples_per_peak);
 
@@ -146,7 +163,106 @@ fn compute_peak_range(
     end_peak = end_peak.min(peak_count);
     let clamped_end = end_peak.max(clamped_start);
 
-    Ok((clamped_start, clamped_end))
+    (clamped_start, clamped_end)
+}
+
+fn time_align_peaks(
+    peaks: &PeaksData,
+    header: &Header,
+    start_peak: u64,
+    requested_start_sample: u64,
+    requested_end_sample: u64,
+    target_peaks: usize,
+) -> PeaksData {
+    if target_peaks == 0 {
+        return PeaksData {
+            sample_rate: peaks.sample_rate,
+            window_size: peaks.window_size,
+            channels: peaks
+                .channels
+                .iter()
+                .map(|_| Vec::new())
+                .collect::<Vec<Vec<PeakWindow>>>(),
+        };
+    }
+
+    let duration_samples = requested_end_sample.saturating_sub(requested_start_sample) as f64;
+    let samples_per_peak = f64::from(header.window_size);
+    let available_peak_count = peaks.channels.first().map_or(0, |channel| channel.len());
+    let end_peak = start_peak.saturating_add(available_peak_count as u64);
+    let total_samples = total_samples(header) as f64;
+
+    let channels = peaks
+        .channels
+        .iter()
+        .map(|channel| {
+            let mut aligned = Vec::with_capacity(target_peaks);
+            for i in 0..target_peaks {
+                let bin_start = requested_start_sample as f64
+                    + duration_samples * (i as f64 / target_peaks as f64);
+                let bin_end = requested_start_sample as f64
+                    + duration_samples * ((i + 1) as f64 / target_peaks as f64);
+                let bin_width = (bin_end - bin_start).max(0.0);
+
+                if bin_width == 0.0 {
+                    aligned.push(PeakWindow { max: 0.0, min: 0.0 });
+                    continue;
+                }
+
+                let clamped_bin_start = bin_start.max(0.0).min(total_samples);
+                let clamped_bin_end = bin_end.max(0.0).min(total_samples);
+                if clamped_bin_end <= clamped_bin_start {
+                    aligned.push(PeakWindow { max: 0.0, min: 0.0 });
+                    continue;
+                }
+
+                let first_peak = (clamped_bin_start / samples_per_peak).floor() as u64;
+                let last_peak_exclusive = (clamped_bin_end / samples_per_peak).ceil() as u64;
+
+                let mut sum_max = 0.0_f64;
+                let mut sum_min = 0.0_f64;
+
+                for peak_idx in first_peak..last_peak_exclusive {
+                    if peak_idx < start_peak || peak_idx >= end_peak {
+                        continue;
+                    }
+
+                    let peak_start = peak_idx as f64 * samples_per_peak;
+                    let peak_end = peak_start + samples_per_peak;
+                    let overlap_start = clamped_bin_start.max(peak_start);
+                    let overlap_end = clamped_bin_end.min(peak_end);
+                    let overlap = overlap_end - overlap_start;
+                    if overlap <= 0.0 {
+                        continue;
+                    }
+
+                    let local_idx = (peak_idx - start_peak) as usize;
+                    if let Some(peak) = channel.get(local_idx) {
+                        sum_max += f64::from(peak.max) * overlap;
+                        sum_min += f64::from(peak.min) * overlap;
+                    }
+                }
+
+                aligned.push(PeakWindow {
+                    max: (sum_max / bin_width) as f32,
+                    min: (sum_min / bin_width) as f32,
+                });
+            }
+            aligned
+        })
+        .collect();
+
+    PeaksData {
+        sample_rate: peaks.sample_rate,
+        window_size: peaks.window_size,
+        channels,
+    }
+}
+
+fn total_samples(header: &Header) -> u64 {
+    header
+        .peak_count
+        .saturating_mul(u64::from(header.window_size))
 }
 
 fn downsample_peaks(peaks: &mut PeaksData, target_peaks: usize) {
@@ -501,9 +617,53 @@ mod tests {
         .expect("read with options");
 
         assert_eq!(slice.channels.len(), 1);
-        assert_eq!(slice.channels[0].len(), 2);
+        assert_eq!(slice.channels[0].len(), 10);
         assert_eq!(slice.channels[0][0].max, 1.0);
-        assert_eq!(slice.channels[0][1].max, 2.0);
+        assert_eq!(slice.channels[0][1].max, 1.0);
+        assert_eq!(slice.channels[0][2].max, 2.0);
+        assert_eq!(slice.channels[0][3].max, 2.0);
+        assert_eq!(slice.channels[0][4].max, 0.0);
+        assert_eq!(slice.channels[0][9].max, 0.0);
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn zero_pads_when_requested_range_is_beyond_audio() {
+        let path = test_file_path();
+        let data = PeaksData {
+            sample_rate: 10,
+            window_size: 2,
+            channels: vec![vec![
+                PeakWindow {
+                    max: 1.0,
+                    min: -1.0,
+                },
+                PeakWindow {
+                    max: 2.0,
+                    min: -2.0,
+                },
+            ]],
+        };
+
+        write_peaks_file(path.to_str().unwrap(), &data).expect("write");
+        let slice = read_peaks_with_options(
+            path.to_str().unwrap(),
+            &GetPeaksOptions {
+                start_seconds: Some(1.0),
+                end_seconds: Some(2.0),
+                target_peaks: Some(4),
+                channels: Some(1),
+            },
+        )
+        .expect("read with options");
+
+        assert_eq!(slice.channels.len(), 1);
+        assert_eq!(slice.channels[0].len(), 4);
+        for peak in &slice.channels[0] {
+            assert_eq!(peak.max, 0.0);
+            assert_eq!(peak.min, 0.0);
+        }
 
         let _ = std::fs::remove_file(path);
     }
