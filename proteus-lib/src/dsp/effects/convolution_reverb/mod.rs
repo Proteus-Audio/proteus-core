@@ -269,11 +269,22 @@ impl ConvolutionReverbState {
             }
         }
 
+        // Keep output continuous for small chunks (e.g. around shuffle boundaries).
+        // If batch processing did not yield enough samples yet, process the pending
+        // input immediately instead of emitting silence.
+        while self.output_buffer.len() < samples.len() && !self.input_buffer.is_empty() {
+            let take = self.input_buffer.len().min(batch_samples.max(1));
+            let block: Vec<f32> = self.input_buffer.drain(0..take).collect();
+            self.reverb.process_into(&block, &mut self.block_out);
+            self.output_buffer.extend_from_slice(&self.block_out);
+        }
+
         let chunk_len = samples.len();
         if self.output_buffer.len() < chunk_len {
-            let mut out = self.output_buffer.clone();
-            if out.len() < chunk_len {
-                out.resize(chunk_len, 0.0);
+            let mut out: Vec<f32> = self.output_buffer.drain(..).collect();
+            let out_len = out.len();
+            if out_len < chunk_len {
+                out.extend_from_slice(&samples[out_len..chunk_len]);
             }
             self.output_buffer.clear();
             return out;

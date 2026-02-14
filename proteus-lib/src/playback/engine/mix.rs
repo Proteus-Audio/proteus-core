@@ -752,7 +752,12 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer, f
                         }
 
                         if processed.len() < current_chunk {
-                            processed.resize(current_chunk, 0.0);
+                            // Effects should usually preserve length. If an effect returns
+                            // short output, preserve continuity with dry samples instead of
+                            // padding silence.
+                            let missing = current_chunk.saturating_sub(processed.len());
+                            let start = current_chunk.saturating_sub(missing);
+                            processed.extend_from_slice(&mix_buffer[start..current_chunk]);
                         } else if processed.len() > current_chunk {
                             let extra = processed.split_off(current_chunk);
                             let mut tail_buffer = effects_buffer.lock().unwrap();
