@@ -475,7 +475,11 @@ mod tests {
         };
 
         write_peaks_file(path.to_str().unwrap(), &data).expect("write");
-        let read_back = read_peaks_file(path.to_str().unwrap()).expect("read");
+        let read_back = read_peaks_with_options(
+            path.to_str().unwrap(),
+            &GetPeaksOptions::default(),
+        )
+        .expect("read");
 
         assert_eq!(read_back.sample_rate, 48_000);
         assert_eq!(read_back.window_size, 480);
@@ -510,7 +514,15 @@ mod tests {
         };
 
         write_peaks_file(path.to_str().unwrap(), &data).expect("write");
-        let slice = read_peaks_in_range(path.to_str().unwrap(), 0.2, 0.6).expect("range");
+        let slice = read_peaks_with_options(
+            path.to_str().unwrap(),
+            &GetPeaksOptions {
+                start_seconds: Some(0.2),
+                end_seconds: Some(0.6),
+                ..Default::default()
+            },
+        )
+        .expect("range");
 
         assert_eq!(slice.channels.len(), 1);
         assert_eq!(slice.channels[0].len(), 2);
