@@ -89,6 +89,7 @@ pub struct Player {
     buffering_done: Arc<AtomicBool>,
     last_chunk_ms: Arc<AtomicU64>,
     last_time_update_ms: Arc<AtomicU64>,
+    next_resume_fade_ms: Arc<Mutex<Option<f32>>>,
     impulse_response_override: Option<ImpulseResponseSpec>,
     impulse_response_tail_override: Option<f32>,
 }
@@ -176,6 +177,7 @@ impl Player {
             buffering_done: Arc::new(AtomicBool::new(false)),
             last_chunk_ms: Arc::new(AtomicU64::new(0)),
             last_time_update_ms: Arc::new(AtomicU64::new(0)),
+            next_resume_fade_ms: Arc::new(Mutex::new(None)),
             impulse_response_override: None,
             impulse_response_tail_override: None,
         };
@@ -423,6 +425,18 @@ impl Player {
         settings.startup_fade_ms = ms.max(0.0);
     }
 
+    /// Configure seek fade-out length (ms) before restarting playback.
+    pub fn set_seek_fade_out_ms(&self, ms: f32) {
+        let mut settings = self.buffer_settings.lock().unwrap();
+        settings.seek_fade_out_ms = ms.max(0.0);
+    }
+
+    /// Configure seek fade-in length (ms) after restarting playback.
+    pub fn set_seek_fade_in_ms(&self, ms: f32) {
+        let mut settings = self.buffer_settings.lock().unwrap();
+        settings.seek_fade_in_ms = ms.max(0.0);
+    }
+
     /// Configure the append jitter logging threshold (ms). 0 disables logging.
     pub fn set_append_jitter_log_ms(&self, ms: f32) {
         let mut settings = self.buffer_settings.lock().unwrap();
@@ -469,6 +483,7 @@ impl Player {
         let effects_reset = self.effects_reset.clone();
         let output_meter = self.output_meter.clone();
         let audio_info = self.info.clone();
+        let next_resume_fade_ms = self.next_resume_fade_ms.clone();
 
         let audio_heard = self.audio_heard.clone();
         let volume = self.volume.clone();
@@ -637,9 +652,13 @@ impl Player {
                 }
                 if state == PlayerState::Resuming {
                     let fade_length = if startup_fade_pending.replace(false) {
-                        let startup_fade_ms =
-                            buffer_settings_for_state.lock().unwrap().startup_fade_ms;
-                        (startup_fade_ms / 1000.0).max(0.0)
+                        if let Some(ms) = next_resume_fade_ms.lock().unwrap().take() {
+                            (ms / 1000.0).max(0.0)
+                        } else {
+                            let startup_fade_ms =
+                                buffer_settings_for_state.lock().unwrap().startup_fade_ms;
+                            (startup_fade_ms / 1000.0).max(0.0)
+                        }
                     } else {
                         0.1
                     };
@@ -1023,15 +1042,40 @@ impl Player {
         *timestamp = ts;
         drop(timestamp);
 
-        self.request_effects_reset();
         let state = self.state.lock().unwrap().clone();
+        let (seek_fade_out_ms, seek_fade_in_ms) = {
+            let settings = self.buffer_settings.lock().unwrap();
+            (settings.seek_fade_out_ms, settings.seek_fade_in_ms)
+        };
+        if matches!(state, PlayerState::Playing | PlayerState::Resuming) && seek_fade_out_ms > 0.0 {
+            self.fade_current_sink_out(seek_fade_out_ms);
+        }
+        self.request_effects_reset();
 
         self.kill_current();
         self.state.lock().unwrap().clone_from(&state);
         self.initialize_thread(Some(ts));
 
-        if state == PlayerState::Playing {
+        if matches!(state, PlayerState::Playing | PlayerState::Resuming) {
+            *self.next_resume_fade_ms.lock().unwrap() = Some(seek_fade_in_ms);
             self.resume();
+        }
+    }
+
+    /// Apply a short linear fade-out to the current sink before disruptive ops.
+    fn fade_current_sink_out(&self, fade_ms: f32) {
+        let steps = ((fade_ms / 5.0).ceil() as u32).max(1);
+        let step_ms = (fade_ms / steps as f32).max(1.0) as u64;
+        let sink = self.sink.lock().unwrap();
+        let start_volume = sink.volume().max(0.0);
+        if start_volume <= 0.0 {
+            return;
+        }
+        for step in 1..=steps {
+            let t = step as f32 / steps as f32;
+            let gain = start_volume * (1.0 - t);
+            sink.set_volume(gain.max(0.0));
+            thread::sleep(Duration::from_millis(step_ms));
         }
     }
 

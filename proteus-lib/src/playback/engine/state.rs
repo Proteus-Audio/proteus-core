@@ -9,6 +9,8 @@ pub struct PlaybackBufferSettings {
     pub max_sink_chunks: usize,
     pub startup_silence_ms: f32,
     pub startup_fade_ms: f32,
+    pub seek_fade_out_ms: f32,
+    pub seek_fade_in_ms: f32,
     pub append_jitter_log_ms: f32,
     pub effect_boundary_log: bool,
 }
@@ -23,6 +25,8 @@ impl PlaybackBufferSettings {
             max_sink_chunks: 0,
             startup_silence_ms: 0.0,
             startup_fade_ms: 150.0,
+            seek_fade_out_ms: 30.0,
+            seek_fade_in_ms: 80.0,
             append_jitter_log_ms: 0.0,
             effect_boundary_log: false,
         }
