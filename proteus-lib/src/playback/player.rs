@@ -570,14 +570,18 @@ impl Player {
             drop(time_passed_unlocked);
 
             let pause_sink = |sink: &Sink, fade_length_out_seconds: f32| {
-                let timestamp = *time_passed.lock().unwrap();
-
+                if fade_length_out_seconds <= 0.0 {
+                    sink.set_volume(0.0);
+                    sink.pause();
+                    return;
+                }
                 let fade_increments = sink.volume() / (fade_length_out_seconds * 100.0);
-                // Fade out and pause sink
-                while sink.volume() > 0.0 && timestamp != start_time {
-                    sink.set_volume(sink.volume() - fade_increments);
+                // Fade out and pause sink.
+                while sink.volume() > 0.0 {
+                    sink.set_volume((sink.volume() - fade_increments).max(0.0));
                     thread::sleep(Duration::from_millis(10));
                 }
+                sink.set_volume(0.0);
                 sink.pause();
             };
 
@@ -588,13 +592,16 @@ impl Player {
                     sink.set_volume(volume);
                     return;
                 }
-                let fade_increments = (volume - sink.volume()) / (fade_length_in_seconds * 100.0);
-                // Fade in and play sink
+                // Always resume from silence so the first sample edge does not jump.
+                sink.set_volume(0.0);
+                let fade_increments = volume / (fade_length_in_seconds * 100.0);
+                // Fade in and play sink.
                 sink.play();
                 while sink.volume() < volume {
-                    sink.set_volume(sink.volume() + fade_increments);
+                    sink.set_volume((sink.volume() + fade_increments).min(volume));
                     thread::sleep(Duration::from_millis(5));
                 }
+                sink.set_volume(volume);
             };
 
             // ===================== //
@@ -637,6 +644,15 @@ impl Player {
                 let sink = sink_mutex.lock().unwrap();
                 let state = play_state.lock().unwrap().clone();
                 let start_sink_chunks = buffer_settings_for_state.lock().unwrap().start_sink_chunks;
+                let startup_resume_waiting_for_audio =
+                    state == PlayerState::Resuming && startup_fade_pending.get() && sink.len() == 0;
+                if startup_resume_waiting_for_audio {
+                    // Keep paused until at least one chunk is queued so the initial
+                    // fade-in is applied to real audio instead of silence.
+                    sink.pause();
+                    drop(sink);
+                    return true;
+                }
                 if state == PlayerState::Resuming
                     && start_sink_chunks > 0
                     && sink.len() < start_sink_chunks
