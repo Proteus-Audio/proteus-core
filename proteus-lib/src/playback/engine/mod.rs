@@ -11,6 +11,7 @@ use crate::audio::buffer::{init_buffer_map, TrackBuffer};
 use crate::container::prot::Prot;
 
 mod mix;
+mod premix;
 mod state;
 
 pub use state::{DspChainMetrics, PlaybackBufferSettings};
