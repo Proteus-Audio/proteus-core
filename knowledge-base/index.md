@@ -31,3 +31,4 @@ Welcome. This index links to short, practical explanations of the DSP `AudioEffe
 ## Diagnostics / Notes
 
 - `convolution-reverb-boundary-discontinuity.md`
+- `player-data-flows.md`

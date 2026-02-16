@@ -30,7 +30,9 @@ pub struct GetPeaksOptions {
     pub end_seconds: Option<f64>,
     /// Maximum number of peak windows to return per channel.
     ///
-    /// If the range contains fewer peaks than requested, all peaks are returned.
+    /// When used with both `start_seconds` and `end_seconds`, returns exactly this
+    /// many windows aligned to the requested time range, zero-padding windows that
+    /// fall outside available audio. Otherwise, this acts as a maximum output size.
     pub target_peaks: Option<usize>,
     /// Maximum number of channels to return.
     ///

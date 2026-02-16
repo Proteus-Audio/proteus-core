@@ -35,6 +35,8 @@ pub struct SettingsTrack {
     pub safe_name: String,
     #[serde(default = "default_selections_count")]
     pub selections_count: u32,
+    #[serde(default)]
+    pub shuffle_points: Vec<String>,
 }
 
 fn default_selections_count() -> u32 {

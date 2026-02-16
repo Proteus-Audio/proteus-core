@@ -29,6 +29,7 @@
 - Follow Rust 2021 conventions: `snake_case` for functions/modules, `CamelCase` for types, `SCREAMING_SNAKE_CASE` for constants.
 - Use 4 spaces for indentation (rustfmt default) and avoid emoji/unicode symbols in source.
 - Keep modules focused; audio DSP helpers generally belong under `src/dsp/`.
+- Always keep the codebase as clean and readable as possible; add proper documentation comments and split modules into multiple files when complexity grows.
 - Prefer small, composable functions for decoding, buffering, and playback pipelines.
 - Use `rustfmt` (`cargo fmt`) for consistent formatting.
 - Public items in `proteus-lib` should have doc comments. Include `# Arguments`, `# Returns`, and `# Errors`

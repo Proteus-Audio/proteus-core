@@ -3,7 +3,7 @@
 use dasp_ring_buffer::Bounded;
 use log::error;
 use rodio::buffer::SamplesBuffer;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
@@ -12,10 +12,11 @@ use std::time::Duration;
 use std::time::Instant;
 
 use crate::audio::buffer::TrackBuffer;
-use crate::container::prot::Prot;
+use crate::container::prot::{Prot, ShuffleScheduleEntry, ShuffleSource};
 use crate::dsp::effects::{convolution_reverb, AudioEffect, EffectContext};
 use crate::track::{buffer_container_tracks, buffer_track, ContainerTrackArgs, TrackArgs};
 
+use super::premix::PremixBuffer;
 use super::state::{DspChainMetrics, PlaybackBufferSettings};
 
 #[cfg(feature = "debug")]
@@ -76,6 +77,7 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer, f
 
     thread::spawn(move || {
         const MIN_MIX_MS: f32 = 300.0;
+        const SHUFFLE_CROSSFADE_MS: f64 = 5.0;
         #[cfg(feature = "debug")]
         let mut avg_dsp_ms = 0.0_f64;
         #[cfg(feature = "debug")]
@@ -133,52 +135,26 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer, f
 
         let prot_locked = prot.clone();
 
-        let prot = prot_locked.lock().unwrap();
-        let container_tracks = prot.container_track_entries();
-        let enumerated_list = if container_tracks.is_some() {
-            Vec::new()
-        } else {
-            prot.enumerated_list()
+        let (container_path, mut shuffle_plan) = {
+            let prot = prot_locked.lock().unwrap();
+            (
+                prot.get_container_path(),
+                prot.build_runtime_shuffle_plan(start_time),
+            )
         };
-        let prot_key_count = prot.get_keys().len();
-        drop(prot);
+        let mut active_sources = shuffle_plan.current_sources.clone();
+        let upcoming_events: Vec<ShuffleScheduleEntry> =
+            shuffle_plan.upcoming_events.drain(..).collect();
+        let mut next_shuffle_event_index = 0usize;
+        let mut active_track_keys: Vec<u16> = (0..active_sources.len()).map(|i| i as u16).collect();
+        let mut next_track_key: u16 = active_track_keys.len() as u16;
+        let crossfade_frames = ((audio_info.sample_rate as f64 * SHUFFLE_CROSSFADE_MS) / 1000.0)
+            .round()
+            .max(1.0) as u32;
+        let mut fading_tracks: HashMap<u16, (u32, u32)> = HashMap::new();
 
         #[cfg(not(feature = "debug"))]
         let _ = &dsp_metrics;
-
-        if let Some((file_path, track_entries)) = container_tracks {
-            buffer_container_tracks(
-                ContainerTrackArgs {
-                    file_path,
-                    track_entries,
-                    buffer_map: buffer_map.clone(),
-                    buffer_notify: Some(buffer_notify.clone()),
-                    track_weights: Some(track_weights.clone()),
-                    finished_tracks: finished_tracks.clone(),
-                    start_time,
-                    channels: audio_info.channels as u8,
-                    track_eos_ms: buffer_settings.lock().unwrap().track_eos_ms,
-                },
-                abort.clone(),
-            );
-        } else {
-            for (key, file_path, track_id) in enumerated_list {
-                buffer_track(
-                    TrackArgs {
-                        file_path: file_path.clone(),
-                        track_id,
-                        track_key: key,
-                        buffer_map: buffer_map.clone(),
-                        buffer_notify: Some(buffer_notify.clone()),
-                        track_weights: None,
-                        finished_tracks: finished_tracks.clone(),
-                        start_time,
-                        channels: audio_info.channels as u8,
-                    },
-                    abort.clone(),
-                );
-            }
-        }
 
         let hash_buffer_copy = buffer_map.clone();
 
@@ -217,7 +193,122 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer, f
         }
         let mut started = start_samples == 0;
         let mut mix_buffer = vec![0.0_f32; min_mix_samples];
+        let mut premix_buffer = PremixBuffer::new();
+        let premix_max_samples = (start_samples.max(min_mix_samples).max(1)).saturating_mul(4);
         let warmup_samples = min_mix_samples;
+        let track_buffer_size = (audio_info.sample_rate as usize * 10).max(start_samples * 2);
+        let slot_channel_gains: Vec<Vec<f32>> = {
+            let gains = track_channel_gains.lock().unwrap();
+            active_track_keys
+                .iter()
+                .map(|key| {
+                    gains
+                        .get(key)
+                        .cloned()
+                        .unwrap_or_else(|| vec![1.0; audio_info.channels.max(1) as usize])
+                })
+                .collect()
+        };
+        // Track timeline based on source consumption, not post-DSP output, so
+        // shuffle boundaries remain stable even when effects queue tail samples.
+        let mut source_timeline_frames =
+            (start_time.max(0.0) * audio_info.sample_rate.max(1) as f64).round() as u64;
+
+        let spawn_source_track =
+            |slot_index: usize, track_key: u16, source: &ShuffleSource, event_seconds: f64| {
+                {
+                    let mut map = hash_buffer_copy.lock().unwrap();
+                    map.insert(
+                        track_key,
+                        Arc::new(Mutex::new(Bounded::from(vec![0.0; track_buffer_size]))),
+                    );
+                }
+                {
+                    let mut weights = track_weights.lock().unwrap();
+                    weights.insert(track_key, 1.0);
+                }
+                {
+                    let mut gains = track_channel_gains.lock().unwrap();
+                    gains.insert(
+                        track_key,
+                        slot_channel_gains
+                            .get(slot_index)
+                            .cloned()
+                            .unwrap_or_else(|| vec![1.0; audio_info.channels.max(1) as usize]),
+                    );
+                }
+                let track_args = match source {
+                    ShuffleSource::TrackId(track_id) => {
+                        let Some(container_path) = container_path.as_ref() else {
+                            return;
+                        };
+                        TrackArgs {
+                            file_path: container_path.clone(),
+                            track_id: Some(*track_id),
+                            track_key,
+                            buffer_map: buffer_map.clone(),
+                            buffer_notify: Some(buffer_notify.clone()),
+                            track_weights: None,
+                            finished_tracks: finished_tracks.clone(),
+                            start_time: event_seconds,
+                            channels: audio_info.channels as u8,
+                        }
+                    }
+                    ShuffleSource::FilePath(path) => TrackArgs {
+                        file_path: path.clone(),
+                        track_id: None,
+                        track_key,
+                        buffer_map: buffer_map.clone(),
+                        buffer_notify: Some(buffer_notify.clone()),
+                        track_weights: None,
+                        finished_tracks: finished_tracks.clone(),
+                        start_time: event_seconds,
+                        channels: audio_info.channels as u8,
+                    },
+                };
+                buffer_track(track_args, abort.clone());
+            };
+
+        let use_container_buffering = container_path.is_some()
+            && upcoming_events.is_empty()
+            && active_sources
+                .iter()
+                .all(|source| matches!(source, ShuffleSource::TrackId(_)));
+        if use_container_buffering {
+            let track_entries: Vec<(u16, u32)> = active_sources
+                .iter()
+                .enumerate()
+                .filter_map(|(slot_index, source)| match source {
+                    ShuffleSource::TrackId(track_id) => active_track_keys
+                        .get(slot_index)
+                        .copied()
+                        .map(|key| (key, *track_id)),
+                    ShuffleSource::FilePath(_) => None,
+                })
+                .collect();
+            if !track_entries.is_empty() {
+                buffer_container_tracks(
+                    ContainerTrackArgs {
+                        file_path: container_path.clone().unwrap_or_default(),
+                        track_entries,
+                        buffer_map: buffer_map.clone(),
+                        buffer_notify: Some(buffer_notify.clone()),
+                        track_weights: Some(track_weights.clone()),
+                        finished_tracks: finished_tracks.clone(),
+                        start_time,
+                        channels: audio_info.channels as u8,
+                        track_eos_ms: buffer_settings.lock().unwrap().track_eos_ms,
+                    },
+                    abort.clone(),
+                );
+            }
+        } else {
+            for (slot_index, source) in active_sources.iter().enumerate() {
+                if let Some(track_key) = active_track_keys.get(slot_index).copied() {
+                    spawn_source_track(slot_index, track_key, source, start_time);
+                }
+            }
+        }
 
         if warmup_samples > 0 {
             let warmup_start = Instant::now();
@@ -244,10 +335,61 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer, f
                 break;
             }
 
+            let current_source_ms = if audio_info.sample_rate > 0 {
+                (source_timeline_frames.saturating_mul(1000)) / audio_info.sample_rate as u64
+            } else {
+                0
+            };
+            while next_shuffle_event_index < upcoming_events.len()
+                && upcoming_events[next_shuffle_event_index].at_ms <= current_source_ms
+            {
+                let event = &upcoming_events[next_shuffle_event_index];
+                let event_seconds = event.at_ms as f64 / 1000.0;
+                for slot_index in 0..event.sources.len() {
+                    if slot_index >= active_sources.len() {
+                        continue;
+                    }
+                    if event.sources[slot_index] == active_sources[slot_index] {
+                        continue;
+                    }
+                    if let Some(old_key) = active_track_keys.get(slot_index).copied() {
+                        fading_tracks.insert(old_key, (crossfade_frames, crossfade_frames));
+                    }
+                    let new_key = next_track_key;
+                    next_track_key = next_track_key.saturating_add(1);
+                    active_sources[slot_index] = event.sources[slot_index].clone();
+                    active_track_keys[slot_index] = new_key;
+                    spawn_source_track(
+                        slot_index,
+                        new_key,
+                        &active_sources[slot_index],
+                        event_seconds,
+                    );
+                }
+                next_shuffle_event_index += 1;
+            }
+            let active_key_set: HashSet<u16> = active_track_keys.iter().copied().collect();
+            let fading_key_set: HashSet<u16> = fading_tracks.keys().copied().collect();
+            let retained_key_set: HashSet<u16> = active_key_set
+                .iter()
+                .copied()
+                .chain(fading_key_set.iter().copied())
+                .collect();
+
             let buffer_snapshot: Vec<(u16, TrackBuffer)> = {
                 let map = hash_buffer_copy.lock().unwrap();
                 map.iter().map(|(k, v)| (*k, v.clone())).collect()
             };
+            let active_buffer_snapshot: Vec<(u16, TrackBuffer)> = buffer_snapshot
+                .iter()
+                .filter(|(track_key, _)| active_key_set.contains(track_key))
+                .map(|(track_key, buffer)| (*track_key, buffer.clone()))
+                .collect();
+            let fading_buffer_snapshot: Vec<(u16, TrackBuffer)> = buffer_snapshot
+                .iter()
+                .filter(|(track_key, _)| fading_key_set.contains(track_key))
+                .map(|(track_key, buffer)| (*track_key, buffer.clone()))
+                .collect();
             let weights_snapshot: HashMap<u16, f32> = {
                 let weights = track_weights.lock().unwrap();
                 weights.clone()
@@ -263,11 +405,15 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer, f
             for (track_key, buffer) in buffer_snapshot.iter() {
                 let len = buffer.lock().unwrap().len();
                 if len == 0 {
-                    if finished_snapshot.contains(track_key) {
+                    if finished_snapshot.contains(track_key)
+                        && !retained_key_set.contains(track_key)
+                    {
                         removable_tracks.push(*track_key);
                         continue;
                     }
-                    all_buffers_full = false;
+                    if active_key_set.contains(track_key) {
+                        all_buffers_full = false;
+                    }
                 }
             }
 
@@ -275,16 +421,21 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer, f
                 let mut map = hash_buffer_copy.lock().unwrap();
                 for track_id in removable_tracks.drain(..) {
                     map.remove(&track_id);
+                    fading_tracks.remove(&track_id);
                 }
             }
 
-            if buffer_snapshot.is_empty() && effects_buffer.lock().unwrap().len() == 0 {
+            if active_buffer_snapshot.is_empty()
+                && effects_buffer.lock().unwrap().len() == 0
+                && premix_buffer.is_empty()
+                && next_shuffle_event_index >= upcoming_events.len()
+            {
                 break;
             }
 
             if !started {
                 let finished = finished_tracks.lock().unwrap();
-                let ready = buffer_snapshot.iter().all(|(track_key, buffer)| {
+                let ready = active_buffer_snapshot.iter().all(|(track_key, buffer)| {
                     let len = buffer.lock().unwrap().len();
                     finished.contains(track_key) || len >= start_samples
                 });
@@ -308,6 +459,7 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer, f
                 }
                 let mut tail_buffer = effects_buffer.lock().unwrap();
                 while tail_buffer.pop().is_some() {}
+                premix_buffer.clear();
                 effect_context = {
                     let prot = prot_locked.lock().unwrap();
                     EffectContext {
@@ -331,23 +483,25 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer, f
             }
 
             let effects_len = effects_buffer.lock().unwrap().len();
-            let all_tracks_finished = finished_snapshot.len() >= prot_key_count;
-            let active_min_len = buffer_snapshot
+            let all_tracks_finished = active_track_keys
+                .iter()
+                .all(|track_key| finished_snapshot.contains(track_key))
+                && next_shuffle_event_index >= upcoming_events.len();
+            let active_min_len = active_buffer_snapshot
                 .iter()
                 .filter(|(track_key, _)| !finished_snapshot.contains(track_key))
                 .map(|(_, buffer)| buffer.lock().unwrap().len())
                 .min()
                 .unwrap_or(0);
-            let finished_min_len = buffer_snapshot
+            let finished_min_len = active_buffer_snapshot
                 .iter()
                 .filter(|(track_key, _)| finished_snapshot.contains(track_key))
                 .map(|(_, buffer)| buffer.lock().unwrap().len())
                 .min()
                 .unwrap_or(0);
             let has_tail = effects_len > 0;
-            let should_output_tail = has_tail;
-            let should_mix_tracks = !has_tail
-                && !buffer_snapshot.is_empty()
+            let should_mix_tracks = !active_buffer_snapshot.is_empty()
+                && premix_buffer.len() < premix_max_samples
                 && ((!all_tracks_finished && active_min_len >= min_mix_samples)
                     || (all_tracks_finished && finished_min_len > 0));
 
@@ -357,7 +511,7 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer, f
                 && last_startup_log.elapsed().as_millis() >= 200
             {
                 let mut sizes: Vec<String> = Vec::new();
-                for (track_key, buffer) in buffer_snapshot.iter() {
+                for (track_key, buffer) in active_buffer_snapshot.iter() {
                     let len = buffer.lock().unwrap().len();
                     sizes.push(format!("{}={}", track_key, len));
                 }
@@ -373,7 +527,7 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer, f
             }
 
             #[cfg(feature = "debug")]
-            if started && !should_mix_tracks && !should_output_tail {
+            if started && !should_mix_tracks && !has_tail && premix_buffer.is_empty() {
                 underrun_count = underrun_count.saturating_add(1);
                 if last_underrun_log.elapsed().as_secs_f64() >= 1.0 {
                     log::warn!(
@@ -381,7 +535,7 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer, f
                         active_min_len,
                         finished_min_len,
                         effects_len,
-                        buffer_snapshot.len(),
+                        active_buffer_snapshot.len(),
                         finished_snapshot.len()
                     );
                     last_underrun_log = Instant::now();
@@ -392,7 +546,11 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer, f
                 }
             }
 
-            if buffer_snapshot.is_empty() && effects_len == 0 && all_tracks_finished {
+            if active_buffer_snapshot.is_empty()
+                && effects_len == 0
+                && premix_buffer.is_empty()
+                && all_tracks_finished
+            {
                 let drained = {
                     let mut effects_guard = effects.lock().unwrap();
                     let mut current = Vec::new();
@@ -411,30 +569,43 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer, f
                 break;
             }
 
-            if should_mix_tracks || should_output_tail {
+            if should_mix_tracks || has_tail || !premix_buffer.is_empty() {
                 let input_channels = audio_info.channels as u16;
                 let sample_rate = audio_info.sample_rate as u32;
+                let channel_count = input_channels.max(1) as usize;
 
-                let samples = if should_mix_tracks {
-                    let current_chunk = if !all_tracks_finished && active_min_len >= min_mix_samples
+                if should_mix_tracks {
+                    let mut current_chunk =
+                        if !all_tracks_finished && active_min_len >= min_mix_samples {
+                            min_mix_samples
+                        } else if all_tracks_finished && finished_min_len > 0 {
+                            finished_min_len
+                        } else {
+                            0
+                        };
+                    if next_shuffle_event_index < upcoming_events.len()
+                        && audio_info.sample_rate > 0
                     {
-                        min_mix_samples
-                    } else if all_tracks_finished && finished_min_len > 0 {
-                        finished_min_len
-                    } else {
-                        0
-                    };
-                    let current_chunk = current_chunk.min(mix_buffer.len());
+                        let next_event_ms = upcoming_events[next_shuffle_event_index].at_ms;
+                        if next_event_ms > current_source_ms {
+                            let remaining_ms = next_event_ms - current_source_ms;
+                            let frames_until_event =
+                                (remaining_ms.saturating_mul(audio_info.sample_rate as u64)) / 1000;
+                            let samples_until_event = frames_until_event as usize * channel_count;
+                            if samples_until_event > 0 {
+                                current_chunk = current_chunk.min(samples_until_event);
+                            }
+                        }
+                    }
+                    let premix_room = premix_max_samples.saturating_sub(premix_buffer.len());
+                    current_chunk = current_chunk.min(premix_room).min(mix_buffer.len());
 
-                    if current_chunk == 0 {
-                        Vec::new()
-                    } else {
+                    if current_chunk > 0 {
                         mix_buffer.fill(0.0);
-                        for (track_key, buffer) in buffer_snapshot.iter() {
+                        for (track_key, buffer) in active_buffer_snapshot.iter() {
                             let weight = weights_snapshot.get(track_key).copied().unwrap_or(1.0);
                             let channel_gains =
                                 channel_gains_snapshot.get(track_key).map(Vec::as_slice);
-                            let channel_count = input_channels.max(1) as usize;
                             let mut buffer = buffer.lock().unwrap();
                             let take = buffer.len().min(current_chunk);
                             for (sample_index, sample) in
@@ -449,255 +620,64 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer, f
                                 }
                             }
                         }
-
-                        #[cfg(feature = "debug")]
-                        let audio_time_ms = if input_channels > 0 && sample_rate > 0 {
-                            let frames = current_chunk as f64 / input_channels as f64;
-                            (frames / sample_rate as f64) * 1000.0
-                        } else {
-                            0.0
-                        };
-
-                        #[cfg(feature = "debug")]
-                        let dsp_start = Instant::now();
-
-                        let drain_effects = all_tracks_finished;
-                        let mut processed = mix_buffer[..current_chunk].to_vec();
-                        {
-                            let mut effects_guard = effects.lock().unwrap();
-                            #[cfg(feature = "debug")]
-                            let effect_boundary_log = {
-                                let settings = buffer_settings.lock().unwrap();
-                                settings.effect_boundary_log
-                            };
-                            #[cfg(feature = "debug")]
-                            if effect_boundary_log {
-                                let effect_count = effects_guard.len();
-                                if effect_boundary_initialized.len() != effect_count
-                                    || effect_last_samples.len() != effect_count
-                                    || effect_boundary_counts.len() != effect_count
-                                    || effect_boundary_logs.len() != effect_count
+                        if !fading_buffer_snapshot.is_empty() {
+                            let chunk_frames = (current_chunk / channel_count).max(1) as u32;
+                            for (track_key, buffer) in fading_buffer_snapshot.iter() {
+                                let Some((frames_remaining, total_frames)) =
+                                    fading_tracks.get(track_key).copied()
+                                else {
+                                    continue;
+                                };
+                                if total_frames == 0 {
+                                    continue;
+                                }
+                                let weight =
+                                    weights_snapshot.get(track_key).copied().unwrap_or(1.0);
+                                let channel_gains =
+                                    channel_gains_snapshot.get(track_key).map(Vec::as_slice);
+                                let mut buffer = buffer.lock().unwrap();
+                                let take = buffer.len().min(current_chunk);
+                                for (sample_index, sample) in
+                                    mix_buffer.iter_mut().take(take).enumerate()
                                 {
-                                    let channels = input_channels.max(1) as usize;
-                                    effect_boundary_initialized = vec![false; effect_count];
-                                    effect_last_samples = vec![vec![0.0; channels]; effect_count];
-                                    effect_boundary_counts = vec![0_u64; effect_count];
-                                    effect_boundary_logs = vec![Instant::now(); effect_count];
-                                }
-                            }
-                            for (effect_index, effect) in effects_guard.iter_mut().enumerate() {
-                                #[cfg(not(feature = "debug"))]
-                                let _ = effect_index;
-                                processed =
-                                    effect.process(&processed, &effect_context, drain_effects);
-                                #[cfg(feature = "debug")]
-                                if effect_boundary_log {
-                                    let channels = input_channels.max(1) as usize;
-                                    if effect_index < effect_last_samples.len()
-                                        && effect_index < effect_boundary_initialized.len()
-                                    {
-                                        if processed.len() >= channels {
-                                            let initialized =
-                                                effect_boundary_initialized[effect_index];
-                                            for ch in 0..channels {
-                                                let prev = effect_last_samples[effect_index][ch];
-                                                let curr = processed[ch];
-                                                let delta = (curr - prev).abs();
-                                                if initialized && delta > 0.1 {
-                                                    effect_boundary_counts[effect_index] =
-                                                        effect_boundary_counts[effect_index]
-                                                            .saturating_add(1);
-                                                    if effect_boundary_logs[effect_index]
-                                                        .elapsed()
-                                                        .as_millis()
-                                                        >= 200
-                                                    {
-                                                        log::info!(
-                                                            "effect boundary discontinuity: effect={} delta={:.4} prev={:.4} curr={:.4} ch={} count={}",
-                                                            effect_label(effect),
-                                                            delta,
-                                                            prev,
-                                                            curr,
-                                                            ch,
-                                                            effect_boundary_counts[effect_index]
-                                                        );
-                                                        effect_boundary_logs[effect_index] =
-                                                            Instant::now();
-                                                    }
-                                                }
-                                            }
-                                            let last_frame_start =
-                                                processed.len().saturating_sub(channels);
-                                            for ch in 0..channels {
-                                                let idx = (last_frame_start + ch)
-                                                    .min(processed.len().saturating_sub(1));
-                                                effect_last_samples[effect_index][ch] =
-                                                    processed[idx];
-                                            }
-                                            if !effect_boundary_initialized[effect_index]
-                                                && !processed.is_empty()
-                                            {
-                                                effect_boundary_initialized[effect_index] = true;
-                                            }
-                                        }
+                                    let Some(value) = buffer.pop() else {
+                                        continue;
+                                    };
+                                    let frame_index = (sample_index / channel_count) as u32;
+                                    if frame_index >= frames_remaining {
+                                        continue;
                                     }
+                                    let fade_gain = frames_remaining.saturating_sub(frame_index)
+                                        as f32
+                                        / total_frames as f32;
+                                    let gain = channel_gains
+                                        .and_then(|gains| gains.get(sample_index % channel_count))
+                                        .copied()
+                                        .unwrap_or(1.0);
+                                    *sample += value * weight * gain * fade_gain;
+                                }
+                                if let Some((remaining, _)) = fading_tracks.get_mut(track_key) {
+                                    *remaining = remaining.saturating_sub(chunk_frames);
                                 }
                             }
+                            fading_tracks.retain(|_, (remaining, _)| *remaining > 0);
                         }
 
-                        if processed.len() < current_chunk {
-                            processed.resize(current_chunk, 0.0);
-                        } else if processed.len() > current_chunk {
-                            let extra = processed.split_off(current_chunk);
-                            let mut tail_buffer = effects_buffer.lock().unwrap();
-                            for sample in extra {
-                                let _ = tail_buffer.push(sample);
-                            }
-                        }
-
-                        #[cfg(feature = "debug")]
-                        {
-                            let channels = input_channels.max(1) as usize;
-                            if last_samples.len() != channels {
-                                last_samples = vec![0.0; channels];
-                            }
-                            for (idx, sample) in processed.iter().enumerate() {
-                                let ch = idx % channels;
-                                let prev = last_samples[ch];
-                                if sample.is_nan() || sample.is_infinite() {
-                                    nan_count = nan_count.saturating_add(1);
-                                }
-                                if sample.abs() > 1.0 {
-                                    clip_count = clip_count.saturating_add(1);
-                                }
-                                let delta = (sample - prev).abs();
-                                if boundary_initialized && idx < channels && delta > 0.1 {
-                                    boundary_count = boundary_count.saturating_add(1);
-                                    if last_boundary_log.elapsed().as_millis() >= 200 {
-                                        log::info!(
-                                            "boundary discontinuity: delta={:.4} prev={:.4} curr={:.4} ch={} count={}",
-                                            delta,
-                                            prev,
-                                            sample,
-                                            ch,
-                                            boundary_count
-                                        );
-                                        last_boundary_log = Instant::now();
-                                    }
-                                }
-                                if delta > 0.9 && sample.abs() > 0.6 {
-                                    pop_count = pop_count.saturating_add(1);
-                                }
-                                last_samples[ch] = *sample;
-                            }
-                            if !boundary_initialized && !processed.is_empty() {
-                                boundary_initialized = true;
-                            }
-                            if last_pop_log.elapsed().as_secs_f64() >= 1.0
-                                && (pop_count > 0 || clip_count > 0 || nan_count > 0)
-                            {
-                                log::warn!(
-                                    "sample anomalies: pops={} clips={} nans={}",
-                                    pop_count,
-                                    clip_count,
-                                    nan_count
-                                );
-                                last_pop_log = Instant::now();
-                            }
-                        }
-
-                        #[cfg(feature = "debug")]
-                        {
-                            let dsp_time_ms = dsp_start.elapsed().as_secs_f64() * 1000.0;
-                            let rt_factor = if audio_time_ms > 0.0 {
-                                dsp_time_ms / audio_time_ms
-                            } else {
-                                0.0
-                            };
-                            let overrun_ms = (dsp_time_ms - audio_time_ms).max(0.0);
-                            let overrun = rt_factor > 1.0;
-                            let chain_ksps = if dsp_time_ms > 0.0 {
-                                (processed.len() as f64 / (dsp_time_ms / 1000.0)) / 1000.0
-                            } else {
-                                0.0
-                            };
-
-                            avg_dsp_ms = if avg_dsp_ms == 0.0 {
-                                dsp_time_ms
-                            } else {
-                                (avg_dsp_ms * (1.0 - alpha)) + (dsp_time_ms * alpha)
-                            };
-                            avg_audio_ms = if avg_audio_ms == 0.0 {
-                                audio_time_ms
-                            } else {
-                                (avg_audio_ms * (1.0 - alpha)) + (audio_time_ms * alpha)
-                            };
-                            avg_rt_factor = if avg_rt_factor == 0.0 {
-                                rt_factor
-                            } else {
-                                (avg_rt_factor * (1.0 - alpha)) + (rt_factor * alpha)
-                            };
-                            avg_overrun_ms = if avg_overrun_ms == 0.0 {
-                                overrun_ms
-                            } else {
-                                (avg_overrun_ms * (1.0 - alpha)) + (overrun_ms * alpha)
-                            };
-                            avg_chain_ksps = if avg_chain_ksps == 0.0 {
-                                chain_ksps
-                            } else {
-                                (avg_chain_ksps * (1.0 - alpha)) + (chain_ksps * alpha)
-                            };
-
-                            if rt_factor > 0.0 {
-                                min_rt_factor = min_rt_factor.min(rt_factor);
-                                max_rt_factor = max_rt_factor.max(rt_factor);
-                            }
-                            if overrun_ms > 0.0 {
-                                max_overrun_ms = max_overrun_ms.max(overrun_ms);
-                            }
-                            if chain_ksps > 0.0 {
-                                min_chain_ksps = min_chain_ksps.min(chain_ksps);
-                                max_chain_ksps = max_chain_ksps.max(chain_ksps);
-                            }
-
-                            let mut metrics = dsp_metrics.lock().unwrap();
-                            metrics.dsp_time_ms = dsp_time_ms;
-                            metrics.audio_time_ms = audio_time_ms;
-                            metrics.rt_factor = rt_factor;
-                            metrics.overrun = overrun;
-                            metrics.overrun_ms = overrun_ms;
-                            metrics.avg_overrun_ms = avg_overrun_ms;
-                            metrics.max_overrun_ms = max_overrun_ms;
-                            metrics.avg_dsp_ms = avg_dsp_ms;
-                            metrics.avg_audio_ms = avg_audio_ms;
-                            metrics.avg_rt_factor = avg_rt_factor;
-                            metrics.min_rt_factor = if min_rt_factor.is_finite() {
-                                min_rt_factor
-                            } else {
-                                0.0
-                            };
-                            metrics.max_rt_factor = max_rt_factor;
-                            metrics.chain_ksps = chain_ksps;
-                            metrics.avg_chain_ksps = avg_chain_ksps;
-                            metrics.min_chain_ksps = if min_chain_ksps.is_finite() {
-                                min_chain_ksps
-                            } else {
-                                0.0
-                            };
-                            metrics.max_chain_ksps = max_chain_ksps;
-                            metrics.underrun_count = underrun_count;
-                            metrics.underrun_active = false;
-                            metrics.pop_count = pop_count;
-                            metrics.clip_count = clip_count;
-                            metrics.nan_count = nan_count;
-                            metrics.track_key_count = buffer_snapshot.len();
-                            metrics.finished_track_count = finished_snapshot.len();
-                            metrics.prot_key_count = prot_key_count;
-                        }
-
-                        processed
+                        premix_buffer.push_interleaved(&mix_buffer[..current_chunk]);
+                        let consumed_source_frames = current_chunk as u64 / channel_count as u64;
+                        source_timeline_frames =
+                            source_timeline_frames.saturating_add(consumed_source_frames);
+                        did_work = true;
                     }
-                } else {
+                }
+
+                let effects_len = effects_buffer.lock().unwrap().len();
+                let should_output_tail = effects_len > 0;
+                let should_process_premix = !should_output_tail
+                    && (premix_buffer.len() >= min_mix_samples
+                        || (all_tracks_finished && !premix_buffer.is_empty()));
+
+                let samples = if should_output_tail {
                     let mut tail_buffer = effects_buffer.lock().unwrap();
                     let take = tail_buffer.len().min(min_mix_samples).max(1);
                     let mut out = Vec::with_capacity(take);
@@ -707,6 +687,263 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer, f
                         }
                     }
                     out
+                } else if should_process_premix {
+                    let take = if premix_buffer.len() >= min_mix_samples {
+                        min_mix_samples
+                    } else {
+                        premix_buffer.len()
+                    };
+                    let dsp_input = premix_buffer.pop_chunk(take);
+
+                    #[cfg(feature = "debug")]
+                    let audio_time_ms = if input_channels > 0 && sample_rate > 0 {
+                        let frames = dsp_input.len() as f64 / input_channels as f64;
+                        (frames / sample_rate as f64) * 1000.0
+                    } else {
+                        0.0
+                    };
+
+                    #[cfg(feature = "debug")]
+                    let dsp_start = Instant::now();
+
+                    let drain_effects = all_tracks_finished && premix_buffer.is_empty();
+                    let mut processed = dsp_input.clone();
+                    {
+                        let mut effects_guard = effects.lock().unwrap();
+                        #[cfg(feature = "debug")]
+                        let effect_boundary_log = {
+                            let settings = buffer_settings.lock().unwrap();
+                            settings.effect_boundary_log
+                        };
+                        #[cfg(feature = "debug")]
+                        if effect_boundary_log {
+                            let effect_count = effects_guard.len();
+                            if effect_boundary_initialized.len() != effect_count
+                                || effect_last_samples.len() != effect_count
+                                || effect_boundary_counts.len() != effect_count
+                                || effect_boundary_logs.len() != effect_count
+                            {
+                                let channels = input_channels.max(1) as usize;
+                                effect_boundary_initialized = vec![false; effect_count];
+                                effect_last_samples = vec![vec![0.0; channels]; effect_count];
+                                effect_boundary_counts = vec![0_u64; effect_count];
+                                effect_boundary_logs = vec![Instant::now(); effect_count];
+                            }
+                        }
+                        for (effect_index, effect) in effects_guard.iter_mut().enumerate() {
+                            #[cfg(not(feature = "debug"))]
+                            let _ = effect_index;
+                            processed = effect.process(&processed, &effect_context, drain_effects);
+                            #[cfg(feature = "debug")]
+                            if effect_boundary_log {
+                                let channels = input_channels.max(1) as usize;
+                                if effect_index < effect_last_samples.len()
+                                    && effect_index < effect_boundary_initialized.len()
+                                {
+                                    if processed.len() >= channels {
+                                        let initialized = effect_boundary_initialized[effect_index];
+                                        for ch in 0..channels {
+                                            let prev = effect_last_samples[effect_index][ch];
+                                            let curr = processed[ch];
+                                            let delta = (curr - prev).abs();
+                                            if initialized && delta > 0.1 {
+                                                effect_boundary_counts[effect_index] =
+                                                    effect_boundary_counts[effect_index]
+                                                        .saturating_add(1);
+                                                if effect_boundary_logs[effect_index]
+                                                    .elapsed()
+                                                    .as_millis()
+                                                    >= 200
+                                                {
+                                                    log::info!(
+                                                        "effect boundary discontinuity: effect={} delta={:.4} prev={:.4} curr={:.4} ch={} count={}",
+                                                        effect_label(effect),
+                                                        delta,
+                                                        prev,
+                                                        curr,
+                                                        ch,
+                                                        effect_boundary_counts[effect_index]
+                                                    );
+                                                    effect_boundary_logs[effect_index] =
+                                                        Instant::now();
+                                                }
+                                            }
+                                        }
+                                        let last_frame_start =
+                                            processed.len().saturating_sub(channels);
+                                        for ch in 0..channels {
+                                            let idx = (last_frame_start + ch)
+                                                .min(processed.len().saturating_sub(1));
+                                            effect_last_samples[effect_index][ch] = processed[idx];
+                                        }
+                                        if !effect_boundary_initialized[effect_index]
+                                            && !processed.is_empty()
+                                        {
+                                            effect_boundary_initialized[effect_index] = true;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    if processed.len() < dsp_input.len() {
+                        // Effects should usually preserve length. If an effect returns short
+                        // output, preserve continuity with dry samples instead of padding silence.
+                        let missing = dsp_input.len().saturating_sub(processed.len());
+                        let start = dsp_input.len().saturating_sub(missing);
+                        processed.extend_from_slice(&dsp_input[start..]);
+                    } else if processed.len() > dsp_input.len() {
+                        let extra = processed.split_off(dsp_input.len());
+                        let mut tail_buffer = effects_buffer.lock().unwrap();
+                        for sample in extra {
+                            let _ = tail_buffer.push(sample);
+                        }
+                    }
+
+                    #[cfg(feature = "debug")]
+                    {
+                        let channels = input_channels.max(1) as usize;
+                        if last_samples.len() != channels {
+                            last_samples = vec![0.0; channels];
+                        }
+                        for (idx, sample) in processed.iter().enumerate() {
+                            let ch = idx % channels;
+                            let prev = last_samples[ch];
+                            if sample.is_nan() || sample.is_infinite() {
+                                nan_count = nan_count.saturating_add(1);
+                            }
+                            if sample.abs() > 1.0 {
+                                clip_count = clip_count.saturating_add(1);
+                            }
+                            let delta = (sample - prev).abs();
+                            if boundary_initialized && idx < channels && delta > 0.1 {
+                                boundary_count = boundary_count.saturating_add(1);
+                                if last_boundary_log.elapsed().as_millis() >= 200 {
+                                    log::info!(
+                                        "boundary discontinuity: delta={:.4} prev={:.4} curr={:.4} ch={} count={}",
+                                        delta,
+                                        prev,
+                                        sample,
+                                        ch,
+                                        boundary_count
+                                    );
+                                    last_boundary_log = Instant::now();
+                                }
+                            }
+                            if delta > 0.9 && sample.abs() > 0.6 {
+                                pop_count = pop_count.saturating_add(1);
+                            }
+                            last_samples[ch] = *sample;
+                        }
+                        if !boundary_initialized && !processed.is_empty() {
+                            boundary_initialized = true;
+                        }
+                        if last_pop_log.elapsed().as_secs_f64() >= 1.0
+                            && (pop_count > 0 || clip_count > 0 || nan_count > 0)
+                        {
+                            log::warn!(
+                                "sample anomalies: pops={} clips={} nans={}",
+                                pop_count,
+                                clip_count,
+                                nan_count
+                            );
+                            last_pop_log = Instant::now();
+                        }
+                    }
+
+                    #[cfg(feature = "debug")]
+                    {
+                        let dsp_time_ms = dsp_start.elapsed().as_secs_f64() * 1000.0;
+                        let rt_factor = if audio_time_ms > 0.0 {
+                            dsp_time_ms / audio_time_ms
+                        } else {
+                            0.0
+                        };
+                        let overrun_ms = (dsp_time_ms - audio_time_ms).max(0.0);
+                        let overrun = rt_factor > 1.0;
+                        let chain_ksps = if dsp_time_ms > 0.0 {
+                            (processed.len() as f64 / (dsp_time_ms / 1000.0)) / 1000.0
+                        } else {
+                            0.0
+                        };
+
+                        avg_dsp_ms = if avg_dsp_ms == 0.0 {
+                            dsp_time_ms
+                        } else {
+                            (avg_dsp_ms * (1.0 - alpha)) + (dsp_time_ms * alpha)
+                        };
+                        avg_audio_ms = if avg_audio_ms == 0.0 {
+                            audio_time_ms
+                        } else {
+                            (avg_audio_ms * (1.0 - alpha)) + (audio_time_ms * alpha)
+                        };
+                        avg_rt_factor = if avg_rt_factor == 0.0 {
+                            rt_factor
+                        } else {
+                            (avg_rt_factor * (1.0 - alpha)) + (rt_factor * alpha)
+                        };
+                        avg_overrun_ms = if avg_overrun_ms == 0.0 {
+                            overrun_ms
+                        } else {
+                            (avg_overrun_ms * (1.0 - alpha)) + (overrun_ms * alpha)
+                        };
+                        avg_chain_ksps = if avg_chain_ksps == 0.0 {
+                            chain_ksps
+                        } else {
+                            (avg_chain_ksps * (1.0 - alpha)) + (chain_ksps * alpha)
+                        };
+
+                        if rt_factor > 0.0 {
+                            min_rt_factor = min_rt_factor.min(rt_factor);
+                            max_rt_factor = max_rt_factor.max(rt_factor);
+                        }
+                        if overrun_ms > 0.0 {
+                            max_overrun_ms = max_overrun_ms.max(overrun_ms);
+                        }
+                        if chain_ksps > 0.0 {
+                            min_chain_ksps = min_chain_ksps.min(chain_ksps);
+                            max_chain_ksps = max_chain_ksps.max(chain_ksps);
+                        }
+
+                        let mut metrics = dsp_metrics.lock().unwrap();
+                        metrics.dsp_time_ms = dsp_time_ms;
+                        metrics.audio_time_ms = audio_time_ms;
+                        metrics.rt_factor = rt_factor;
+                        metrics.overrun = overrun;
+                        metrics.overrun_ms = overrun_ms;
+                        metrics.avg_overrun_ms = avg_overrun_ms;
+                        metrics.max_overrun_ms = max_overrun_ms;
+                        metrics.avg_dsp_ms = avg_dsp_ms;
+                        metrics.avg_audio_ms = avg_audio_ms;
+                        metrics.avg_rt_factor = avg_rt_factor;
+                        metrics.min_rt_factor = if min_rt_factor.is_finite() {
+                            min_rt_factor
+                        } else {
+                            0.0
+                        };
+                        metrics.max_rt_factor = max_rt_factor;
+                        metrics.chain_ksps = chain_ksps;
+                        metrics.avg_chain_ksps = avg_chain_ksps;
+                        metrics.min_chain_ksps = if min_chain_ksps.is_finite() {
+                            min_chain_ksps
+                        } else {
+                            0.0
+                        };
+                        metrics.max_chain_ksps = max_chain_ksps;
+                        metrics.underrun_count = underrun_count;
+                        metrics.underrun_active = false;
+                        metrics.pop_count = pop_count;
+                        metrics.clip_count = clip_count;
+                        metrics.nan_count = nan_count;
+                        metrics.track_key_count = active_buffer_snapshot.len();
+                        metrics.finished_track_count = finished_snapshot.len();
+                        metrics.prot_key_count = active_track_keys.len();
+                    }
+
+                    processed
+                } else {
+                    Vec::new()
                 };
 
                 if !samples.is_empty() {
@@ -725,7 +962,10 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer, f
                 }
             }
 
-            if !all_buffers_full && effects_buffer.lock().unwrap().len() == 0 {
+            if !all_buffers_full
+                && effects_buffer.lock().unwrap().len() == 0
+                && premix_buffer.is_empty()
+            {
                 let (guard, _) = buffer_notify
                     .wait_timeout(hash_buffer_copy.lock().unwrap(), Duration::from_millis(20))
                     .unwrap();
