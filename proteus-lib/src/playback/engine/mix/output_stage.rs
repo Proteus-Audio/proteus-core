@@ -32,17 +32,7 @@ pub(super) struct OutputStageArgs<'a> {
     pub(super) finished_track_count: usize,
     pub(super) prot_key_count: usize,
     #[cfg(feature = "debug")]
-    pub(super) avg_dsp_ms: &'a mut f64,
-    #[cfg(feature = "debug")]
-    pub(super) avg_audio_ms: &'a mut f64,
-    #[cfg(feature = "debug")]
-    pub(super) avg_rt_factor: &'a mut f64,
-    #[cfg(feature = "debug")]
     pub(super) avg_overrun_ms: &'a mut f64,
-    #[cfg(feature = "debug")]
-    pub(super) min_rt_factor: &'a mut f64,
-    #[cfg(feature = "debug")]
-    pub(super) max_rt_factor: &'a mut f64,
     #[cfg(feature = "debug")]
     pub(super) avg_chain_ksps: &'a mut f64,
     #[cfg(feature = "debug")]
@@ -98,17 +88,7 @@ pub(super) fn produce_output_samples(args: OutputStageArgs<'_>) -> Vec<f32> {
         finished_track_count,
         prot_key_count,
         #[cfg(feature = "debug")]
-        avg_dsp_ms,
-        #[cfg(feature = "debug")]
-        avg_audio_ms,
-        #[cfg(feature = "debug")]
-        avg_rt_factor,
-        #[cfg(feature = "debug")]
         avg_overrun_ms,
-        #[cfg(feature = "debug")]
-        min_rt_factor,
-        #[cfg(feature = "debug")]
-        max_rt_factor,
         #[cfg(feature = "debug")]
         avg_chain_ksps,
         #[cfg(feature = "debug")]
@@ -387,21 +367,6 @@ pub(super) fn produce_output_samples(args: OutputStageArgs<'_>) -> Vec<f32> {
             0.0
         };
 
-        *avg_dsp_ms = if *avg_dsp_ms == 0.0 {
-            dsp_time_ms
-        } else {
-            (*avg_dsp_ms * (1.0 - alpha)) + (dsp_time_ms * alpha)
-        };
-        *avg_audio_ms = if *avg_audio_ms == 0.0 {
-            audio_time_ms
-        } else {
-            (*avg_audio_ms * (1.0 - alpha)) + (audio_time_ms * alpha)
-        };
-        *avg_rt_factor = if *avg_rt_factor == 0.0 {
-            rt_factor
-        } else {
-            (*avg_rt_factor * (1.0 - alpha)) + (rt_factor * alpha)
-        };
         *avg_overrun_ms = if *avg_overrun_ms == 0.0 {
             overrun_ms
         } else {
@@ -413,10 +378,6 @@ pub(super) fn produce_output_samples(args: OutputStageArgs<'_>) -> Vec<f32> {
             (*avg_chain_ksps * (1.0 - alpha)) + (chain_ksps * alpha)
         };
 
-        if rt_factor > 0.0 {
-            *min_rt_factor = min_rt_factor.min(rt_factor);
-            *max_rt_factor = max_rt_factor.max(rt_factor);
-        }
         if overrun_ms > 0.0 {
             *max_overrun_ms = max_overrun_ms.max(overrun_ms);
         }
@@ -426,22 +387,10 @@ pub(super) fn produce_output_samples(args: OutputStageArgs<'_>) -> Vec<f32> {
         }
 
         let mut metrics = dsp_metrics.lock().unwrap();
-        metrics.dsp_time_ms = dsp_time_ms;
-        metrics.audio_time_ms = audio_time_ms;
-        metrics.rt_factor = rt_factor;
         metrics.overrun = overrun;
         metrics.overrun_ms = overrun_ms;
         metrics.avg_overrun_ms = *avg_overrun_ms;
         metrics.max_overrun_ms = *max_overrun_ms;
-        metrics.avg_dsp_ms = *avg_dsp_ms;
-        metrics.avg_audio_ms = *avg_audio_ms;
-        metrics.avg_rt_factor = *avg_rt_factor;
-        metrics.min_rt_factor = if min_rt_factor.is_finite() {
-            *min_rt_factor
-        } else {
-            0.0
-        };
-        metrics.max_rt_factor = *max_rt_factor;
         metrics.chain_ksps = chain_ksps;
         metrics.avg_chain_ksps = *avg_chain_ksps;
         metrics.min_chain_ksps = if min_chain_ksps.is_finite() {

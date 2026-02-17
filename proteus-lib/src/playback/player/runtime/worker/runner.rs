@@ -493,13 +493,6 @@ fn update_sink(
 
     {
         let mut metrics = ctx.dsp_metrics_for_sink.lock().unwrap();
-        metrics.append_delay_ms = delay_ms;
-        metrics.avg_append_delay_ms = if metrics.avg_append_delay_ms == 0.0 {
-            delay_ms
-        } else {
-            (metrics.avg_append_delay_ms * 0.9) + (delay_ms * 0.1)
-        };
-        metrics.max_append_delay_ms = metrics.max_append_delay_ms.max(delay_ms);
         metrics.late_append_count = loop_state.append_timing.lock().unwrap().2;
         metrics.late_append_active = late;
     }

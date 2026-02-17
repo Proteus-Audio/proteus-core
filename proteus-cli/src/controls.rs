@@ -20,14 +20,6 @@ pub struct StatusArgs {
     #[cfg(feature = "debug")]
     pub sample_rate: u32,
     #[cfg(feature = "debug")]
-    pub channels: u32,
-    #[cfg(feature = "debug")]
-    pub dsp_time_ms: f64,
-    #[cfg(feature = "debug")]
-    pub audio_time_ms: f64,
-    #[cfg(feature = "debug")]
-    pub rt_factor: f64,
-    #[cfg(feature = "debug")]
     pub overrun: bool,
     #[cfg(feature = "debug")]
     pub overrun_ms: f64,
@@ -59,12 +51,6 @@ pub struct StatusArgs {
     pub clip_count: u64,
     #[cfg(feature = "debug")]
     pub nan_count: u64,
-    #[cfg(feature = "debug")]
-    pub append_delay_ms: f64,
-    #[cfg(feature = "debug")]
-    pub avg_append_delay_ms: f64,
-    #[cfg(feature = "debug")]
-    pub max_append_delay_ms: f64,
     #[cfg(feature = "debug")]
     pub late_append_count: u64,
     #[cfg(feature = "debug")]
@@ -104,11 +90,12 @@ pub fn status_text(args: StatusArgs) -> StatusSnapshot {
 
     #[cfg(feature = "debug")]
     let text = format!(
-        "{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n",
+        "{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n",
         format!("{}   {} / {}   ({:>5.1}%)", state, current, total, percent),
         format!("Effects: {}", effects_label),
+        format!("Sample Rate: {:>4.1} hHz", args.sample_rate as f32 / 1000.0),
         format!(
-            "DSP CHAIN: {:>6.2} ksps (avg {:>6.2} min {:>6.2} max {:>6.2})",
+            "DSP CHAIN: {:>6.2} hHz (avg {:>6.2} hHz | min {:>6.2} hHz | max {:>6.2} hHz)",
             args.chain_ksps, args.avg_chain_ksps, args.min_chain_ksps, args.max_chain_ksps
         ),
         format!(

@@ -46,17 +46,7 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer, f
         const MIN_MIX_MS: f32 = 300.0;
         const SHUFFLE_CROSSFADE_MS: f64 = 5.0;
         #[cfg(feature = "debug")]
-        let mut avg_dsp_ms = 0.0_f64;
-        #[cfg(feature = "debug")]
-        let mut avg_audio_ms = 0.0_f64;
-        #[cfg(feature = "debug")]
-        let mut avg_rt_factor = 0.0_f64;
-        #[cfg(feature = "debug")]
         let mut avg_overrun_ms = 0.0_f64;
-        #[cfg(feature = "debug")]
-        let mut min_rt_factor = f64::INFINITY;
-        #[cfg(feature = "debug")]
-        let mut max_rt_factor = 0.0_f64;
         #[cfg(feature = "debug")]
         let mut avg_chain_ksps = 0.0_f64;
         #[cfg(feature = "debug")]
@@ -597,17 +587,7 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer, f
                         finished_track_count: finished_snapshot.len(),
                         prot_key_count: active_track_keys.len(),
                         #[cfg(feature = "debug")]
-                        avg_dsp_ms: &mut avg_dsp_ms,
-                        #[cfg(feature = "debug")]
-                        avg_audio_ms: &mut avg_audio_ms,
-                        #[cfg(feature = "debug")]
-                        avg_rt_factor: &mut avg_rt_factor,
-                        #[cfg(feature = "debug")]
                         avg_overrun_ms: &mut avg_overrun_ms,
-                        #[cfg(feature = "debug")]
-                        min_rt_factor: &mut min_rt_factor,
-                        #[cfg(feature = "debug")]
-                        max_rt_factor: &mut max_rt_factor,
                         #[cfg(feature = "debug")]
                         avg_chain_ksps: &mut avg_chain_ksps,
                         #[cfg(feature = "debug")]
