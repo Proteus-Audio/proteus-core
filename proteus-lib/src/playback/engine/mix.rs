@@ -18,6 +18,7 @@ use crate::track::{buffer_container_tracks, buffer_track, ContainerTrackArgs, Tr
 
 use super::premix::PremixBuffer;
 use super::state::{DspChainMetrics, PlaybackBufferSettings};
+use super::InlineEffectsUpdate;
 
 #[cfg(feature = "debug")]
 #[allow(deprecated)]
@@ -33,6 +34,7 @@ fn effect_label(effect: &AudioEffect) -> &'static str {
         AudioEffect::Gain(_) => "Gain",
         AudioEffect::Compressor(_) => "Compressor",
         AudioEffect::Limiter(_) => "Limiter",
+        AudioEffect::MultibandEq(_) => "MultibandEq",
     }
 }
 
@@ -45,6 +47,7 @@ pub struct MixThreadArgs {
     pub track_weights: Arc<Mutex<HashMap<u16, f32>>>,
     pub track_channel_gains: Arc<Mutex<HashMap<u16, Vec<f32>>>>,
     pub effects_reset: Arc<AtomicU64>,
+    pub inline_effects_update: Arc<Mutex<Option<InlineEffectsUpdate>>>,
     pub finished_tracks: Arc<Mutex<Vec<u16>>>,
     pub prot: Arc<Mutex<Prot>>,
     pub abort: Arc<AtomicBool>,
@@ -52,6 +55,27 @@ pub struct MixThreadArgs {
     pub buffer_settings: Arc<Mutex<PlaybackBufferSettings>>,
     pub effects: Arc<Mutex<Vec<AudioEffect>>>,
     pub dsp_metrics: Arc<Mutex<DspChainMetrics>>,
+}
+
+#[derive(Debug, Clone)]
+struct ActiveInlineTransition {
+    old_effects: Vec<AudioEffect>,
+    new_effects: Vec<AudioEffect>,
+    total_samples: usize,
+    remaining_samples: usize,
+}
+
+fn run_effect_chain(
+    effects: &mut [AudioEffect],
+    input: &[f32],
+    context: &EffectContext,
+    drain: bool,
+) -> Vec<f32> {
+    let mut current = input.to_vec();
+    for effect in effects.iter_mut() {
+        current = effect.process(&current, context, drain);
+    }
+    current
 }
 
 /// Spawn the mixing thread and return a receiver of mixed audio buffers.
@@ -66,6 +90,7 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer, f
         track_weights,
         track_channel_gains,
         effects_reset,
+        inline_effects_update,
         finished_tracks,
         prot,
         abort,
@@ -170,6 +195,7 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer, f
         };
 
         let mut last_effects_reset = effects_reset.load(std::sync::atomic::Ordering::SeqCst);
+        let mut active_inline_transition: Option<ActiveInlineTransition> = None;
 
         let start_buffer_ms = buffer_settings.lock().unwrap().start_buffer_ms;
         let start_samples = ((audio_info.sample_rate as f32 * start_buffer_ms) / 1000.0) as usize
@@ -460,6 +486,8 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer, f
                 let mut tail_buffer = effects_buffer.lock().unwrap();
                 while tail_buffer.pop().is_some() {}
                 premix_buffer.clear();
+                active_inline_transition = None;
+                inline_effects_update.lock().unwrap().take();
                 effect_context = {
                     let prot = prot_locked.lock().unwrap();
                     EffectContext {
@@ -479,6 +507,36 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer, f
                     effect_last_samples.clear();
                     effect_boundary_counts.clear();
                     effect_boundary_logs.clear();
+                }
+            }
+
+            if let Some(update) = inline_effects_update.lock().unwrap().take() {
+                let transition_samples = ((update.transition_ms / 1000.0)
+                    * audio_info.sample_rate.max(1) as f32)
+                    .round() as usize
+                    * audio_info.channels.max(1) as usize;
+                if transition_samples == 0 {
+                    let mut effects_guard = effects.lock().unwrap();
+                    *effects_guard = update.effects;
+                    for effect in effects_guard.iter_mut() {
+                        effect.warm_up(&effect_context);
+                    }
+                    active_inline_transition = None;
+                } else {
+                    let old_effects = {
+                        let effects_guard = effects.lock().unwrap();
+                        effects_guard.clone()
+                    };
+                    let mut new_effects = update.effects;
+                    for effect in new_effects.iter_mut() {
+                        effect.warm_up(&effect_context);
+                    }
+                    active_inline_transition = Some(ActiveInlineTransition {
+                        old_effects,
+                        new_effects,
+                        total_samples: transition_samples,
+                        remaining_samples: transition_samples,
+                    });
                 }
             }
 
@@ -551,13 +609,31 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer, f
                 && premix_buffer.is_empty()
                 && all_tracks_finished
             {
-                let drained = {
-                    let mut effects_guard = effects.lock().unwrap();
-                    let mut current = Vec::new();
-                    for effect in effects_guard.iter_mut() {
-                        current = effect.process(&current, &effect_context, true);
+                let drained = if let Some(transition) = active_inline_transition.as_mut() {
+                    let old_out =
+                        run_effect_chain(&mut transition.old_effects, &[], &effect_context, true);
+                    let new_out =
+                        run_effect_chain(&mut transition.new_effects, &[], &effect_context, true);
+                    let len = old_out.len().max(new_out.len());
+                    let mut blended = Vec::with_capacity(len);
+                    for sample_index in 0..len {
+                        let old_sample = old_out.get(sample_index).copied().unwrap_or(0.0);
+                        let new_sample = new_out.get(sample_index).copied().unwrap_or(0.0);
+                        let mix = if transition.total_samples == 0 {
+                            1.0
+                        } else {
+                            let completed = transition
+                                .total_samples
+                                .saturating_sub(transition.remaining_samples);
+                            completed as f32 / transition.total_samples as f32
+                        }
+                        .clamp(0.0, 1.0);
+                        blended.push((old_sample * (1.0 - mix)) + (new_sample * mix));
                     }
-                    current
+                    blended
+                } else {
+                    let mut effects_guard = effects.lock().unwrap();
+                    run_effect_chain(&mut effects_guard, &[], &effect_context, true)
                 };
                 if !drained.is_empty() {
                     let mut tail_buffer = effects_buffer.lock().unwrap();
@@ -707,8 +783,47 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer, f
                     let dsp_start = Instant::now();
 
                     let drain_effects = all_tracks_finished && premix_buffer.is_empty();
-                    let mut processed = dsp_input.clone();
+                    let mut processed = if let Some(transition) = active_inline_transition.as_mut()
                     {
+                        let old_out = run_effect_chain(
+                            &mut transition.old_effects,
+                            &dsp_input,
+                            &effect_context,
+                            drain_effects,
+                        );
+                        let new_out = run_effect_chain(
+                            &mut transition.new_effects,
+                            &dsp_input,
+                            &effect_context,
+                            drain_effects,
+                        );
+                        let len = old_out.len().max(new_out.len());
+                        let mut blended = Vec::with_capacity(len);
+                        for sample_index in 0..len {
+                            let old_sample = old_out.get(sample_index).copied().unwrap_or(0.0);
+                            let new_sample = new_out.get(sample_index).copied().unwrap_or(0.0);
+                            let mix = if transition.total_samples == 0 {
+                                1.0
+                            } else {
+                                let completed = transition
+                                    .total_samples
+                                    .saturating_sub(transition.remaining_samples);
+                                completed as f32 / transition.total_samples as f32
+                            }
+                            .clamp(0.0, 1.0);
+                            blended.push((old_sample * (1.0 - mix)) + (new_sample * mix));
+                            if transition.remaining_samples > 0 {
+                                transition.remaining_samples -= 1;
+                            }
+                        }
+
+                        if transition.remaining_samples == 0 {
+                            let mut effects_guard = effects.lock().unwrap();
+                            *effects_guard = std::mem::take(&mut transition.new_effects);
+                            active_inline_transition = None;
+                        }
+                        blended
+                    } else {
                         let mut effects_guard = effects.lock().unwrap();
                         #[cfg(feature = "debug")]
                         let effect_boundary_log = {
@@ -730,62 +845,62 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer, f
                                 effect_boundary_logs = vec![Instant::now(); effect_count];
                             }
                         }
+
+                        let mut current = dsp_input.clone();
                         for (effect_index, effect) in effects_guard.iter_mut().enumerate() {
                             #[cfg(not(feature = "debug"))]
                             let _ = effect_index;
-                            processed = effect.process(&processed, &effect_context, drain_effects);
+                            current = effect.process(&current, &effect_context, drain_effects);
                             #[cfg(feature = "debug")]
                             if effect_boundary_log {
                                 let channels = input_channels.max(1) as usize;
                                 if effect_index < effect_last_samples.len()
                                     && effect_index < effect_boundary_initialized.len()
+                                    && current.len() >= channels
                                 {
-                                    if processed.len() >= channels {
-                                        let initialized = effect_boundary_initialized[effect_index];
-                                        for ch in 0..channels {
-                                            let prev = effect_last_samples[effect_index][ch];
-                                            let curr = processed[ch];
-                                            let delta = (curr - prev).abs();
-                                            if initialized && delta > 0.1 {
-                                                effect_boundary_counts[effect_index] =
+                                    let initialized = effect_boundary_initialized[effect_index];
+                                    for ch in 0..channels {
+                                        let prev = effect_last_samples[effect_index][ch];
+                                        let curr = current[ch];
+                                        let delta = (curr - prev).abs();
+                                        if initialized && delta > 0.1 {
+                                            effect_boundary_counts[effect_index] =
+                                                effect_boundary_counts[effect_index]
+                                                    .saturating_add(1);
+                                            if effect_boundary_logs[effect_index]
+                                                .elapsed()
+                                                .as_millis()
+                                                >= 200
+                                            {
+                                                log::info!(
+                                                    "effect boundary discontinuity: effect={} delta={:.4} prev={:.4} curr={:.4} ch={} count={}",
+                                                    effect_label(effect),
+                                                    delta,
+                                                    prev,
+                                                    curr,
+                                                    ch,
                                                     effect_boundary_counts[effect_index]
-                                                        .saturating_add(1);
-                                                if effect_boundary_logs[effect_index]
-                                                    .elapsed()
-                                                    .as_millis()
-                                                    >= 200
-                                                {
-                                                    log::info!(
-                                                        "effect boundary discontinuity: effect={} delta={:.4} prev={:.4} curr={:.4} ch={} count={}",
-                                                        effect_label(effect),
-                                                        delta,
-                                                        prev,
-                                                        curr,
-                                                        ch,
-                                                        effect_boundary_counts[effect_index]
-                                                    );
-                                                    effect_boundary_logs[effect_index] =
-                                                        Instant::now();
-                                                }
+                                                );
+                                                effect_boundary_logs[effect_index] = Instant::now();
                                             }
                                         }
-                                        let last_frame_start =
-                                            processed.len().saturating_sub(channels);
-                                        for ch in 0..channels {
-                                            let idx = (last_frame_start + ch)
-                                                .min(processed.len().saturating_sub(1));
-                                            effect_last_samples[effect_index][ch] = processed[idx];
-                                        }
-                                        if !effect_boundary_initialized[effect_index]
-                                            && !processed.is_empty()
-                                        {
-                                            effect_boundary_initialized[effect_index] = true;
-                                        }
+                                    }
+                                    let last_frame_start = current.len().saturating_sub(channels);
+                                    for ch in 0..channels {
+                                        let idx = (last_frame_start + ch)
+                                            .min(current.len().saturating_sub(1));
+                                        effect_last_samples[effect_index][ch] = current[idx];
+                                    }
+                                    if !effect_boundary_initialized[effect_index]
+                                        && !current.is_empty()
+                                    {
+                                        effect_boundary_initialized[effect_index] = true;
                                     }
                                 }
                             }
                         }
-                    }
+                        current
+                    };
 
                     if processed.len() < dsp_input.len() {
                         // Effects should usually preserve length. If an effect returns short

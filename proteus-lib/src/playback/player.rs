@@ -18,7 +18,9 @@ use crate::tools::timer;
 use crate::{
     container::info::Info,
     dsp::effects::AudioEffect,
-    playback::engine::{DspChainMetrics, PlaybackBufferSettings, PlayerEngine},
+    playback::engine::{
+        DspChainMetrics, InlineEffectsUpdate, PlaybackBufferSettings, PlayerEngine,
+    },
 };
 
 /// High-level playback state for the player.
@@ -83,6 +85,7 @@ pub struct Player {
     reporter: Option<Arc<Mutex<Reporter>>>,
     buffer_settings: Arc<Mutex<PlaybackBufferSettings>>,
     effects: Arc<Mutex<Vec<AudioEffect>>>,
+    inline_effects_update: Arc<Mutex<Option<InlineEffectsUpdate>>>,
     dsp_metrics: Arc<Mutex<DspChainMetrics>>,
     effects_reset: Arc<AtomicU64>,
     output_meter: Arc<Mutex<OutputMeter>>,
@@ -167,6 +170,7 @@ impl Player {
             reporter: None,
             buffer_settings: Arc::new(Mutex::new(PlaybackBufferSettings::new(20.0))),
             effects,
+            inline_effects_update: Arc::new(Mutex::new(None)),
             dsp_metrics: Arc::new(Mutex::new(DspChainMetrics::default())),
             effects_reset: Arc::new(AtomicU64::new(0)),
             output_meter: Arc::new(Mutex::new(OutputMeter::new(
@@ -300,25 +304,55 @@ impl Player {
                 AudioEffect::Gain(_) => "Gain".to_string(),
                 AudioEffect::Compressor(_) => "Compressor".to_string(),
                 AudioEffect::Limiter(_) => "Limiter".to_string(),
+                AudioEffect::MultibandEq(_) => "MultibandEq".to_string(),
             })
             .collect()
     }
 
     /// Replace the active DSP effects chain.
+    ///
+    /// This method preserves legacy behavior: it forces an effect-state reset
+    /// and re-seeks to the current timestamp so the new chain is applied
+    /// immediately, which also refreshes the sink.
+    ///
+    /// # Arguments
+    ///
+    /// * `effects` - New ordered list of effects to apply.
     pub fn set_effects(&mut self, effects: Vec<AudioEffect>) {
-        {
-            let mut guard = self.effects.lock().unwrap();
-            println!("New Effects: {:?}", effects);
-            *guard = effects;
-        }
+        self.clear_inline_effects_update();
+        self.replace_effects_chain(effects);
         self.request_effects_reset();
 
-        // Seeking to the current time stamp refreshes the
-        // Sink so that the new effects are applied immediately.
+        // Seeking to the current timestamp refreshes the sink so that
+        // the new effects are applied immediately.
         if !self.thread_finished() {
             let ts = self.get_time();
             self.seek(ts);
         }
+    }
+
+    /// Replace the active DSP effects chain inline during playback.
+    ///
+    /// Unlike [`Self::set_effects`], this does not reset effect internals,
+    /// clear effect tails, or rebuild the sink. The updated chain settings are
+    /// used for future chunks processed by the mixing thread, with a short
+    /// internal crossfade to reduce boundary clicks.
+    ///
+    /// # Arguments
+    ///
+    /// * `effects` - New ordered list of effects to apply.
+    pub fn set_effects_inline(&self, effects: Vec<AudioEffect>) {
+        if self.thread_finished() {
+            self.replace_effects_chain(effects);
+            return;
+        }
+
+        let transition_ms = {
+            let settings = self.buffer_settings.lock().unwrap();
+            settings.inline_effects_transition_ms.max(0.0)
+        };
+        let mut pending = self.inline_effects_update.lock().unwrap();
+        *pending = Some(InlineEffectsUpdate::new(effects, transition_ms));
     }
 
     /// Retrieve the latest DSP chain performance metrics.
@@ -387,6 +421,17 @@ impl Player {
         self.effects_reset.fetch_add(1, Ordering::SeqCst);
     }
 
+    fn clear_inline_effects_update(&self) {
+        let mut pending = self.inline_effects_update.lock().unwrap();
+        pending.take();
+    }
+
+    fn replace_effects_chain(&self, effects: Vec<AudioEffect>) {
+        let mut guard = self.effects.lock().unwrap();
+        log::info!("updated effects chain: {} effect(s)", effects.len());
+        *guard = effects;
+    }
+
     /// Configure the minimum buffered audio (ms) before playback starts.
     pub fn set_start_buffer_ms(&self, start_buffer_ms: f32) {
         let mut settings = self.buffer_settings.lock().unwrap();
@@ -443,6 +488,12 @@ impl Player {
         settings.append_jitter_log_ms = ms.max(0.0);
     }
 
+    /// Configure inline effects transition duration (ms) for `set_effects_inline`.
+    pub fn set_inline_effects_transition_ms(&self, ms: f32) {
+        let mut settings = self.buffer_settings.lock().unwrap();
+        settings.inline_effects_transition_ms = ms.max(0.0);
+    }
+
     /// Enable or disable per-effect boundary discontinuity logging.
     pub fn set_effect_boundary_log(&self, enabled: bool) {
         let mut settings = self.buffer_settings.lock().unwrap();
@@ -478,6 +529,7 @@ impl Player {
         let buffer_settings = self.buffer_settings.clone();
         let buffer_settings_for_state = self.buffer_settings.clone();
         let effects = self.effects.clone();
+        let inline_effects_update = self.inline_effects_update.clone();
         let dsp_metrics = self.dsp_metrics.clone();
         let dsp_metrics_for_sink = self.dsp_metrics.clone();
         let effects_reset = self.effects_reset.clone();
@@ -521,6 +573,7 @@ impl Player {
                 effects,
                 dsp_metrics,
                 effects_reset,
+                inline_effects_update,
             );
             let mut stream = None;
             for attempt in 1..=OUTPUT_STREAM_OPEN_RETRIES {
@@ -928,6 +981,7 @@ impl Player {
         drop(timestamp);
 
         self.request_effects_reset();
+        self.clear_inline_effects_update();
         self.kill_current();
         // self.stop.store(false, Ordering::SeqCst);
         self.initialize_thread(Some(ts));
@@ -1051,6 +1105,7 @@ impl Player {
             self.fade_current_sink_out(seek_fade_out_ms);
         }
         self.request_effects_reset();
+        self.clear_inline_effects_update();
 
         self.kill_current();
         self.state.lock().unwrap().clone_from(&state);
@@ -1092,6 +1147,7 @@ impl Player {
         drop(prot);
 
         self.request_effects_reset();
+        self.clear_inline_effects_update();
         // If stopped, return
         if self.thread_finished() {
             return;

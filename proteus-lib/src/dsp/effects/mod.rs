@@ -15,6 +15,7 @@ pub mod high_pass;
 mod level;
 pub mod limiter;
 pub mod low_pass;
+pub mod multiband_eq;
 
 #[allow(deprecated)]
 #[deprecated(note = "Use DelayReverbEffect instead.")]
@@ -31,6 +32,10 @@ pub use gain::{GainEffect, GainSettings};
 pub use high_pass::{HighPassFilterEffect, HighPassFilterSettings};
 pub use limiter::{LimiterEffect, LimiterSettings};
 pub use low_pass::{LowPassFilterEffect, LowPassFilterSettings};
+pub use multiband_eq::{
+    EqPointSettings, HighEdgeFilterSettings, LowEdgeFilterSettings, MultibandEqEffect,
+    MultibandEqSettings,
+};
 
 /// Shared context for preparing and running DSP effects.
 #[derive(Debug, Clone)]
@@ -66,6 +71,8 @@ pub enum AudioEffect {
     Compressor(CompressorEffect),
     #[serde(rename = "LimiterSettings")]
     Limiter(LimiterEffect),
+    #[serde(rename = "MultibandEqSettings")]
+    MultibandEq(MultibandEqEffect),
 }
 
 impl AudioEffect {
@@ -91,6 +98,7 @@ impl AudioEffect {
             AudioEffect::Gain(effect) => effect.process(samples, context, drain),
             AudioEffect::Compressor(effect) => effect.process(samples, context, drain),
             AudioEffect::Limiter(effect) => effect.process(samples, context, drain),
+            AudioEffect::MultibandEq(effect) => effect.process(samples, context, drain),
         }
     }
 
@@ -108,6 +116,7 @@ impl AudioEffect {
             AudioEffect::Gain(effect) => effect.reset_state(),
             AudioEffect::Compressor(effect) => effect.reset_state(),
             AudioEffect::Limiter(effect) => effect.reset_state(),
+            AudioEffect::MultibandEq(effect) => effect.reset_state(),
         }
     }
 
@@ -127,6 +136,7 @@ impl AudioEffect {
             AudioEffect::Gain(_) => {}
             AudioEffect::Compressor(_) => {}
             AudioEffect::Limiter(_) => {}
+            AudioEffect::MultibandEq(_) => {}
         }
     }
 
@@ -213,6 +223,7 @@ mod tests {
             AudioEffect::Gain(GainEffect::default()),
             AudioEffect::Compressor(CompressorEffect::default()),
             AudioEffect::Limiter(LimiterEffect::default()),
+            AudioEffect::MultibandEq(MultibandEqEffect::default()),
         ];
 
         let json = serde_json::to_string(&effects).expect("serialize effects");
@@ -235,11 +246,21 @@ mod tests {
             {"CompressorSettings":{"enabled":true,"threshold":-12.0,"ratio":2.0,
                 "attack":5.0,"release":50.0,"makeup_db":3.0}},
             {"LimiterSettings":{"enabled":true,"threshold_db":-3.0,"knee_width":2.0,
-                "attack_ms":3.0,"release_ms":30.0}}
+                "attack_ms":3.0,"release_ms":30.0}},
+            {"MultibandEqSettings":{
+                "enabled":true,
+                "points":[
+                    {"freq_hz":120,"q":0.8,"gain_db":3.0},
+                    {"freq_hz":1000,"q":1.0,"gain_db":-2.0},
+                    {"freq_hz":8000,"q":0.8,"gain_db":2.5}
+                ],
+                "low_edge":{"type":"high_pass","freq_hz":60,"q":0.7},
+                "high_edge":{"type":"high_shelf","freq_hz":10000,"q":0.8,"gain_db":1.5}
+            }}
         ]
         "#;
 
         let decoded: Vec<AudioEffect> = serde_json::from_str(json).expect("deserialize effects");
-        assert_eq!(decoded.len(), 10);
+        assert_eq!(decoded.len(), 11);
     }
 }

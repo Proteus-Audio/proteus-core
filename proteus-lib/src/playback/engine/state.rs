@@ -11,6 +11,7 @@ pub struct PlaybackBufferSettings {
     pub startup_fade_ms: f32,
     pub seek_fade_out_ms: f32,
     pub seek_fade_in_ms: f32,
+    pub inline_effects_transition_ms: f32,
     pub append_jitter_log_ms: f32,
     pub effect_boundary_log: bool,
 }
@@ -27,6 +28,7 @@ impl PlaybackBufferSettings {
             startup_fade_ms: 150.0,
             seek_fade_out_ms: 30.0,
             seek_fade_in_ms: 80.0,
+            inline_effects_transition_ms: 25.0,
             append_jitter_log_ms: 0.0,
             effect_boundary_log: false,
         }

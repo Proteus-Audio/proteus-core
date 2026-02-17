@@ -13,6 +13,7 @@ Welcome. This index links to short, practical explanations of the DSP `AudioEffe
 - `audio-effects-gain.md`
 - `audio-effects-compressor.md`
 - `audio-effects-limiter.md`
+- `audio-effects-multiband-eq.md`
 
 ## Algorithms
 
@@ -32,3 +33,4 @@ Welcome. This index links to short, practical explanations of the DSP `AudioEffe
 
 - `convolution-reverb-boundary-discontinuity.md`
 - `player-data-flows.md`
+- `player-set-effects-inline.md`
