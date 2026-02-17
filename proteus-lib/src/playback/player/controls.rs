@@ -154,23 +154,24 @@ impl Player {
         drop(timestamp);
 
         let state = self.state.lock().unwrap().clone();
+        let was_active = matches!(state, PlayerState::Playing | PlayerState::Resuming);
         let (seek_fade_out_ms, seek_fade_in_ms) = {
             let settings = self.buffer_settings.lock().unwrap();
             (settings.seek_fade_out_ms, settings.seek_fade_in_ms)
         };
-        if matches!(state, PlayerState::Playing | PlayerState::Resuming) && seek_fade_out_ms > 0.0 {
+        if was_active && seek_fade_out_ms > 0.0 {
             self.fade_current_sink_out(seek_fade_out_ms);
         }
         self.request_effects_reset();
         self.clear_inline_effects_update();
 
         self.kill_current();
-        self.state.lock().unwrap().clone_from(&state);
         self.initialize_thread(Some(ts));
-
-        if matches!(state, PlayerState::Playing | PlayerState::Resuming) {
+        if was_active {
             *self.next_resume_fade_ms.lock().unwrap() = Some(seek_fade_in_ms);
             self.resume();
+        } else {
+            self.state.lock().unwrap().clone_from(&state);
         }
     }
 

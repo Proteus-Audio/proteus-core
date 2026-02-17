@@ -173,7 +173,8 @@ fn initialize_sink(ctx: &ThreadContext, mixer: &rodio::mixer::Mixer) {
     let mut sink = ctx.sink_mutex.lock().unwrap();
     *sink = Sink::connect_new(mixer);
     sink.pause();
-    sink.set_volume(*ctx.volume.lock().unwrap());
+    // Start muted so resume/startup fade logic always owns the first audible ramp.
+    sink.set_volume(0.0);
 }
 
 /// Snapshot the total engine duration into shared player state.
@@ -259,10 +260,17 @@ fn resume_sink(ctx: &ThreadContext, sink: &Sink, fade_seconds: f32) {
         return;
     }
 
-    let fade_increments = (target_volume - sink.volume()) / (fade_seconds * 100.0);
+    let mut current = sink.volume().clamp(0.0, target_volume);
+    // If we're already at target (for example after a sink rebuild), force a ramp.
+    if (target_volume - current).abs() <= f32::EPSILON && target_volume > 0.0 {
+        current = 0.0;
+    }
+    sink.set_volume(current);
+    let fade_increments = ((target_volume - current) / (fade_seconds * 100.0)).max(0.000_001);
     sink.play();
     while sink.volume() < target_volume {
-        sink.set_volume(sink.volume() + fade_increments);
+        let next = (sink.volume() + fade_increments).min(target_volume);
+        sink.set_volume(next);
         thread::sleep(Duration::from_millis(5));
     }
 }
