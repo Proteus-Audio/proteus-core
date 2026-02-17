@@ -104,38 +104,42 @@ pub fn status_text(args: StatusArgs) -> StatusSnapshot {
 
     #[cfg(feature = "debug")]
     let text = format!(
-        "{}   {} / {}   ({:>5.1}%)\nEffects: {}\nDSP: {:>6.2}ms audio {:>6.2}ms ({:>4.2}x) overrun={} {:>6.2}ms (avg {:>6.2} max {:>6.2})\nCHAIN: {:>6.2} ksps (avg {:>6.2} min {:>6.2} max {:>6.2})\nTRK: {}/{} (buf {})\nDBG: thread={} state={} heard={} buf_done={} sink_len={} underrun={} count={} pops={} clips={} nans={}\nAPPEND: late={} count={}",
-        state,
-        current,
-        total,
-        percent,
-        effects_label,
-        args.dsp_time_ms,
-        args.audio_time_ms,
-        args.rt_factor,
-        if args.overrun { "YES" } else { "no" },
-        args.overrun_ms,
-        args.avg_overrun_ms,
-        args.max_overrun_ms,
-        args.chain_ksps,
-        args.avg_chain_ksps,
-        args.min_chain_ksps,
-        args.max_chain_ksps,
-        args.finished_track_count,
-        args.prot_key_count,
-        args.track_key_count,
-        args.thread_exists,
-        args.state_label,
-        args.audio_heard,
-        args.buffering_done,
-        args.sink_len,
-        if args.underrun_active { "YES" } else { "no" },
-        args.underrun_count,
-        args.pop_count,
-        args.clip_count,
-        args.nan_count,
-        if args.late_append_active { "YES" } else { "no" },
-        args.late_append_count
+        "{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n",
+        format!("{}   {} / {}   ({:>5.1}%)", state, current, total, percent),
+        format!("Effects: {}", effects_label),
+        format!(
+            "DSP CHAIN: {:>6.2} ksps (avg {:>6.2} min {:>6.2} max {:>6.2})",
+            args.chain_ksps, args.avg_chain_ksps, args.min_chain_ksps, args.max_chain_ksps
+        ),
+        format!(
+            "DSP Overrun: {} {:>6.2}ms (avg {:<6.2} max {:<6.2})",
+            if args.overrun { "YES" } else { "no" },
+            args.overrun_ms,
+            args.avg_overrun_ms,
+            args.max_overrun_ms
+        ),
+        format!(
+            "TRK: {}/{} (buf {})",
+            args.finished_track_count, args.prot_key_count, args.track_key_count
+        ),
+        format!(
+            "DBG: thread={} state={} heard={} buf_done={}",
+            args.thread_exists, args.state_label, args.audio_heard, args.buffering_done,
+        ),
+        format!(
+            "DBG: sink_len={} underrun={} count={} pops={} clips={} nans={}",
+            args.sink_len,
+            if args.underrun_active { "YES" } else { "no" },
+            args.underrun_count,
+            args.pop_count,
+            args.clip_count,
+            args.nan_count
+        ),
+        format!(
+            "APPEND: late={} count={}",
+            if args.late_append_active { "YES" } else { "no" },
+            args.late_append_count
+        )
     );
 
     #[cfg(not(feature = "debug"))]
