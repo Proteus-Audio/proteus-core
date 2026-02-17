@@ -18,6 +18,23 @@ pub use state::{DspChainMetrics, PlaybackBufferSettings};
 
 use mix::{spawn_mix_thread, MixThreadArgs};
 
+/// Request to update the active effects chain inline during playback.
+#[derive(Debug, Clone)]
+pub struct InlineEffectsUpdate {
+    pub effects: Vec<crate::dsp::effects::AudioEffect>,
+    pub transition_ms: f32,
+}
+
+impl InlineEffectsUpdate {
+    /// Create an inline effect update request.
+    pub fn new(effects: Vec<crate::dsp::effects::AudioEffect>, transition_ms: f32) -> Self {
+        Self {
+            effects,
+            transition_ms: transition_ms.max(0.0),
+        }
+    }
+}
+
 /// Internal playback engine used by the high-level [`Player`].
 #[derive(Debug, Clone)]
 pub struct PlayerEngine {
@@ -30,6 +47,7 @@ pub struct PlayerEngine {
     track_weights: Arc<Mutex<HashMap<u16, f32>>>,
     track_channel_gains: Arc<Mutex<HashMap<u16, Vec<f32>>>>,
     effects_reset: Arc<AtomicU64>,
+    inline_effects_update: Arc<Mutex<Option<InlineEffectsUpdate>>>,
     prot: Arc<Mutex<Prot>>,
     buffer_settings: Arc<Mutex<PlaybackBufferSettings>>,
     effects: Arc<Mutex<Vec<crate::dsp::effects::AudioEffect>>>,
@@ -46,6 +64,7 @@ impl PlayerEngine {
         effects: Arc<Mutex<Vec<crate::dsp::effects::AudioEffect>>>,
         dsp_metrics: Arc<Mutex<DspChainMetrics>>,
         effects_reset: Arc<AtomicU64>,
+        inline_effects_update: Arc<Mutex<Option<InlineEffectsUpdate>>>,
     ) -> Self {
         let buffer_map = init_buffer_map();
         let buffer_notify = Arc::new(Condvar::new());
@@ -80,6 +99,7 @@ impl PlayerEngine {
             track_weights,
             track_channel_gains,
             effects_reset,
+            inline_effects_update,
             abort,
             prot,
             buffer_settings,
@@ -123,6 +143,7 @@ impl PlayerEngine {
             track_weights: self.track_weights.clone(),
             track_channel_gains: self.track_channel_gains.clone(),
             effects_reset: self.effects_reset.clone(),
+            inline_effects_update: self.inline_effects_update.clone(),
             finished_tracks: self.finished_tracks.clone(),
             prot: self.prot.clone(),
             abort: self.abort.clone(),
