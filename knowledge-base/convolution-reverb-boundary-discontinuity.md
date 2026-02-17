@@ -18,7 +18,7 @@ The convolution reverb uses an **overlap-add FFT** algorithm. Internally it want
 - The reverb processes **REVERB_BATCH_BLOCKS = 2** segments per batch
 - So **preferred batch size** (interleaved samples) = `4096 * 2 * 2 = 16384`
 
-When the mixer sends a chunk that is **not a multiple of this batch size**, the reverb buffers input until it can process a full batch. That causes the effect output to **lag** or **underfill**, and the mixing stage fills the gap with zeros, creating a discontinuity.
+When the mixer sends a chunk that is **not a multiple of this batch size**, the reverb buffers input until it can process a full batch. That can make effect output **lag** or **underfill** relative to chunk boundaries, which increases discontinuity risk at boundaries.
 
 ## Visual: What Was Happening
 
@@ -33,11 +33,11 @@ Timeline (simplified):
 ```
 Input chunks from mixer:   [C1........][C2........][C3........]
 Convolver can process:     [----BATCH----][----BATCH----]
-Output produced:           [OK][zeros][OK][zeros][OK]...
-Boundary discontinuity:        ^^^^^^ jump from 0 to real signal
+Output produced:           [OK][fallback][OK][fallback][OK]...
+Boundary discontinuity:        ^^^^^^^ jump between fallback path and wet output
 ```
 
-The output buffer **underfilled**, so the chain padded with zeros to keep output length equal to input length. That creates a jump at the next chunk boundary when real samples resume.
+Historically, underfill could produce silence padding; current output-stage behavior falls back to dry input when an effect underfills. Either way, if chunk boundaries are misaligned with convolution batching, transitions can become discontinuous.
 
 ### After (Aligned to Preferred Batch Size)
 

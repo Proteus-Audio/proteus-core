@@ -26,7 +26,7 @@ Inside `run_playback_thread`:
   - File/function: `proteus-lib/src/playback/player/runtime/worker/runner.rs::open_output_stream_with_retry`
 - Gets `stream.mixer()` and creates a new sink connected to it.
   - File/function: `proteus-lib/src/playback/player/runtime/worker/runner.rs::initialize_sink`
-- Sets sink volume from player state and pauses sink initially.
+- Starts sink paused at muted volume (`0.0`) so startup/resume fade logic controls first audible ramp.
 - Copies duration from engine and sets current playback timestamp (`time_passed`) to start timestamp.
   - File/functions: `set_duration_from_engine`, `set_start_time`
 - Optionally appends startup silence pre-roll to stabilize output startup.
@@ -207,4 +207,3 @@ One chunk’s journey is:
 5. **Process DSP** chain and manage effect tails (`produce_output_samples`).
 6. **Send** `(SamplesBuffer, duration)` to playback worker (`send_samples`).
 7. **Append** to `rodio::Sink` (`update_sink`), then sink/mixer/output stream drive device playback.
-
