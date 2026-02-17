@@ -306,20 +306,37 @@ impl Player {
     }
 
     /// Replace the active DSP effects chain.
+    ///
+    /// This method preserves legacy behavior: it forces an effect-state reset
+    /// and re-seeks to the current timestamp so the new chain is applied
+    /// immediately, which also refreshes the sink.
+    ///
+    /// # Arguments
+    ///
+    /// * `effects` - New ordered list of effects to apply.
     pub fn set_effects(&mut self, effects: Vec<AudioEffect>) {
-        {
-            let mut guard = self.effects.lock().unwrap();
-            println!("New Effects: {:?}", effects);
-            *guard = effects;
-        }
+        self.replace_effects_chain(effects);
         self.request_effects_reset();
 
-        // Seeking to the current time stamp refreshes the
-        // Sink so that the new effects are applied immediately.
+        // Seeking to the current timestamp refreshes the sink so that
+        // the new effects are applied immediately.
         if !self.thread_finished() {
             let ts = self.get_time();
             self.seek(ts);
         }
+    }
+
+    /// Replace the active DSP effects chain inline during playback.
+    ///
+    /// Unlike [`Self::set_effects`], this does not reset effect internals,
+    /// clear effect tails, or rebuild the sink. The updated chain settings are
+    /// used for future chunks processed by the mixing thread.
+    ///
+    /// # Arguments
+    ///
+    /// * `effects` - New ordered list of effects to apply.
+    pub fn set_effects_inline(&self, effects: Vec<AudioEffect>) {
+        self.replace_effects_chain(effects);
     }
 
     /// Retrieve the latest DSP chain performance metrics.
@@ -386,6 +403,12 @@ impl Player {
 
     fn request_effects_reset(&self) {
         self.effects_reset.fetch_add(1, Ordering::SeqCst);
+    }
+
+    fn replace_effects_chain(&self, effects: Vec<AudioEffect>) {
+        let mut guard = self.effects.lock().unwrap();
+        log::info!("updated effects chain: {} effect(s)", effects.len());
+        *guard = effects;
     }
 
     /// Configure the minimum buffered audio (ms) before playback starts.
