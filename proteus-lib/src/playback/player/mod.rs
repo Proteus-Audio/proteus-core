@@ -1,4 +1,12 @@
 //! High-level playback controller for the Proteus library.
+//!
+//! `Player` is the primary integration point for consumers that need to load a
+//! container or file list, control transport state, and inspect DSP/runtime
+//! telemetry. Implementation details are split into focused submodules:
+//! - `controls`: transport operations and lifecycle orchestration.
+//! - `effects`: DSP-chain and metering controls.
+//! - `settings`: runtime tuning and debug surface.
+//! - `runtime`: internal playback thread bootstrap and worker loop.
 
 mod controls;
 mod effects;
@@ -20,6 +28,9 @@ use crate::{
 };
 
 /// High-level playback state for the player.
+///
+/// The public transport methods mostly request transitions (`Pausing`,
+/// `Resuming`, `Stopping`) that are resolved on the playback thread.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PlayerState {
     Init,
@@ -32,7 +43,10 @@ pub enum PlayerState {
     Finished,
 }
 
-/// Snapshot of convolution reverb settings for UI consumers.
+/// Snapshot of active reverb settings for UI consumers.
+///
+/// Values are derived from the first matching reverb in the current effect
+/// chain, with precedence handled in `effects::get_reverb_settings`.
 #[derive(Debug, Clone, Copy)]
 pub struct ReverbSettingsSnapshot {
     pub enabled: bool,
@@ -78,16 +92,29 @@ pub struct Player {
 
 impl Player {
     /// Create a new player for a single container path.
+    ///
+    /// # Arguments
+    ///
+    /// * `file_path` - Path to a `.prot`/`.mka` container file.
     pub fn new(file_path: &String) -> Self {
         Self::new_from_path_or_paths(Some(file_path), None)
     }
 
     /// Create a new player for a set of standalone file paths.
+    ///
+    /// # Arguments
+    ///
+    /// * `file_paths` - Pre-normalized track path groups.
     pub fn new_from_file_paths(file_paths: Vec<PathsTrack>) -> Self {
         Self::new_from_path_or_paths(None, Some(file_paths))
     }
 
-    /// Create a new player for a set of standalone file paths.
+    /// Create a new player for legacy standalone file-path groups.
+    ///
+    /// # Arguments
+    ///
+    /// * `file_paths` - Legacy track grouping shape where each inner vector is
+    ///   interpreted as one track candidate set.
     pub fn new_from_file_paths_legacy(file_paths: Vec<Vec<String>>) -> Self {
         Self::new_from_path_or_paths(
             None,
@@ -101,6 +128,14 @@ impl Player {
     }
 
     /// Create a player from either a container path or standalone file paths.
+    ///
+    /// Exactly one input source is expected. `path` takes precedence when
+    /// provided; otherwise `paths` is used for file-based playback.
+    ///
+    /// # Arguments
+    ///
+    /// * `path` - Optional container path.
+    /// * `paths` - Optional standalone track path groups.
     pub fn new_from_path_or_paths(path: Option<&String>, paths: Option<Vec<PathsTrack>>) -> Self {
         let (prot, info) = match path {
             Some(path) => {

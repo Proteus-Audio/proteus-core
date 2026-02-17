@@ -1,15 +1,28 @@
+//! Runtime tuning and debug accessors for `Player`.
+//!
+//! These methods expose buffering/fade/jitter controls used by the runtime
+//! worker thread, plus lightweight debug snapshots for diagnostics.
+
 use std::sync::atomic::Ordering;
 
 use super::{Player, PlayerState};
 
 impl Player {
     /// Configure the minimum buffered audio (ms) before playback starts.
+    ///
+    /// # Arguments
+    ///
+    /// * `start_buffer_ms` - Startup prebuffer target in milliseconds.
     pub fn set_start_buffer_ms(&self, start_buffer_ms: f32) {
         let mut settings = self.buffer_settings.lock().unwrap();
         settings.start_buffer_ms = start_buffer_ms.max(0.0);
     }
 
     /// Configure heuristic end-of-track threshold for containers (ms).
+    ///
+    /// # Arguments
+    ///
+    /// * `track_eos_ms` - End-of-track threshold in milliseconds.
     pub fn set_track_eos_ms(&self, track_eos_ms: f32) {
         let mut settings = self.buffer_settings.lock().unwrap();
         settings.track_eos_ms = track_eos_ms.max(0.0);

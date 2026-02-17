@@ -1,3 +1,9 @@
+//! Transport and lifecycle operations for `Player`.
+//!
+//! Methods here coordinate playback-state transitions with the runtime thread
+//! and expose user-facing control primitives (play/pause/seek/stop, volume,
+//! reporting hooks, and schedule inspection).
+
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -10,6 +16,10 @@ use super::{Player, PlayerState};
 
 impl Player {
     /// Start playback from a specific timestamp (seconds).
+    ///
+    /// # Arguments
+    ///
+    /// * `ts` - Target start position in seconds.
     pub fn play_at(&mut self, ts: f64) {
         let mut timestamp = self.ts.lock().unwrap();
         *timestamp = ts;
@@ -26,6 +36,8 @@ impl Player {
     }
 
     /// Start playback from the current timestamp.
+    ///
+    /// If no playback thread is currently alive, a new runtime is created.
     pub fn play(&mut self) {
         info!("Playing audio");
         let thread_exists = self
@@ -54,7 +66,9 @@ impl Player {
             .clone_from(&PlayerState::Resuming);
     }
 
-    /// Stop the current playback thread without changing state.
+    /// Stop the current playback thread and wait for it to exit.
+    ///
+    /// Internal state is moved through `Stopping` and finalized as `Stopped`.
     pub fn kill_current(&self) {
         self.state
             .lock()
@@ -97,6 +111,7 @@ impl Player {
         *ts
     }
 
+    /// Return `true` when no playback worker thread is alive.
     pub(super) fn thread_finished(&self) -> bool {
         let playback_thread_exists = self
             .playback_thread_exists
@@ -126,6 +141,13 @@ impl Player {
     }
 
     /// Seek to the given timestamp (seconds).
+    ///
+    /// Seeking rebuilds the playback runtime at `ts` and applies configured
+    /// seek fade-out/fade-in behavior when currently playing.
+    ///
+    /// # Arguments
+    ///
+    /// * `ts` - New playback position in seconds.
     pub fn seek(&mut self, ts: f64) {
         let mut timestamp = self.ts.lock().unwrap();
         *timestamp = ts;
@@ -153,6 +175,10 @@ impl Player {
     }
 
     /// Apply a short linear fade-out to the current sink before disruptive ops.
+    ///
+    /// # Arguments
+    ///
+    /// * `fade_ms` - Fade duration in milliseconds.
     fn fade_current_sink_out(&self, fade_ms: f32) {
         let steps = ((fade_ms / 5.0).ceil() as u32).max(1);
         let step_ms = (fade_ms / steps as f32).max(1.0) as u64;
@@ -170,6 +196,9 @@ impl Player {
     }
 
     /// Refresh active track selections from the underlying container.
+    ///
+    /// Existing reverb overrides are re-applied and active playback is
+    /// restarted at the current timestamp.
     pub fn refresh_tracks(&mut self) {
         let mut prot = self.prot.lock().unwrap();
         prot.refresh_tracks();
@@ -197,6 +226,16 @@ impl Player {
         self.wait_for_audio_heard(Duration::from_secs(5));
     }
 
+    /// Wait until the runtime reports that at least one chunk was appended.
+    ///
+    /// # Arguments
+    ///
+    /// * `timeout` - Maximum wait duration before returning `false`.
+    ///
+    /// # Returns
+    ///
+    /// `true` once audio has been observed, `false` on timeout or early thread
+    /// termination.
     pub(super) fn wait_for_audio_heard(&self, timeout: Duration) -> bool {
         let start = Instant::now();
         loop {
@@ -220,7 +259,11 @@ impl Player {
         self.refresh_tracks();
     }
 
-    /// Set the playback volume (0.0-1.0).
+    /// Set the playback volume (linear gain).
+    ///
+    /// # Arguments
+    ///
+    /// * `new_volume` - Desired sink gain multiplier.
     pub fn set_volume(&mut self, new_volume: f32) {
         let sink = self.sink.lock().unwrap();
         sink.set_volume(new_volume);
@@ -251,6 +294,13 @@ impl Player {
     }
 
     /// Enable periodic reporting of playback status for UI consumers.
+    ///
+    /// Any previous reporter instance is stopped before a new one is started.
+    ///
+    /// # Arguments
+    ///
+    /// * `reporting` - Callback invoked with periodic playback snapshots.
+    /// * `reporting_interval` - Time between callback invocations.
     pub fn set_reporting(
         &mut self,
         reporting: Arc<Mutex<dyn Fn(Report) + Send>>,

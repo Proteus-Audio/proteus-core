@@ -1,3 +1,8 @@
+//! DSP-chain control and output metering accessors for `Player`.
+//!
+//! Methods in this module mutate effect configuration, trigger effect resets,
+//! and expose meter/metrics snapshots suitable for UI polling.
+
 use std::sync::atomic::Ordering;
 
 use crate::dsp::effects::convolution_reverb::{parse_impulse_response_string, ImpulseResponseSpec};
@@ -10,6 +15,10 @@ use super::{Player, ReverbSettingsSnapshot};
 
 impl Player {
     /// Override the impulse response used for convolution reverb.
+    ///
+    /// # Arguments
+    ///
+    /// * `spec` - Parsed IR selection/configuration to persist on the player.
     pub fn set_impulse_response_spec(&mut self, spec: ImpulseResponseSpec) {
         self.impulse_response_override = Some(spec.clone());
         let mut prot = self.prot.lock().unwrap();
@@ -18,6 +27,8 @@ impl Player {
     }
 
     /// Parse and apply an impulse response spec string.
+    ///
+    /// Invalid input is ignored and leaves the current override unchanged.
     pub fn set_impulse_response_from_string(&mut self, value: &str) {
         if let Some(spec) = parse_impulse_response_string(value) {
             self.set_impulse_response_spec(spec);
@@ -25,6 +36,10 @@ impl Player {
     }
 
     /// Override the impulse response tail trim (dB).
+    ///
+    /// # Arguments
+    ///
+    /// * `tail_db` - Trim threshold in decibels applied to IR tails.
     pub fn set_impulse_response_tail_db(&mut self, tail_db: f32) {
         self.impulse_response_tail_override = Some(tail_db);
         let mut prot = self.prot.lock().unwrap();
@@ -32,7 +47,10 @@ impl Player {
         self.request_effects_reset();
     }
 
-    /// Enable or disable convolution reverb.
+    /// Enable or disable supported reverb effects in the active chain.
+    ///
+    /// The toggle is applied to convolution and delay-reverb instances when
+    /// present.
     pub fn set_reverb_enabled(&self, enabled: bool) {
         let mut effects = self.effects.lock().unwrap();
         if let Some(effect) = effects
@@ -50,6 +68,9 @@ impl Player {
     }
 
     /// Set the reverb wet/dry mix (clamped to `[0.0, 1.0]`).
+    ///
+    /// The value is mapped across convolution, delay, and diffusion reverb
+    /// variants when those effects are part of the chain.
     pub fn set_reverb_mix(&self, dry_wet: f32) {
         let mut effects = self.effects.lock().unwrap();
         if let Some(effect) = effects
@@ -73,6 +94,8 @@ impl Player {
     }
 
     /// Retrieve the current reverb settings snapshot.
+    ///
+    /// Returns a disabled/zeroed snapshot when no known reverb effect exists.
     pub fn get_reverb_settings(&self) -> ReverbSettingsSnapshot {
         let effects = self.effects.lock().unwrap();
         if let Some(effect) = effects
@@ -106,6 +129,8 @@ impl Player {
     }
 
     /// Snapshot the active effect chain names.
+    ///
+    /// This is primarily intended for diagnostics and UI display.
     #[allow(deprecated)]
     pub fn get_effect_names(&self) -> Vec<String> {
         let effects = self.effects.lock().unwrap();
@@ -174,6 +199,10 @@ impl Player {
     }
 
     /// Retrieve the latest DSP chain performance metrics.
+    ///
+    /// # Returns
+    ///
+    /// A copy of the most recent metrics updated by the playback thread.
     pub fn get_dsp_metrics(&self) -> DspChainMetrics {
         *self.dsp_metrics.lock().unwrap()
     }
@@ -204,15 +233,18 @@ impl Player {
         self.output_meter.lock().unwrap().set_refresh_hz(hz);
     }
 
+    /// Bump the effects reset generation consumed by the runtime engine.
     pub(super) fn request_effects_reset(&self) {
         self.effects_reset.fetch_add(1, Ordering::SeqCst);
     }
 
+    /// Drop any pending inline effects transition update.
     pub(super) fn clear_inline_effects_update(&self) {
         let mut pending = self.inline_effects_update.lock().unwrap();
         pending.take();
     }
 
+    /// Replace the currently active effect vector atomically.
     fn replace_effects_chain(&self, effects: Vec<AudioEffect>) {
         let mut guard = self.effects.lock().unwrap();
         log::info!("updated effects chain: {} effect(s)", effects.len());
