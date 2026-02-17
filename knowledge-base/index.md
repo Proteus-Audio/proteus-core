@@ -13,6 +13,7 @@ Welcome. This index links to short, practical explanations of the DSP `AudioEffe
 - `audio-effects-gain.md`
 - `audio-effects-compressor.md`
 - `audio-effects-limiter.md`
+- `audio-effects-multiband-eq.md`
 
 ## Algorithms
 

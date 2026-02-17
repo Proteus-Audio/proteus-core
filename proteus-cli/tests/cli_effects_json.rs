@@ -13,5 +13,6 @@ fn create_effects_json_outputs_all_effects() {
         .stdout(predicate::str::contains("HighPassFilterSettings"))
         .stdout(predicate::str::contains("DistortionSettings"))
         .stdout(predicate::str::contains("CompressorSettings"))
-        .stdout(predicate::str::contains("LimiterSettings"));
+        .stdout(predicate::str::contains("LimiterSettings"))
+        .stdout(predicate::str::contains("MultibandEqSettings"));
 }

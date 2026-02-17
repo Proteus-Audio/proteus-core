@@ -9,7 +9,8 @@ use crate::dsp::effects::AudioEffect;
 pub use crate::dsp::effects::BasicReverbSettings;
 pub use crate::dsp::effects::{
     CompressorSettings, ConvolutionReverbSettings, DelayReverbSettings, DistortionSettings,
-    HighPassFilterSettings, LimiterSettings, LowPassFilterSettings,
+    EqPointSettings, HighEdgeFilterSettings, HighPassFilterSettings, LimiterSettings,
+    LowEdgeFilterSettings, LowPassFilterSettings, MultibandEqSettings,
 };
 
 pub mod legacy;

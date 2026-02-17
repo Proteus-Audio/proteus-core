@@ -33,6 +33,7 @@ fn effect_label(effect: &AudioEffect) -> &'static str {
         AudioEffect::Gain(_) => "Gain",
         AudioEffect::Compressor(_) => "Compressor",
         AudioEffect::Limiter(_) => "Limiter",
+        AudioEffect::MultibandEq(_) => "MultibandEq",
     }
 }
 

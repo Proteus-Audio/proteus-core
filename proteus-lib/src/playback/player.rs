@@ -300,6 +300,7 @@ impl Player {
                 AudioEffect::Gain(_) => "Gain".to_string(),
                 AudioEffect::Compressor(_) => "Compressor".to_string(),
                 AudioEffect::Limiter(_) => "Limiter".to_string(),
+                AudioEffect::MultibandEq(_) => "MultibandEq".to_string(),
             })
             .collect()
     }
