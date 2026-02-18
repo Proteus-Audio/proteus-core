@@ -14,7 +14,7 @@ mod runtime;
 mod settings;
 
 use rodio::Sink;
-use std::sync::atomic::{AtomicBool, AtomicU64};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use crate::container::prot::{PathsTrack, Prot};
@@ -204,5 +204,77 @@ impl Player {
         this.initialize_thread(None);
 
         this
+    }
+}
+
+impl Drop for Player {
+    fn drop(&mut self) {
+        // `Player` is `Clone` and shares state through Arcs. Only the final
+        // handle should tear down the shared runtime resources.
+        if Arc::strong_count(&self.state) != 1 {
+            return;
+        }
+
+        if let Some(reporter) = self.reporter.take() {
+            reporter.lock().unwrap().stop();
+        }
+
+        if self
+            .playback_thread_exists
+            .load(std::sync::atomic::Ordering::SeqCst)
+        {
+            self.kill_current();
+        } else {
+            self.abort.store(true, Ordering::SeqCst);
+        }
+
+        {
+            let sink = self.sink.lock().unwrap();
+            sink.stop();
+            sink.clear();
+        }
+
+        {
+            let mut finished_tracks = self.finished_tracks.lock().unwrap();
+            finished_tracks.clear();
+            finished_tracks.shrink_to_fit();
+        }
+
+        {
+            let mut effects = self.effects.lock().unwrap();
+            effects.clear();
+            effects.shrink_to_fit();
+        }
+
+        {
+            let mut inline_effects_update = self.inline_effects_update.lock().unwrap();
+            *inline_effects_update = None;
+        }
+
+        {
+            let mut inline_track_mix_updates = self.inline_track_mix_updates.lock().unwrap();
+            inline_track_mix_updates.clear();
+            inline_track_mix_updates.shrink_to_fit();
+        }
+
+        {
+            let mut dsp_metrics = self.dsp_metrics.lock().unwrap();
+            *dsp_metrics = DspChainMetrics::default();
+        }
+
+        {
+            let mut output_meter = self.output_meter.lock().unwrap();
+            output_meter.reset();
+        }
+
+        *self.duration.lock().unwrap() = 0.0;
+        *self.ts.lock().unwrap() = 0.0;
+        *self.next_resume_fade_ms.lock().unwrap() = None;
+        self.buffering_done.store(false, Ordering::Relaxed);
+        self.last_chunk_ms.store(0, Ordering::Relaxed);
+        self.last_time_update_ms.store(0, Ordering::Relaxed);
+        self.audio_heard.store(false, Ordering::Relaxed);
+        self.impulse_response_override = None;
+        self.impulse_response_tail_override = None;
     }
 }
