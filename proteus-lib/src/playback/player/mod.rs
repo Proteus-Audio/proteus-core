@@ -14,7 +14,7 @@ mod runtime;
 mod settings;
 
 use rodio::Sink;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use crate::container::prot::{PathsTrack, Prot};
@@ -63,7 +63,6 @@ const OUTPUT_STREAM_OPEN_RETRY_MS: u64 = 100;
 ///
 /// `Player` owns the playback threads, buffering state, and runtime settings
 /// such as volume and reverb configuration.
-#[derive(Clone)]
 pub struct Player {
     pub info: Info,
     pub finished_tracks: Arc<Mutex<Vec<i32>>>,
@@ -89,8 +88,44 @@ pub struct Player {
     last_chunk_ms: Arc<AtomicU64>,
     last_time_update_ms: Arc<AtomicU64>,
     next_resume_fade_ms: Arc<Mutex<Option<f32>>>,
+    handle_count: Arc<AtomicUsize>,
     impulse_response_override: Option<ImpulseResponseSpec>,
     impulse_response_tail_override: Option<f32>,
+}
+
+impl Clone for Player {
+    fn clone(&self) -> Self {
+        self.handle_count.fetch_add(1, Ordering::Relaxed);
+        Self {
+            info: self.info.clone(),
+            finished_tracks: self.finished_tracks.clone(),
+            ts: self.ts.clone(),
+            state: self.state.clone(),
+            abort: self.abort.clone(),
+            playback_thread_exists: self.playback_thread_exists.clone(),
+            playback_id: self.playback_id.clone(),
+            duration: self.duration.clone(),
+            prot: self.prot.clone(),
+            audio_heard: self.audio_heard.clone(),
+            volume: self.volume.clone(),
+            sink: self.sink.clone(),
+            reporter: self.reporter.clone(),
+            buffer_settings: self.buffer_settings.clone(),
+            effects: self.effects.clone(),
+            inline_effects_update: self.inline_effects_update.clone(),
+            inline_track_mix_updates: self.inline_track_mix_updates.clone(),
+            dsp_metrics: self.dsp_metrics.clone(),
+            effects_reset: self.effects_reset.clone(),
+            output_meter: self.output_meter.clone(),
+            buffering_done: self.buffering_done.clone(),
+            last_chunk_ms: self.last_chunk_ms.clone(),
+            last_time_update_ms: self.last_time_update_ms.clone(),
+            next_resume_fade_ms: self.next_resume_fade_ms.clone(),
+            handle_count: self.handle_count.clone(),
+            impulse_response_override: self.impulse_response_override.clone(),
+            impulse_response_tail_override: self.impulse_response_tail_override,
+        }
+    }
 }
 
 impl Player {
@@ -197,6 +232,7 @@ impl Player {
             last_chunk_ms: Arc::new(AtomicU64::new(0)),
             last_time_update_ms: Arc::new(AtomicU64::new(0)),
             next_resume_fade_ms: Arc::new(Mutex::new(None)),
+            handle_count: Arc::new(AtomicUsize::new(1)),
             impulse_response_override: None,
             impulse_response_tail_override: None,
         };
@@ -209,9 +245,9 @@ impl Player {
 
 impl Drop for Player {
     fn drop(&mut self) {
-        // `Player` is `Clone` and shares state through Arcs. Only the final
-        // handle should tear down the shared runtime resources.
-        if Arc::strong_count(&self.state) != 1 {
+        // Only the last `Player` handle should perform teardown. This count is
+        // independent from worker-thread Arc references.
+        if self.handle_count.fetch_sub(1, Ordering::AcqRel) != 1 {
             return;
         }
 
@@ -266,6 +302,8 @@ impl Drop for Player {
             let mut output_meter = self.output_meter.lock().unwrap();
             output_meter.reset();
         }
+
+        println!("Player dropped");
 
         *self.duration.lock().unwrap() = 0.0;
         *self.ts.lock().unwrap() = 0.0;
