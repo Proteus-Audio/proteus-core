@@ -38,18 +38,10 @@ impl PlaybackBufferSettings {
 /// Aggregated DSP chain performance metrics used by debug UI.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct DspChainMetrics {
-    pub dsp_time_ms: f64,
-    pub audio_time_ms: f64,
-    pub rt_factor: f64,
     pub overrun: bool,
     pub overrun_ms: f64,
     pub avg_overrun_ms: f64,
     pub max_overrun_ms: f64,
-    pub avg_dsp_ms: f64,
-    pub avg_audio_ms: f64,
-    pub avg_rt_factor: f64,
-    pub min_rt_factor: f64,
-    pub max_rt_factor: f64,
     pub track_key_count: usize,
     pub finished_track_count: usize,
     pub prot_key_count: usize,
@@ -62,9 +54,6 @@ pub struct DspChainMetrics {
     pub pop_count: u64,
     pub clip_count: u64,
     pub nan_count: u64,
-    pub append_delay_ms: f64,
-    pub avg_append_delay_ms: f64,
-    pub max_append_delay_ms: f64,
     pub late_append_count: u64,
     pub late_append_active: bool,
 }

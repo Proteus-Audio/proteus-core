@@ -35,6 +35,14 @@ impl InlineEffectsUpdate {
     }
 }
 
+/// Request to update per-slot track mix settings inline during playback.
+#[derive(Debug, Clone, Copy)]
+pub struct InlineTrackMixUpdate {
+    pub slot_index: usize,
+    pub level: f32,
+    pub pan: f32,
+}
+
 /// Internal playback engine used by the high-level [`Player`].
 #[derive(Debug, Clone)]
 pub struct PlayerEngine {
@@ -48,6 +56,7 @@ pub struct PlayerEngine {
     track_channel_gains: Arc<Mutex<HashMap<u16, Vec<f32>>>>,
     effects_reset: Arc<AtomicU64>,
     inline_effects_update: Arc<Mutex<Option<InlineEffectsUpdate>>>,
+    inline_track_mix_updates: Arc<Mutex<Vec<InlineTrackMixUpdate>>>,
     prot: Arc<Mutex<Prot>>,
     buffer_settings: Arc<Mutex<PlaybackBufferSettings>>,
     effects: Arc<Mutex<Vec<crate::dsp::effects::AudioEffect>>>,
@@ -65,6 +74,7 @@ impl PlayerEngine {
         dsp_metrics: Arc<Mutex<DspChainMetrics>>,
         effects_reset: Arc<AtomicU64>,
         inline_effects_update: Arc<Mutex<Option<InlineEffectsUpdate>>>,
+        inline_track_mix_updates: Arc<Mutex<Vec<InlineTrackMixUpdate>>>,
     ) -> Self {
         let buffer_map = init_buffer_map();
         let buffer_notify = Arc::new(Condvar::new());
@@ -100,6 +110,7 @@ impl PlayerEngine {
             track_channel_gains,
             effects_reset,
             inline_effects_update,
+            inline_track_mix_updates,
             abort,
             prot,
             buffer_settings,
@@ -144,6 +155,7 @@ impl PlayerEngine {
             track_channel_gains: self.track_channel_gains.clone(),
             effects_reset: self.effects_reset.clone(),
             inline_effects_update: self.inline_effects_update.clone(),
+            inline_track_mix_updates: self.inline_track_mix_updates.clone(),
             finished_tracks: self.finished_tracks.clone(),
             prot: self.prot.clone(),
             abort: self.abort.clone(),
@@ -213,7 +225,7 @@ impl PlayerEngine {
     }
 }
 
-fn compute_track_channel_gains(level: f32, pan: f32, channels: usize) -> Vec<f32> {
+pub(crate) fn compute_track_channel_gains(level: f32, pan: f32, channels: usize) -> Vec<f32> {
     let level = level.max(0.0);
     if channels <= 1 {
         return vec![level];
@@ -227,4 +239,23 @@ fn compute_track_channel_gains(level: f32, pan: f32, channels: usize) -> Vec<f32
     gains[0] = level * left;
     gains[1] = level * right;
     gains
+}
+
+#[cfg(test)]
+mod tests {
+    use super::compute_track_channel_gains;
+
+    #[test]
+    fn channel_gains_apply_level_and_pan() {
+        let gains = compute_track_channel_gains(0.5, 0.5, 2);
+        assert_eq!(gains.len(), 2);
+        assert!((gains[0] - 0.25).abs() < 1e-6);
+        assert!((gains[1] - 0.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn mono_gain_uses_level_only() {
+        let gains = compute_track_channel_gains(0.8, -1.0, 1);
+        assert_eq!(gains, vec![0.8]);
+    }
 }

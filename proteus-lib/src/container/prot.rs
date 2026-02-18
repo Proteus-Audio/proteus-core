@@ -424,19 +424,92 @@ impl Prot {
     pub fn get_track_mix_settings(&self) -> HashMap<u16, (f32, f32)> {
         let mut settings = HashMap::new();
 
+        if let Some(file_paths) = self.file_paths.as_ref() {
+            let mut slot_index: u16 = 0;
+            for track in file_paths {
+                let selections = track.selections_count.max(1);
+                for _ in 0..selections {
+                    settings.insert(slot_index, (track.level, track.pan));
+                    slot_index = slot_index.saturating_add(1);
+                }
+            }
+            return settings;
+        }
+
         let tracks = match self.play_settings.as_ref() {
             Some(PlaySettingsFile::V1(file)) => Some(&file.settings.inner().tracks),
             Some(PlaySettingsFile::V2(file)) => Some(&file.settings.inner().tracks),
+            Some(PlaySettingsFile::V3(file)) => Some(&file.settings.inner().tracks),
             _ => None,
         };
 
         if let Some(tracks) = tracks {
-            for (index, track) in tracks.iter().enumerate() {
-                settings.insert(index as u16, (track.level, track.pan));
+            let mut slot_index: u16 = 0;
+            for track in tracks {
+                let selections = track.selections_count.max(1);
+                for _ in 0..selections {
+                    settings.insert(slot_index, (track.level, track.pan));
+                    slot_index = slot_index.saturating_add(1);
+                }
             }
         }
 
         settings
+    }
+
+    /// Update the `(level, pan)` mix settings for a selected slot.
+    ///
+    /// Returns `true` when a matching slot was updated.
+    pub fn set_slot_mix_settings(&mut self, slot_index: usize, level: f32, pan: f32) -> bool {
+        let level = sanitize_level(level);
+        let pan = sanitize_pan(pan);
+
+        if let Some(file_paths) = self.file_paths.as_mut() {
+            if let Some(track) = get_paths_track_for_slot_mut(file_paths, slot_index) {
+                track.level = level;
+                track.pan = pan;
+                return true;
+            }
+            return false;
+        }
+
+        match self.play_settings.as_mut() {
+            Some(PlaySettingsFile::V1(file)) => update_settings_track_slot(
+                file.settings.inner_mut().tracks.as_mut_slice(),
+                slot_index,
+                level,
+                pan,
+            ),
+            Some(PlaySettingsFile::V2(file)) => update_settings_track_slot(
+                file.settings.inner_mut().tracks.as_mut_slice(),
+                slot_index,
+                level,
+                pan,
+            ),
+            Some(PlaySettingsFile::V3(file)) => update_settings_track_slot(
+                file.settings.inner_mut().tracks.as_mut_slice(),
+                slot_index,
+                level,
+                pan,
+            ),
+            _ => false,
+        }
+    }
+
+    /// Return all slot indices that share the same track settings as `slot_index`.
+    pub fn linked_slot_indices(&self, slot_index: usize) -> Option<Vec<usize>> {
+        if let Some(file_paths) = self.file_paths.as_ref() {
+            return linked_paths_slots(file_paths, slot_index);
+        }
+
+        let tracks = match self.play_settings.as_ref() {
+            Some(PlaySettingsFile::V1(file)) => Some(&file.settings.inner().tracks),
+            Some(PlaySettingsFile::V2(file)) => Some(&file.settings.inner().tracks),
+            Some(PlaySettingsFile::V3(file)) => Some(&file.settings.inner().tracks),
+            _ => None,
+        }?;
+
+        linked_settings_slots(tracks, slot_index)
     }
 
     /// Return the number of selected tracks.
@@ -783,6 +856,80 @@ fn random_path(paths: &[String]) -> String {
     paths[random_index].clone()
 }
 
+fn sanitize_level(level: f32) -> f32 {
+    if level.is_finite() {
+        level.max(0.0)
+    } else {
+        1.0
+    }
+}
+
+fn sanitize_pan(pan: f32) -> f32 {
+    if pan.is_finite() {
+        pan.clamp(-1.0, 1.0)
+    } else {
+        0.0
+    }
+}
+
+fn get_paths_track_for_slot_mut(
+    tracks: &mut [PathsTrack],
+    slot_index: usize,
+) -> Option<&mut PathsTrack> {
+    let mut slot_cursor = 0usize;
+    for track in tracks.iter_mut() {
+        let span = track.selections_count.max(1) as usize;
+        if slot_index < slot_cursor + span {
+            return Some(track);
+        }
+        slot_cursor += span;
+    }
+    None
+}
+
+fn update_settings_track_slot(
+    tracks: &mut [SettingsTrack],
+    slot_index: usize,
+    level: f32,
+    pan: f32,
+) -> bool {
+    let mut slot_cursor = 0usize;
+    for track in tracks.iter_mut() {
+        let span = track.selections_count.max(1) as usize;
+        if slot_index < slot_cursor + span {
+            track.level = level;
+            track.pan = pan;
+            return true;
+        }
+        slot_cursor += span;
+    }
+    false
+}
+
+fn linked_paths_slots(tracks: &[PathsTrack], slot_index: usize) -> Option<Vec<usize>> {
+    let mut slot_cursor = 0usize;
+    for track in tracks {
+        let span = track.selections_count.max(1) as usize;
+        if slot_index < slot_cursor + span {
+            return Some((slot_cursor..(slot_cursor + span)).collect());
+        }
+        slot_cursor += span;
+    }
+    None
+}
+
+fn linked_settings_slots(tracks: &[SettingsTrack], slot_index: usize) -> Option<Vec<usize>> {
+    let mut slot_cursor = 0usize;
+    for track in tracks {
+        let span = track.selections_count.max(1) as usize;
+        if slot_index < slot_cursor + span {
+            return Some((slot_cursor..(slot_cursor + span)).collect());
+        }
+        slot_cursor += span;
+    }
+    None
+}
+
 fn sources_to_track_ids(sources: &[ShuffleSource]) -> Vec<u32> {
     sources
         .iter()
@@ -829,6 +976,16 @@ fn collect_legacy_tracks(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn test_info() -> Info {
+        Info {
+            file_paths: Vec::new(),
+            duration_map: HashMap::new(),
+            channels: 2,
+            sample_rate: 48_000,
+            bits_per_sample: 16,
+        }
+    }
 
     fn settings_track(
         ids: Vec<u32>,
@@ -878,5 +1035,141 @@ mod tests {
             shuffle_points: vec!["0:15".to_string(), "0:45".to_string()],
         }];
         assert_eq!(count_paths_track_combinations(&tracks), Some(8));
+    }
+
+    #[test]
+    fn get_track_mix_settings_repeats_by_selections_count_for_paths_tracks() {
+        let prot = Prot {
+            info: test_info(),
+            file_path: None,
+            file_paths: Some(vec![PathsTrack {
+                file_paths: vec!["a.wav".to_string()],
+                level: 0.7,
+                pan: -0.3,
+                selections_count: 2,
+                shuffle_points: vec![],
+            }]),
+            file_paths_dictionary: Some(vec!["a.wav".to_string()]),
+            track_ids: None,
+            track_paths: None,
+            duration: 0.0,
+            shuffle_schedule: Vec::new(),
+            play_settings: None,
+            impulse_response_spec: None,
+            impulse_response_tail_db: None,
+            effects: None,
+        };
+
+        let settings = prot.get_track_mix_settings();
+        assert_eq!(settings.get(&0), Some(&(0.7, -0.3)));
+        assert_eq!(settings.get(&1), Some(&(0.7, -0.3)));
+    }
+
+    #[test]
+    fn set_slot_mix_settings_updates_paths_track() {
+        let mut prot = Prot {
+            info: test_info(),
+            file_path: None,
+            file_paths: Some(vec![PathsTrack {
+                file_paths: vec!["a.wav".to_string()],
+                level: 1.0,
+                pan: 0.0,
+                selections_count: 2,
+                shuffle_points: vec![],
+            }]),
+            file_paths_dictionary: Some(vec!["a.wav".to_string()]),
+            track_ids: None,
+            track_paths: None,
+            duration: 0.0,
+            shuffle_schedule: Vec::new(),
+            play_settings: None,
+            impulse_response_spec: None,
+            impulse_response_tail_db: None,
+            effects: None,
+        };
+
+        assert!(prot.set_slot_mix_settings(1, 0.4, 0.6));
+        let settings = prot.get_track_mix_settings();
+        assert_eq!(settings.get(&0), Some(&(0.4, 0.6)));
+        assert_eq!(settings.get(&1), Some(&(0.4, 0.6)));
+    }
+
+    #[test]
+    fn get_track_mix_settings_includes_v3_tracks() {
+        use crate::container::play_settings::{
+            PlaySettingsContainer, PlaySettingsV3, PlaySettingsV3File,
+        };
+
+        let play_settings = PlaySettingsFile::V3(PlaySettingsV3File {
+            settings: PlaySettingsContainer::Flat(PlaySettingsV3 {
+                effects: Vec::new(),
+                tracks: vec![SettingsTrack {
+                    level: 0.25,
+                    pan: 0.2,
+                    ids: vec![1],
+                    name: "Track".to_string(),
+                    safe_name: "track".to_string(),
+                    selections_count: 2,
+                    shuffle_points: vec![],
+                }],
+            }),
+        });
+
+        let prot = Prot {
+            info: test_info(),
+            file_path: Some("dummy.prot".to_string()),
+            file_paths: None,
+            file_paths_dictionary: None,
+            track_ids: Some(vec![1, 1]),
+            track_paths: None,
+            duration: 0.0,
+            shuffle_schedule: Vec::new(),
+            play_settings: Some(play_settings),
+            impulse_response_spec: None,
+            impulse_response_tail_db: None,
+            effects: None,
+        };
+
+        let settings = prot.get_track_mix_settings();
+        assert_eq!(settings.get(&0), Some(&(0.25, 0.2)));
+        assert_eq!(settings.get(&1), Some(&(0.25, 0.2)));
+    }
+
+    #[test]
+    fn linked_slot_indices_returns_all_slots_for_same_track() {
+        let prot = Prot {
+            info: test_info(),
+            file_path: None,
+            file_paths: Some(vec![
+                PathsTrack {
+                    file_paths: vec!["a.wav".to_string()],
+                    level: 1.0,
+                    pan: 0.0,
+                    selections_count: 2,
+                    shuffle_points: vec![],
+                },
+                PathsTrack {
+                    file_paths: vec!["b.wav".to_string()],
+                    level: 1.0,
+                    pan: 0.0,
+                    selections_count: 1,
+                    shuffle_points: vec![],
+                },
+            ]),
+            file_paths_dictionary: Some(vec!["a.wav".to_string(), "b.wav".to_string()]),
+            track_ids: None,
+            track_paths: None,
+            duration: 0.0,
+            shuffle_schedule: Vec::new(),
+            play_settings: None,
+            impulse_response_spec: None,
+            impulse_response_tail_db: None,
+            effects: None,
+        };
+
+        assert_eq!(prot.linked_slot_indices(0), Some(vec![0, 1]));
+        assert_eq!(prot.linked_slot_indices(1), Some(vec![0, 1]));
+        assert_eq!(prot.linked_slot_indices(2), Some(vec![2]));
+        assert_eq!(prot.linked_slot_indices(3), None);
     }
 }

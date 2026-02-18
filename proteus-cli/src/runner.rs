@@ -230,14 +230,6 @@ pub fn run(args: &ArgMatches, log_buffer: Arc<Mutex<VecDeque<LogLine>>>) -> Resu
                 #[cfg(feature = "debug")]
                 sample_rate: player.info.sample_rate,
                 #[cfg(feature = "debug")]
-                channels: player.info.channels,
-                #[cfg(feature = "debug")]
-                dsp_time_ms: dsp_metrics.dsp_time_ms,
-                #[cfg(feature = "debug")]
-                audio_time_ms: dsp_metrics.audio_time_ms,
-                #[cfg(feature = "debug")]
-                rt_factor: dsp_metrics.rt_factor,
-                #[cfg(feature = "debug")]
                 overrun: dsp_metrics.overrun,
                 #[cfg(feature = "debug")]
                 overrun_ms: dsp_metrics.overrun_ms,
@@ -263,12 +255,6 @@ pub fn run(args: &ArgMatches, log_buffer: Arc<Mutex<VecDeque<LogLine>>>) -> Resu
                 clip_count: dsp_metrics.clip_count,
                 #[cfg(feature = "debug")]
                 nan_count: dsp_metrics.nan_count,
-                #[cfg(feature = "debug")]
-                append_delay_ms: dsp_metrics.append_delay_ms,
-                #[cfg(feature = "debug")]
-                avg_append_delay_ms: dsp_metrics.avg_append_delay_ms,
-                #[cfg(feature = "debug")]
-                max_append_delay_ms: dsp_metrics.max_append_delay_ms,
                 #[cfg(feature = "debug")]
                 late_append_count: dsp_metrics.late_append_count,
                 #[cfg(feature = "debug")]

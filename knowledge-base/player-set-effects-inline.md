@@ -4,10 +4,10 @@
 
 ## What it does
 
-- Replaces `Player`'s shared effects vector with the provided chain.
+- Queues a pending inline chain update for the mix thread.
 - Keeps the current sink and playback thread running.
 - Does not clear effect state or tails (for example reverb decay already in flight).
-- Applies new settings to future chunks processed by the mix thread.
+- Mix thread applies a short crossfade between old/new chain outputs, then swaps to the new chain.
 - Applies a short internal crossfade (default 25 ms) between old-chain and new-chain outputs to reduce inline edit clicks.
 - Transition duration is configurable through `Player::set_inline_effects_transition_ms`.
 
