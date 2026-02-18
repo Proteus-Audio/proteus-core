@@ -47,6 +47,7 @@ impl Player {
             buffer_settings_for_state: self.buffer_settings.clone(),
             effects: self.effects.clone(),
             inline_effects_update: self.inline_effects_update.clone(),
+            inline_track_mix_updates: self.inline_track_mix_updates.clone(),
             dsp_metrics: self.dsp_metrics.clone(),
             dsp_metrics_for_sink: self.dsp_metrics.clone(),
             effects_reset: self.effects_reset.clone(),

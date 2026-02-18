@@ -5,6 +5,8 @@
 
 use std::sync::atomic::Ordering;
 
+use crate::playback::engine::InlineTrackMixUpdate;
+
 use super::{Player, PlayerState};
 
 impl Player {
@@ -82,6 +84,33 @@ impl Player {
     pub fn set_effect_boundary_log(&self, enabled: bool) {
         let mut settings = self.buffer_settings.lock().unwrap();
         settings.effect_boundary_log = enabled;
+    }
+
+    /// Update per-slot track level/pan without restarting playback.
+    ///
+    /// This mutates the underlying track model and queues an inline update for
+    /// the active mix thread. Returns `false` if `slot_index` is out of range.
+    pub fn set_track_mix_inline(&self, slot_index: usize, level: f32, pan: f32) -> bool {
+        let linked_slots = {
+            let mut prot = self.prot.lock().unwrap();
+            if !prot.set_slot_mix_settings(slot_index, level, pan) {
+                return false;
+            }
+            prot.linked_slot_indices(slot_index)
+        };
+        let Some(linked_slots) = linked_slots else {
+            return false;
+        };
+
+        let mut pending = self.inline_track_mix_updates.lock().unwrap();
+        for slot_index in linked_slots {
+            pending.push(InlineTrackMixUpdate {
+                slot_index,
+                level,
+                pan,
+            });
+        }
+        true
     }
 
     /// Debug helper returning thread alive, state, and audio heard flags.

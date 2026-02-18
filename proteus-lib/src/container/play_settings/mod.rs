@@ -60,6 +60,14 @@ impl<T> PlaySettingsContainer<T> {
             PlaySettingsContainer::Flat(inner) => inner,
         }
     }
+
+    /// Return mutable access to the inner settings payload.
+    pub fn inner_mut(&mut self) -> &mut T {
+        match self {
+            PlaySettingsContainer::Nested { play_settings } => play_settings,
+            PlaySettingsContainer::Flat(inner) => inner,
+        }
+    }
 }
 
 /// Versioned settings file representation.

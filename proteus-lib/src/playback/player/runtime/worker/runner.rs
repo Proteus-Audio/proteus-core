@@ -80,6 +80,7 @@ pub(in crate::playback::player::runtime) fn run_playback_thread(
         ctx.dsp_metrics.clone(),
         ctx.effects_reset.clone(),
         ctx.inline_effects_update.clone(),
+        ctx.inline_track_mix_updates.clone(),
     );
 
     let stream = match open_output_stream_with_retry() {

@@ -4,6 +4,7 @@ use rodio::buffer::SamplesBuffer;
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::Ordering;
 use std::sync::mpsc;
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 use std::time::Instant;
@@ -14,6 +15,7 @@ use crate::dsp::effects::{convolution_reverb, AudioEffect, EffectContext};
 use crate::track::{buffer_container_tracks, ContainerTrackArgs};
 
 use super::super::premix::PremixBuffer;
+use super::super::{compute_track_channel_gains, InlineTrackMixUpdate};
 use super::effects::run_effect_chain;
 use super::source_spawner::SourceSpawner;
 use super::track_mix::{mix_tracks_into_premix, TrackMixArgs};
@@ -33,6 +35,7 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer, f
         track_channel_gains,
         effects_reset,
         inline_effects_update,
+        inline_track_mix_updates,
         finished_tracks,
         prot,
         abort,
@@ -155,7 +158,7 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer, f
         let premix_max_samples = (start_samples.max(min_mix_samples).max(1)).saturating_mul(4);
         let warmup_samples = min_mix_samples;
         let track_buffer_size = (audio_info.sample_rate as usize * 10).max(start_samples * 2);
-        let slot_channel_gains: Vec<Vec<f32>> = {
+        let slot_channel_gains: Arc<Mutex<Vec<Vec<f32>>>> = Arc::new(Mutex::new({
             let gains = track_channel_gains.lock().unwrap();
             active_track_keys
                 .iter()
@@ -166,7 +169,7 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer, f
                         .unwrap_or_else(|| vec![1.0; audio_info.channels.max(1) as usize])
                 })
                 .collect()
-        };
+        }));
         // Track timeline based on source consumption, not post-DSP output, so
         // shuffle boundaries remain stable even when effects queue tail samples.
         let mut source_timeline_frames =
@@ -284,6 +287,13 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer, f
                 }
                 next_shuffle_event_index += 1;
             }
+            apply_pending_track_mix_updates(
+                &inline_track_mix_updates,
+                &slot_channel_gains,
+                &active_track_keys,
+                &track_channel_gains,
+                audio_info.channels.max(1) as usize,
+            );
             let active_key_set: HashSet<u16> = active_track_keys.iter().copied().collect();
             let fading_key_set: HashSet<u16> = fading_tracks.keys().copied().collect();
             let retained_key_set: HashSet<u16> = active_key_set
@@ -649,4 +659,33 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer, f
     });
 
     receiver
+}
+
+fn apply_pending_track_mix_updates(
+    inline_track_mix_updates: &Arc<Mutex<Vec<InlineTrackMixUpdate>>>,
+    slot_channel_gains: &Arc<Mutex<Vec<Vec<f32>>>>,
+    active_track_keys: &[u16],
+    track_channel_gains: &Arc<Mutex<HashMap<u16, Vec<f32>>>>,
+    channels: usize,
+) {
+    let updates = {
+        let mut pending = inline_track_mix_updates.lock().unwrap();
+        std::mem::take(&mut *pending)
+    };
+    if updates.is_empty() {
+        return;
+    }
+
+    let mut slot_gains = slot_channel_gains.lock().unwrap();
+    let mut key_gains = track_channel_gains.lock().unwrap();
+    for update in updates {
+        if update.slot_index >= slot_gains.len() {
+            continue;
+        }
+        let gains = compute_track_channel_gains(update.level, update.pan, channels);
+        slot_gains[update.slot_index] = gains.clone();
+        if let Some(track_key) = active_track_keys.get(update.slot_index).copied() {
+            key_gains.insert(track_key, gains);
+        }
+    }
 }

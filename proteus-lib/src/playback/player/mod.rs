@@ -24,7 +24,9 @@ use crate::playback::output_meter::OutputMeter;
 use crate::{
     container::info::Info,
     dsp::effects::AudioEffect,
-    playback::engine::{DspChainMetrics, InlineEffectsUpdate, PlaybackBufferSettings},
+    playback::engine::{
+        DspChainMetrics, InlineEffectsUpdate, InlineTrackMixUpdate, PlaybackBufferSettings,
+    },
 };
 
 /// High-level playback state for the player.
@@ -79,6 +81,7 @@ pub struct Player {
     buffer_settings: Arc<Mutex<PlaybackBufferSettings>>,
     effects: Arc<Mutex<Vec<AudioEffect>>>,
     inline_effects_update: Arc<Mutex<Option<InlineEffectsUpdate>>>,
+    inline_track_mix_updates: Arc<Mutex<Vec<InlineTrackMixUpdate>>>,
     dsp_metrics: Arc<Mutex<DspChainMetrics>>,
     effects_reset: Arc<AtomicU64>,
     output_meter: Arc<Mutex<OutputMeter>>,
@@ -182,6 +185,7 @@ impl Player {
             buffer_settings: Arc::new(Mutex::new(PlaybackBufferSettings::new(20.0))),
             effects,
             inline_effects_update: Arc::new(Mutex::new(None)),
+            inline_track_mix_updates: Arc::new(Mutex::new(Vec::new())),
             dsp_metrics: Arc::new(Mutex::new(DspChainMetrics::default())),
             effects_reset: Arc::new(AtomicU64::new(0)),
             output_meter: Arc::new(Mutex::new(OutputMeter::new(

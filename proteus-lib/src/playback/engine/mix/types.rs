@@ -10,7 +10,7 @@ use crate::container::prot::Prot;
 use crate::dsp::effects::AudioEffect;
 
 use super::super::state::{DspChainMetrics, PlaybackBufferSettings};
-use super::super::InlineEffectsUpdate;
+use super::super::{InlineEffectsUpdate, InlineTrackMixUpdate};
 
 /// Arguments required to spawn the mixing thread.
 pub struct MixThreadArgs {
@@ -22,6 +22,7 @@ pub struct MixThreadArgs {
     pub track_channel_gains: Arc<Mutex<HashMap<u16, Vec<f32>>>>,
     pub effects_reset: Arc<AtomicU64>,
     pub inline_effects_update: Arc<Mutex<Option<InlineEffectsUpdate>>>,
+    pub inline_track_mix_updates: Arc<Mutex<Vec<InlineTrackMixUpdate>>>,
     pub finished_tracks: Arc<Mutex<Vec<u16>>>,
     pub prot: Arc<Mutex<Prot>>,
     pub abort: Arc<AtomicBool>,

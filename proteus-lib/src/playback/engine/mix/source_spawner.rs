@@ -20,7 +20,7 @@ pub(super) struct SourceSpawner {
     pub(super) container_path: Option<String>,
     pub(super) track_buffer_size: usize,
     pub(super) output_channels: u8,
-    pub(super) fallback_channel_gains: Vec<Vec<f32>>,
+    pub(super) fallback_channel_gains: Arc<Mutex<Vec<Vec<f32>>>>,
 }
 
 impl SourceSpawner {
@@ -51,10 +51,11 @@ impl SourceSpawner {
             weights.insert(track_key, 1.0);
         }
         {
+            let fallback_channel_gains = self.fallback_channel_gains.lock().unwrap();
             let mut gains = self.track_channel_gains.lock().unwrap();
             gains.insert(
                 track_key,
-                self.fallback_channel_gains
+                fallback_channel_gains
                     .get(slot_index)
                     .cloned()
                     .unwrap_or_else(|| vec![1.0; self.output_channels.max(1) as usize]),

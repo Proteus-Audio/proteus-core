@@ -136,3 +136,59 @@ pub(super) fn mix_tracks_into_premix(args: TrackMixArgs<'_>) -> (u64, bool) {
     let consumed_source_frames = current_chunk as u64 / channel_count as u64;
     (consumed_source_frames, true)
 }
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+    use std::sync::{Arc, Mutex};
+
+    use dasp_ring_buffer::Bounded;
+
+    use crate::audio::buffer::TrackBuffer;
+
+    use super::super::super::premix::PremixBuffer;
+    use super::{mix_tracks_into_premix, TrackMixArgs};
+
+    #[test]
+    fn mix_applies_channel_gains_per_sample_lane() {
+        let buffer: TrackBuffer = Arc::new(Mutex::new(Bounded::from(vec![0.0; 8])));
+        {
+            let mut locked = buffer.lock().unwrap();
+            locked.push(1.0);
+            locked.push(1.0);
+        }
+
+        let mut mix_buffer = vec![0.0_f32; 2];
+        let mut premix_buffer = PremixBuffer::new();
+        let active_buffer_snapshot = vec![(0_u16, buffer)];
+        let fading_buffer_snapshot = Vec::new();
+        let mut weights_snapshot = HashMap::new();
+        weights_snapshot.insert(0_u16, 1.0_f32);
+        let mut channel_gains_snapshot = HashMap::new();
+        channel_gains_snapshot.insert(0_u16, vec![0.5_f32, 1.0_f32]);
+        let mut fading_tracks = HashMap::new();
+
+        let (frames, mixed) = mix_tracks_into_premix(TrackMixArgs {
+            mix_buffer: &mut mix_buffer,
+            premix_buffer: &mut premix_buffer,
+            active_buffer_snapshot: &active_buffer_snapshot,
+            fading_buffer_snapshot: &fading_buffer_snapshot,
+            weights_snapshot: &weights_snapshot,
+            channel_gains_snapshot: &channel_gains_snapshot,
+            fading_tracks: &mut fading_tracks,
+            min_mix_samples: 2,
+            premix_max_samples: 4,
+            all_tracks_finished: false,
+            active_min_len: 2,
+            finished_min_len: 0,
+            next_event_ms: None,
+            current_source_ms: 0,
+            sample_rate: 48_000,
+            channel_count: 2,
+        });
+
+        assert!(mixed);
+        assert_eq!(frames, 1);
+        assert_eq!(premix_buffer.pop_chunk(2), vec![0.5_f32, 1.0_f32]);
+    }
+}
