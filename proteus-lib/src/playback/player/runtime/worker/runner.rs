@@ -572,9 +572,21 @@ fn is_drain_complete(ctx: &ThreadContext, loop_state: &LoopState, engine: &Playe
         return false;
     }
 
+    // Prefer sink state over computed duration so we don't drop OutputStream
+    // while tail samples are still queued.
+    let sink_empty = {
+        let sink = ctx.sink_mutex.lock().unwrap();
+        sink.empty()
+    };
+    if sink_empty {
+        return true;
+    }
+
+    // Fallback guard: if queue bookkeeping drifts and sink never reports empty,
+    // allow termination only after a small grace period past expected end.
     if let Some(final_duration) = *loop_state.final_duration.lock().unwrap() {
         let time_passed = *ctx.time_passed.lock().unwrap();
-        return time_passed >= (final_duration - 0.001).max(0.0);
+        return time_passed >= (final_duration + 0.25).max(0.0);
     }
 
     false

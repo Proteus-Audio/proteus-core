@@ -536,11 +536,20 @@ pub fn spawn_mix_thread(
                 }
             }
 
-            if active_buffer_snapshot.is_empty()
+            let no_active_source_samples = active_buffer_snapshot
+                .iter()
+                .all(|(_, buffer)| buffer.lock().unwrap().len() == 0)
+                && fading_buffer_snapshot
+                    .iter()
+                    .all(|(_, buffer)| buffer.lock().unwrap().len() == 0);
+
+            if no_active_source_samples
                 && effects_len == 0
                 && premix_buffer.is_empty()
                 && all_tracks_finished
             {
+                #[cfg(feature = "debug")]
+                log::debug!("mix drain trigger: flushing effect tail with empty input");
                 let drained = if let Some(transition) = active_inline_transition.as_mut() {
                     let old_out =
                         run_effect_chain(&mut transition.old_effects, &[], &effect_context, true);
@@ -568,9 +577,20 @@ pub fn spawn_mix_thread(
                     run_effect_chain(&mut effects_guard, &[], &effect_context, true)
                 };
                 if !drained.is_empty() {
-                    let mut tail_buffer = effects_buffer.lock().unwrap();
-                    for sample in drained {
-                        let _ = tail_buffer.push(sample);
+                    let input_channels = audio_info.channels as u16;
+                    let sample_rate = audio_info.sample_rate as u32;
+                    match super::output_stage::send_samples(
+                        &sender,
+                        input_channels,
+                        sample_rate,
+                        drained,
+                    ) {
+                        super::output_stage::SendStatus::Sent => {}
+                        super::output_stage::SendStatus::Empty => {}
+                        super::output_stage::SendStatus::Disconnected => {
+                            abort.store(true, Ordering::SeqCst);
+                            break;
+                        }
                     }
                     continue;
                 }
