@@ -6,6 +6,7 @@ use std::collections::HashMap;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU64;
 use std::sync::{mpsc::Receiver, Arc, Condvar, Mutex};
+use std::thread::JoinHandle;
 
 use crate::audio::buffer::{init_buffer_map, TrackBuffer};
 use crate::container::prot::Prot;
@@ -44,7 +45,7 @@ pub struct InlineTrackMixUpdate {
 }
 
 /// Internal playback engine used by the high-level [`Player`].
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct PlayerEngine {
     pub finished_tracks: Arc<Mutex<Vec<u16>>>,
     start_time: f64,
@@ -61,6 +62,7 @@ pub struct PlayerEngine {
     buffer_settings: Arc<Mutex<PlaybackBufferSettings>>,
     effects: Arc<Mutex<Vec<crate::dsp::effects::AudioEffect>>>,
     dsp_metrics: Arc<Mutex<DspChainMetrics>>,
+    mix_thread_handle: Option<JoinHandle<()>>,
 }
 
 impl PlayerEngine {
@@ -116,6 +118,7 @@ impl PlayerEngine {
             buffer_settings,
             effects,
             dsp_metrics,
+            mix_thread_handle: None,
         }
     }
 
@@ -141,12 +144,12 @@ impl PlayerEngine {
         self.get_receiver()
     }
 
-    fn get_receiver(&self) -> Receiver<(SamplesBuffer, f64)> {
+    fn get_receiver(&mut self) -> Receiver<(SamplesBuffer, f64)> {
         let prot = self.prot.lock().unwrap();
         let audio_info = prot.info.clone();
         drop(prot);
 
-        spawn_mix_thread(MixThreadArgs {
+        let (receiver, handle) = spawn_mix_thread(MixThreadArgs {
             audio_info,
             buffer_map: self.buffer_map.clone(),
             buffer_notify: self.buffer_notify.clone(),
@@ -163,7 +166,9 @@ impl PlayerEngine {
             buffer_settings: self.buffer_settings.clone(),
             effects: self.effects.clone(),
             dsp_metrics: self.dsp_metrics.clone(),
-        })
+        });
+        self.mix_thread_handle = Some(handle);
+        receiver
     }
 
     /// Get the total duration (seconds) of the active selection.
@@ -222,6 +227,19 @@ impl PlayerEngine {
         }
 
         true
+    }
+}
+
+impl Drop for PlayerEngine {
+    fn drop(&mut self) {
+        self.abort
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        self.buffer_notify.notify_all();
+        if let Some(handle) = self.mix_thread_handle.take() {
+            if handle.join().is_err() {
+                log::warn!("mix thread panicked during join");
+            }
+        }
     }
 }
 

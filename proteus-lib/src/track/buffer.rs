@@ -1,6 +1,7 @@
 //! Ring-buffer helpers for track sample delivery.
 
 use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::Duration;
 
@@ -11,10 +12,15 @@ pub fn add_samples_to_buffer_map(
     buffer_map: &mut TrackBufferMap,
     track_key: u16,
     samples: Vec<f32>,
+    abort: &Arc<AtomicBool>,
     notify: Option<&Arc<std::sync::Condvar>>,
 ) {
     let mut offset = 0usize;
     while offset < samples.len() {
+        if abort.load(Ordering::Relaxed) {
+            return;
+        }
+
         let map = buffer_map.lock().unwrap();
         let remaining = match map.get(&track_key) {
             Some(buffer) => {
@@ -57,6 +63,7 @@ pub fn add_samples_to_buffer_map_nonblocking(
     buffer_map: &mut TrackBufferMap,
     track_key: u16,
     samples: Vec<f32>,
+    _abort: &Arc<AtomicBool>,
     notify: Option<&Arc<std::sync::Condvar>>,
 ) {
     let remaining = buffer_remaining_space(buffer_map, track_key);

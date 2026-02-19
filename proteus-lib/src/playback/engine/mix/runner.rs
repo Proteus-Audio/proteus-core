@@ -23,8 +23,31 @@ use super::track_mix::{mix_tracks_into_premix, TrackMixArgs};
 use super::types::ActiveInlineTransition;
 use super::MixThreadArgs;
 
+#[derive(Default)]
+struct DecodeWorkerJoinGuard {
+    workers: Vec<JoinHandle<()>>,
+}
+
+impl DecodeWorkerJoinGuard {
+    fn push(&mut self, handle: JoinHandle<()>) {
+        self.workers.push(handle);
+    }
+}
+
+impl Drop for DecodeWorkerJoinGuard {
+    fn drop(&mut self) {
+        for worker in self.workers.drain(..) {
+            if worker.join().is_err() {
+                log::warn!("decode worker panicked during join");
+            }
+        }
+    }
+}
+
 /// Spawn the mixing thread and return a receiver of mixed audio buffers.
-pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer, f64)> {
+pub fn spawn_mix_thread(
+    args: MixThreadArgs,
+) -> (mpsc::Receiver<(SamplesBuffer, f64)>, JoinHandle<()>) {
     let (sender, receiver) = mpsc::sync_channel::<(SamplesBuffer, f64)>(1);
 
     let MixThreadArgs {
@@ -46,7 +69,7 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer, f
         dsp_metrics,
     } = args;
 
-    thread::spawn(move || {
+    let handle = thread::spawn(move || {
         const MIN_MIX_MS: f32 = 300.0;
         const SHUFFLE_CROSSFADE_MS: f64 = 5.0;
         #[cfg(feature = "debug")]
@@ -188,7 +211,7 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer, f
             output_channels: audio_info.channels as u8,
             fallback_channel_gains: slot_channel_gains.clone(),
         };
-        let mut decode_workers: Vec<JoinHandle<()>> = Vec::new();
+        let mut decode_workers = DecodeWorkerJoinGuard::default();
 
         let use_container_buffering = container_path.is_some()
             && upcoming_events.is_empty()
@@ -563,7 +586,7 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer, f
                     let next_event_ms = upcoming_events
                         .get(next_shuffle_event_index)
                         .map(|event| event.at_ms);
-                    let (consumed_source_frames, mixed) = mix_tracks_into_premix(TrackMixArgs {
+                    let (consumed_source_frames, _mixed) = mix_tracks_into_premix(TrackMixArgs {
                         mix_buffer: &mut mix_buffer,
                         premix_buffer: &mut premix_buffer,
                         active_buffer_snapshot: &active_buffer_snapshot,
@@ -583,9 +606,6 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer, f
                     });
                     source_timeline_frames =
                         source_timeline_frames.saturating_add(consumed_source_frames);
-                    if mixed {
-                        did_work = true;
-                    }
                 }
 
                 let samples = super::output_stage::produce_output_samples(
@@ -644,9 +664,20 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer, f
                     },
                 );
 
-                if super::output_stage::send_samples(&sender, input_channels, sample_rate, samples)
-                {
-                    did_work = true;
+                match super::output_stage::send_samples(
+                    &sender,
+                    input_channels,
+                    sample_rate,
+                    samples,
+                ) {
+                    super::output_stage::SendStatus::Sent => {
+                        did_work = true;
+                    }
+                    super::output_stage::SendStatus::Empty => {}
+                    super::output_stage::SendStatus::Disconnected => {
+                        abort.store(true, Ordering::SeqCst);
+                        break;
+                    }
                 }
             }
 
@@ -666,14 +697,10 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer, f
             }
         }
 
-        for worker in decode_workers {
-            if worker.join().is_err() {
-                log::warn!("decode worker panicked during join");
-            }
-        }
+        drop(decode_workers);
     });
 
-    receiver
+    (receiver, handle)
 }
 
 fn apply_pending_track_mix_updates(

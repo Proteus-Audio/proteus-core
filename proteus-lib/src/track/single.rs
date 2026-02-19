@@ -154,6 +154,7 @@ pub fn buffer_track(args: TrackArgs, abort: Arc<AtomicBool>) -> JoinHandle<()> {
                         &mut buffer_map.clone(),
                         track_key,
                         stereo_samples,
+                        &abort,
                         buffer_notify.as_ref(),
                     );
                 }

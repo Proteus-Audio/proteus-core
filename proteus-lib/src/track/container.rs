@@ -261,6 +261,7 @@ pub fn buffer_container_tracks(args: ContainerTrackArgs, abort: Arc<AtomicBool>)
                         &mut buffer_map.clone(),
                         primary_track_key,
                         stereo_samples,
+                        &abort,
                         buffer_notify.as_ref(),
                     );
                 }
