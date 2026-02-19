@@ -18,6 +18,9 @@ pub use spec::{parse_impulse_response_string, ImpulseResponseSpec};
 const DEFAULT_DRY_WET: f32 = 0.000001;
 const DEFAULT_TAIL_DB: f32 = -60.0;
 pub(crate) const REVERB_BATCH_BLOCKS: usize = 2;
+const DRAIN_MAX_BLOCKS: usize = 128;
+const DRAIN_SILENCE_EPSILON: f32 = 1.0e-6;
+const DRAIN_SILENT_BLOCKS_TO_STOP: usize = 2;
 
 /// Preferred processing batch size in interleaved samples for the reverb.
 pub fn preferred_batch_samples(channels: usize) -> usize {
@@ -240,12 +243,16 @@ impl ConvolutionReverbState {
 
     fn process(&mut self, samples: &[f32], drain: bool) -> Vec<f32> {
         if samples.is_empty() {
-            if drain && !self.output_buffer.is_empty() {
-                let out = self.output_buffer.clone();
-                self.output_buffer.clear();
-                return out;
+            if !drain {
+                return Vec::new();
             }
-            return Vec::new();
+
+            let mut out = Vec::new();
+            if !self.output_buffer.is_empty() {
+                out.extend(self.output_buffer.drain(..));
+            }
+            out.extend(self.drain_tail_blocks());
+            return out;
         }
 
         if self.block_samples == 0 {
@@ -291,6 +298,44 @@ impl ConvolutionReverbState {
         }
 
         self.output_buffer.drain(0..chunk_len).collect()
+    }
+
+    fn drain_tail_blocks(&mut self) -> Vec<f32> {
+        if self.block_samples == 0 {
+            return Vec::new();
+        }
+
+        let mut drained = Vec::new();
+        let mut saw_non_silent = false;
+        let mut trailing_silent_blocks = 0usize;
+        let silence = vec![0.0_f32; self.block_samples.max(1)];
+
+        for _ in 0..DRAIN_MAX_BLOCKS {
+            self.reverb.process_into(&silence, &mut self.block_out);
+            if self.block_out.is_empty() {
+                break;
+            }
+
+            let max_abs = self
+                .block_out
+                .iter()
+                .fold(0.0_f32, |acc, sample| acc.max(sample.abs()));
+
+            if max_abs > DRAIN_SILENCE_EPSILON {
+                saw_non_silent = true;
+                trailing_silent_blocks = 0;
+            } else {
+                trailing_silent_blocks = trailing_silent_blocks.saturating_add(1);
+            }
+
+            drained.extend_from_slice(&self.block_out);
+
+            if saw_non_silent && trailing_silent_blocks >= DRAIN_SILENT_BLOCKS_TO_STOP {
+                break;
+            }
+        }
+
+        drained
     }
 }
 
