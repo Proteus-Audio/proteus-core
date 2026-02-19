@@ -16,6 +16,7 @@ mod settings;
 use rodio::Sink;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
+use std::thread::JoinHandle;
 
 use crate::container::prot::{PathsTrack, Prot};
 use crate::diagnostics::reporter::Reporter;
@@ -70,6 +71,7 @@ pub struct Player {
     state: Arc<Mutex<PlayerState>>,
     abort: Arc<AtomicBool>,
     playback_thread_exists: Arc<AtomicBool>,
+    playback_thread_handle: Arc<Mutex<Option<JoinHandle<()>>>>,
     playback_id: Arc<AtomicU64>,
     duration: Arc<Mutex<f64>>,
     prot: Arc<Mutex<Prot>>,
@@ -89,6 +91,7 @@ pub struct Player {
     last_time_update_ms: Arc<AtomicU64>,
     next_resume_fade_ms: Arc<Mutex<Option<f32>>>,
     handle_count: Arc<AtomicUsize>,
+    shutdown_once: Arc<AtomicBool>,
     impulse_response_override: Option<ImpulseResponseSpec>,
     impulse_response_tail_override: Option<f32>,
 }
@@ -103,6 +106,7 @@ impl Clone for Player {
             state: self.state.clone(),
             abort: self.abort.clone(),
             playback_thread_exists: self.playback_thread_exists.clone(),
+            playback_thread_handle: self.playback_thread_handle.clone(),
             playback_id: self.playback_id.clone(),
             duration: self.duration.clone(),
             prot: self.prot.clone(),
@@ -122,6 +126,7 @@ impl Clone for Player {
             last_time_update_ms: self.last_time_update_ms.clone(),
             next_resume_fade_ms: self.next_resume_fade_ms.clone(),
             handle_count: self.handle_count.clone(),
+            shutdown_once: self.shutdown_once.clone(),
             impulse_response_override: self.impulse_response_override.clone(),
             impulse_response_tail_override: self.impulse_response_tail_override,
         }
@@ -210,6 +215,7 @@ impl Player {
             abort: Arc::new(AtomicBool::new(false)),
             ts: Arc::new(Mutex::new(0.0)),
             playback_thread_exists: Arc::new(AtomicBool::new(true)),
+            playback_thread_handle: Arc::new(Mutex::new(None)),
             playback_id: Arc::new(AtomicU64::new(0)),
             duration: Arc::new(Mutex::new(0.0)),
             audio_heard: Arc::new(AtomicBool::new(false)),
@@ -233,6 +239,7 @@ impl Player {
             last_time_update_ms: Arc::new(AtomicU64::new(0)),
             next_resume_fade_ms: Arc::new(Mutex::new(None)),
             handle_count: Arc::new(AtomicUsize::new(1)),
+            shutdown_once: Arc::new(AtomicBool::new(false)),
             impulse_response_override: None,
             impulse_response_tail_override: None,
         };
@@ -250,6 +257,9 @@ impl Drop for Player {
         if self.handle_count.fetch_sub(1, Ordering::AcqRel) != 1 {
             return;
         }
+        if self.shutdown_once.swap(true, Ordering::AcqRel) {
+            return;
+        }
 
         if let Some(reporter) = self.reporter.take() {
             reporter.lock().unwrap().stop();
@@ -262,6 +272,7 @@ impl Drop for Player {
             self.kill_current();
         } else {
             self.abort.store(true, Ordering::SeqCst);
+            self.join_playback_thread();
         }
 
         {

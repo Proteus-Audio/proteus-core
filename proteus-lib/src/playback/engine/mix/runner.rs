@@ -6,6 +6,7 @@ use std::sync::atomic::Ordering;
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::thread;
+use std::thread::JoinHandle;
 use std::time::Duration;
 use std::time::Instant;
 
@@ -187,6 +188,7 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer, f
             output_channels: audio_info.channels as u8,
             fallback_channel_gains: slot_channel_gains.clone(),
         };
+        let mut decode_workers: Vec<JoinHandle<()>> = Vec::new();
 
         let use_container_buffering = container_path.is_some()
             && upcoming_events.is_empty()
@@ -206,7 +208,7 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer, f
                 })
                 .collect();
             if !track_entries.is_empty() {
-                buffer_container_tracks(
+                let handle = buffer_container_tracks(
                     ContainerTrackArgs {
                         file_path: container_path.clone().unwrap_or_default(),
                         track_entries,
@@ -220,11 +222,16 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer, f
                     },
                     abort.clone(),
                 );
+                decode_workers.push(handle);
             }
         } else {
             for (slot_index, source) in active_sources.iter().enumerate() {
                 if let Some(track_key) = active_track_keys.get(slot_index).copied() {
-                    source_spawner.spawn(slot_index, track_key, source, start_time);
+                    if let Some(handle) =
+                        source_spawner.spawn(slot_index, track_key, source, start_time)
+                    {
+                        decode_workers.push(handle);
+                    }
                 }
             }
         }
@@ -278,12 +285,14 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer, f
                     next_track_key = next_track_key.saturating_add(1);
                     active_sources[slot_index] = event.sources[slot_index].clone();
                     active_track_keys[slot_index] = new_key;
-                    source_spawner.spawn(
+                    if let Some(handle) = source_spawner.spawn(
                         slot_index,
                         new_key,
                         &active_sources[slot_index],
                         event_seconds,
-                    );
+                    ) {
+                        decode_workers.push(handle);
+                    }
                 }
                 next_shuffle_event_index += 1;
             }
@@ -654,6 +663,12 @@ pub fn spawn_mix_thread(args: MixThreadArgs) -> mpsc::Receiver<(SamplesBuffer, f
                     buffer_notify.notify_all();
                 }
                 drop(buffer_snapshot);
+            }
+        }
+
+        for worker in decode_workers {
+            if worker.join().is_err() {
+                log::warn!("decode worker panicked during join");
             }
         }
     });

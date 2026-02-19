@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 use std::thread;
+use std::thread::JoinHandle;
 use symphonia::core::errors::Error;
 use symphonia::core::formats::{SeekMode, SeekTo};
 use symphonia::core::units::Time;
@@ -29,7 +30,7 @@ pub struct TrackArgs {
 }
 
 /// Spawn a decoder thread that buffers audio for a single track.
-pub fn buffer_track(args: TrackArgs, abort: Arc<AtomicBool>) -> Arc<Mutex<bool>> {
+pub fn buffer_track(args: TrackArgs, abort: Arc<AtomicBool>) -> JoinHandle<()> {
     let TrackArgs {
         file_path,
         track_id,
@@ -45,7 +46,6 @@ pub fn buffer_track(args: TrackArgs, abort: Arc<AtomicBool>) -> Arc<Mutex<bool>>
     // TODO: Apply `_track_weights` to scale per-track samples when weighting single-track buffers.
 
     let (mut decoder, mut format) = open_file(&file_path);
-    let playing: Arc<Mutex<bool>> = Arc::new(Mutex::new(true));
 
     thread::spawn(move || {
         let (track_id, track) = match track_id {
@@ -172,7 +172,5 @@ pub fn buffer_track(args: TrackArgs, abort: Arc<AtomicBool>) -> Arc<Mutex<bool>>
         if let Some(notify) = buffer_notify.as_ref() {
             notify.notify_all();
         }
-    });
-
-    playing
+    })
 }

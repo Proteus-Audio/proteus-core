@@ -83,8 +83,18 @@ impl Player {
         while !self.thread_finished() {
             thread::sleep(Duration::from_millis(10));
         }
+        self.join_playback_thread();
 
         self.state.lock().unwrap().clone_from(&PlayerState::Stopped);
+    }
+
+    /// Join the current playback thread handle if one is present.
+    pub(in crate::playback::player) fn join_playback_thread(&self) {
+        if let Some(handle) = self.playback_thread_handle.lock().unwrap().take() {
+            if handle.join().is_err() {
+                warn!("playback thread panicked during join");
+            }
+        }
     }
 
     /// Stop playback and reset timing state.
@@ -312,7 +322,10 @@ impl Player {
         }
 
         let reporter = Arc::new(Mutex::new(Reporter::new(
-            Arc::new(Mutex::new(self.clone())),
+            self.ts.clone(),
+            self.volume.clone(),
+            self.duration.clone(),
+            self.state.clone(),
             reporting,
             reporting_interval,
         )));

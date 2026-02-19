@@ -19,6 +19,8 @@ impl Player {
     /// * `ts` - Optional starting time in seconds. When `None`, playback starts
     ///   from `0.0`.
     pub(in crate::playback::player) fn initialize_thread(&mut self, ts: Option<f64>) {
+        self.join_playback_thread();
+
         let mut finished_tracks = self.finished_tracks.lock().unwrap();
         finished_tracks.clear();
         drop(finished_tracks);
@@ -62,6 +64,7 @@ impl Player {
             last_time_update_ms: self.last_time_update_ms.clone(),
         };
 
-        thread::spawn(move || run_playback_thread(context, playback_id, ts));
+        let handle = thread::spawn(move || run_playback_thread(context, playback_id, ts));
+        *self.playback_thread_handle.lock().unwrap() = Some(handle);
     }
 }

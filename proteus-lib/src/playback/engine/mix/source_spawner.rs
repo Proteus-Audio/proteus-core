@@ -4,6 +4,7 @@ use dasp_ring_buffer::Bounded;
 use std::collections::HashMap;
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
+use std::thread::JoinHandle;
 
 use crate::audio::buffer::TrackBuffer;
 use crate::container::prot::ShuffleSource;
@@ -38,7 +39,7 @@ impl SourceSpawner {
         track_key: u16,
         source: &ShuffleSource,
         event_seconds: f64,
-    ) {
+    ) -> Option<JoinHandle<()>> {
         {
             let mut map = self.buffer_map.lock().unwrap();
             map.insert(
@@ -65,7 +66,7 @@ impl SourceSpawner {
         let track_args = match source {
             ShuffleSource::TrackId(track_id) => {
                 let Some(container_path) = self.container_path.as_ref() else {
-                    return;
+                    return None;
                 };
                 TrackArgs {
                     file_path: container_path.clone(),
@@ -92,6 +93,6 @@ impl SourceSpawner {
             },
         };
 
-        buffer_track(track_args, self.abort.clone());
+        Some(buffer_track(track_args, self.abort.clone()))
     }
 }
