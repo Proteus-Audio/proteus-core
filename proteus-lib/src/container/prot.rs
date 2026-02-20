@@ -320,22 +320,25 @@ impl Prot {
         Vec::new()
     }
 
-    /// Return the full timestamped shuffle schedule for display.
+    /// Return the full timestamped shuffle schedule grouped by logical track.
     ///
-    /// Each entry is `(time_seconds, selected_ids_or_paths)`.
-    pub fn get_shuffle_schedule(&self) -> Vec<(f64, Vec<String>)> {
+    /// Each entry is `(time_seconds, track_groups)`, where `track_groups`
+    /// contains one element per logical track and each inner vector contains all
+    /// selected source IDs/paths for that track (based on `selections_count`).
+    pub fn get_shuffle_schedule(&self) -> Vec<(f64, Vec<Vec<String>>)> {
+        let slot_spans = self.logical_track_slot_spans();
         if self.shuffle_schedule.is_empty() {
             let current = self.get_ids();
             if current.is_empty() {
                 return Vec::new();
             }
-            return vec![(0.0, current)];
+            return vec![(0.0, group_ids_by_slot_spans(&current, &slot_spans))];
         }
 
         self.shuffle_schedule
             .iter()
             .map(|entry| {
-                let ids = entry
+                let ids: Vec<String> = entry
                     .sources
                     .iter()
                     .map(|source| match source {
@@ -343,7 +346,10 @@ impl Prot {
                         ShuffleSource::FilePath(path) => path.clone(),
                     })
                     .collect();
-                (entry.at_ms as f64 / 1000.0, ids)
+                (
+                    entry.at_ms as f64 / 1000.0,
+                    group_ids_by_slot_spans(&ids, &slot_spans),
+                )
             })
             .collect()
     }
@@ -558,6 +564,88 @@ impl Prot {
         match &self.file_paths_dictionary {
             Some(dictionary) => dictionary.to_vec(),
             None => Vec::new(),
+        }
+    }
+
+    fn logical_track_slot_spans(&self) -> Vec<usize> {
+        if let Some(file_paths) = self.file_paths.as_ref() {
+            return file_paths
+                .iter()
+                .filter_map(|track| {
+                    if track.file_paths.is_empty() {
+                        return None;
+                    }
+                    let span = track.selections_count as usize;
+                    if span == 0 {
+                        None
+                    } else {
+                        Some(span)
+                    }
+                })
+                .collect();
+        }
+
+        match self.play_settings.as_ref() {
+            Some(PlaySettingsFile::V1(file)) => file
+                .settings
+                .inner()
+                .tracks
+                .iter()
+                .filter_map(|track| {
+                    if track.ids.is_empty() {
+                        return None;
+                    }
+                    let span = track.selections_count as usize;
+                    if span == 0 {
+                        None
+                    } else {
+                        Some(span)
+                    }
+                })
+                .collect(),
+            Some(PlaySettingsFile::V2(file)) => file
+                .settings
+                .inner()
+                .tracks
+                .iter()
+                .filter_map(|track| {
+                    if track.ids.is_empty() {
+                        return None;
+                    }
+                    let span = track.selections_count as usize;
+                    if span == 0 {
+                        None
+                    } else {
+                        Some(span)
+                    }
+                })
+                .collect(),
+            Some(PlaySettingsFile::V3(file)) => file
+                .settings
+                .inner()
+                .tracks
+                .iter()
+                .filter_map(|track| {
+                    if track.ids.is_empty() {
+                        return None;
+                    }
+                    let span = track.selections_count as usize;
+                    if span == 0 {
+                        None
+                    } else {
+                        Some(span)
+                    }
+                })
+                .collect(),
+            Some(PlaySettingsFile::Legacy(file)) => file
+                .settings
+                .inner()
+                .tracks
+                .iter()
+                .filter(|track| track.starting_index.is_some() && track.length.is_some())
+                .map(|_| 1usize)
+                .collect(),
+            _ => Vec::new(),
         }
     }
 }
@@ -872,6 +960,36 @@ fn sanitize_pan(pan: f32) -> f32 {
     }
 }
 
+fn group_ids_by_slot_spans(ids: &[String], slot_spans: &[usize]) -> Vec<Vec<String>> {
+    if ids.is_empty() {
+        return Vec::new();
+    }
+
+    // If spans are unavailable, preserve data by treating each slot as its own track.
+    if slot_spans.is_empty() {
+        return ids.iter().map(|id| vec![id.clone()]).collect();
+    }
+
+    let mut grouped = Vec::new();
+    let mut cursor = 0usize;
+    for span in slot_spans {
+        if *span == 0 || cursor >= ids.len() {
+            continue;
+        }
+        let end = (cursor + *span).min(ids.len());
+        grouped.push(ids[cursor..end].to_vec());
+        cursor = end;
+    }
+
+    // Keep any extra slots visible even if schedule/config spans diverge.
+    while cursor < ids.len() {
+        grouped.push(vec![ids[cursor].clone()]);
+        cursor += 1;
+    }
+
+    grouped
+}
+
 fn get_paths_track_for_slot_mut(
     tracks: &mut [PathsTrack],
     slot_index: usize,
@@ -1171,5 +1289,80 @@ mod tests {
         assert_eq!(prot.linked_slot_indices(1), Some(vec![0, 1]));
         assert_eq!(prot.linked_slot_indices(2), Some(vec![2]));
         assert_eq!(prot.linked_slot_indices(3), None);
+    }
+
+    #[test]
+    fn group_ids_by_slot_spans_groups_multiple_selections_per_logical_track() {
+        let ids = vec![
+            "a1".to_string(),
+            "a2".to_string(),
+            "b1".to_string(),
+            "c1".to_string(),
+            "c2".to_string(),
+            "c3".to_string(),
+        ];
+        let grouped = group_ids_by_slot_spans(&ids, &[2, 1, 3]);
+        assert_eq!(
+            grouped,
+            vec![
+                vec!["a1".to_string(), "a2".to_string()],
+                vec!["b1".to_string()],
+                vec!["c1".to_string(), "c2".to_string(), "c3".to_string()],
+            ]
+        );
+    }
+
+    #[test]
+    fn get_shuffle_schedule_groups_by_paths_track_selections_count() {
+        let prot = Prot {
+            info: test_info(),
+            file_path: None,
+            file_paths: Some(vec![
+                PathsTrack {
+                    file_paths: vec!["a.wav".to_string(), "b.wav".to_string()],
+                    level: 1.0,
+                    pan: 0.0,
+                    selections_count: 2,
+                    shuffle_points: vec![],
+                },
+                PathsTrack {
+                    file_paths: vec!["c.wav".to_string()],
+                    level: 1.0,
+                    pan: 0.0,
+                    selections_count: 1,
+                    shuffle_points: vec![],
+                },
+            ]),
+            file_paths_dictionary: Some(vec![
+                "a.wav".to_string(),
+                "b.wav".to_string(),
+                "c.wav".to_string(),
+            ]),
+            track_ids: None,
+            track_paths: None,
+            duration: 0.0,
+            shuffle_schedule: vec![ShuffleScheduleEntry {
+                at_ms: 0,
+                sources: vec![
+                    ShuffleSource::FilePath("a.wav".to_string()),
+                    ShuffleSource::FilePath("b.wav".to_string()),
+                    ShuffleSource::FilePath("c.wav".to_string()),
+                ],
+            }],
+            play_settings: None,
+            impulse_response_spec: None,
+            impulse_response_tail_db: None,
+            effects: None,
+        };
+
+        let schedule = prot.get_shuffle_schedule();
+        assert_eq!(schedule.len(), 1);
+        assert_eq!(
+            schedule[0].1,
+            vec![
+                vec!["a.wav".to_string(), "b.wav".to_string()],
+                vec!["c.wav".to_string()],
+            ]
+        );
     }
 }

@@ -298,8 +298,10 @@ impl Player {
 
     /// Get the full timestamped shuffle schedule used by playback.
     ///
-    /// Each entry is `(time_seconds, selected_ids_or_paths)`.
-    pub fn get_shuffle_schedule(&self) -> Vec<(f64, Vec<String>)> {
+    /// Each entry is `(time_seconds, grouped_selected_ids_or_paths)`, where the
+    /// inner groups map to logical tracks and contain all selections for each
+    /// track (for example when `selections_count > 1`).
+    pub fn get_shuffle_schedule(&self) -> Vec<(f64, Vec<Vec<String>>)> {
         let prot = self.prot.lock().unwrap();
         prot.get_shuffle_schedule()
     }
