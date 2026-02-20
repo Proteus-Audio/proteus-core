@@ -2,7 +2,7 @@
 
 ## Goal
 
-Refactor the mix/streaming pipeline to use one consistent decode->route->mix model so that:
+Refactor the mix/streaming pipeline to use one consistent decode->route->mix model with a cleaner/clearer signal chain so debugging and troubleshooting are straightforward, and so that:
 
 - EOF detection is deterministic and cannot be missed by path-specific behavior.
 - all logical tracks remain sample-aligned, including shuffle transitions and duplicate selections.
@@ -29,8 +29,8 @@ Examples (from requirement):
 
 - `[(0.0, [["1"], ["3"]]), (14.604, [["2"], ["3"]])]` -> instances for `"1"`, `"2"`, `"3"`
 - `[(0.0, [["1","2"], ["3"]]), (14.604, [["2","4"], ["3"]])]` -> instances for `"1"`, `"2"`, `"4"`, `"3"`
-- `[(0.0, [["1","2"], ["3"]]), (14.604, [["2","4"], ["2"]])]` -> 5 instances
-- `[(0.0, [["1","2"], ["3"]]), (14.604, [["2","2"], ["2"]])]` -> 5 instances
+- `[(0.0, [["1","2"], ["3"]]), (14.604, [["2","4"], ["2"]])]` -> 5 instances (`"1"`, `"2"`, and `"4"` for Logical Track 1), (`"3"` and `"2"`for Track 2)
+- `[(0.0, [["1","2"], ["3"]]), (14.604, [["2","2"], ["2"]])]` -> 5 instances (`"1"`, `"2"`, and `"2"` for Logical Track 1… Track two is duplicated because it exists twice in the same track at the same time), (`"3"` and `"2"`for Track 2)
 
 To support these cases safely, represent each occurrence with an explicit `InstanceId`, even if source id/path matches another instance.
 
