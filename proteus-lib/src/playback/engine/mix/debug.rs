@@ -19,5 +19,6 @@ pub(super) fn effect_label(effect: &AudioEffect) -> &'static str {
         AudioEffect::Compressor(_) => "Compressor",
         AudioEffect::Limiter(_) => "Limiter",
         AudioEffect::MultibandEq(_) => "MultibandEq",
+        AudioEffect::Pan(_) => "Pan",
     }
 }

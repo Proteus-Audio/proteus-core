@@ -232,8 +232,7 @@ impl PlayerEngine {
 
 impl Drop for PlayerEngine {
     fn drop(&mut self) {
-        self.abort
-            .store(true, std::sync::atomic::Ordering::SeqCst);
+        self.abort.store(true, std::sync::atomic::Ordering::SeqCst);
         self.buffer_notify.notify_all();
         if let Some(handle) = self.mix_thread_handle.take() {
             if handle.join().is_err() {
