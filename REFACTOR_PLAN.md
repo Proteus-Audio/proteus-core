@@ -55,6 +55,7 @@ Responsibilities:
 - fill inactive-but-live instances with zeros to keep all instance timelines aligned.
 - determine whether a decoded source can be ignored at a given timestamp.
 - provide deterministic per-instance EOF state.
+- track fullness state: per-instance buffer `full: bool`; aggregate track/mix fullness as enum state.
 
 Core API to implement (requirement-specific):
 
@@ -67,6 +68,23 @@ Where `RouteDecision` includes:
 - target instance ids that were written with decoded samples,
 - instance ids that were zero-filled for that packet time span,
 - source ignored flag when source is irrelevant for active/future windows.
+
+Additional `BufferMixer` lifecycle/readiness API:
+
+- `signal_finish(source_key: SourceKey)`: marks all buffer instances related to `source_key` as finished.
+- `track_ready(logical_track_index: usize) -> bool`: true when every instance buffer for the track either has samples available or is marked finished.
+- `track_finished(logical_track_index: usize) -> bool`: true when every instance buffer for the track is marked finished.
+- `mix_ready() -> bool`: true when all logical tracks are `track_ready`.
+- `mix_finished() -> bool`: true when all logical tracks are `track_finished`.
+- `track_fill_state(logical_track_index: usize) -> FillState`: aggregate fill state for a logical track.
+- `mix_fill_state() -> FillState`: aggregate fill state across all logical tracks.
+- `take_samples() -> Option<Vec<f32>>`: only runs when `mix_ready() == true`; performs the two-stage mix (logical-track premix, then final combine) and returns mixed samples. Global effects are applied outside `BufferMixer`.
+
+`take_samples` sync rule:
+
+- to preserve alignment, each call must consume the same sample count from every logical track.
+- consumed count is `min(ready_samples_per_track)` across all tracks at call time.
+- if `mix_ready()` is false, `take_samples()` returns `None` and consumes nothing.
 
 ### 3) Decoder topology
 
@@ -111,6 +129,12 @@ This preserves modularity and makes per-track vs global DSP boundaries explicit.
 
 - `RouteDecision`
 : debug telemetry from `route_packet`: `{ sample_targets_written, zero_fill_targets_written, ignored }`.
+
+- `FillState`
+: enum used for track/mix fullness: `Partial`, `Full`, `NotFull`.
+
+- Buffer fullness
+: per-instance buffer-level `full: bool`; track/mix fullness is derived from buffer fullness via `FillState`.
 
 ## Existing schedule API
 
@@ -171,6 +195,8 @@ Exit criteria:
 2. Implement zero-fill logic for inactive windows per instance.
 3. Implement ignore logic for irrelevant packets/sources.
 4. Implement deterministic per-instance EOF completion and aggregate EOF signal.
+5. Implement readiness/finished/fullness queries (`track_ready`, `track_finished`, `mix_ready`, `mix_finished`) plus `signal_finish(source_key)`.
+6. Implement `take_samples` with min-ready-sample synchronized consumption across tracks.
 
 Exit criteria:
 
@@ -224,6 +250,13 @@ Exit criteria:
 - packet routes to correct instances,
 - inactive instances get zero-fill,
 - irrelevant source is ignored.
+- readiness/finished semantics:
+- track is ready when each instance has samples or is finished,
+- track is finished when each instance is finished,
+- mix-ready/mix-finished mirror all-track aggregation.
+- `take_samples`:
+- returns `None` when `mix_ready == false`,
+- when ready, consumes equal sample counts per track using `min(ready_samples_per_track)`.
 - pan effect:
 - stereo pan law behavior,
 - bypass behavior,
