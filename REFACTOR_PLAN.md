@@ -262,8 +262,8 @@ Exit criteria:
 
 ## Deliverables
 
-1. Router + runtime instance plan implementation.
-2. Unified decoder event ingestion.
-3. Two-stage logical-track mix pipeline.
-4. New stereo `Pan` effect integrated into per-track stage.
-5. Removed legacy divergent paths and updated docs.
+- [ ] Router + runtime instance plan implementation.
+- [ ] Unified decoder event ingestion.
+- [ ] Two-stage logical-track mix pipeline.
+- [ ] New stereo `Pan` effect integrated into per-track stage.
+- [ ] Removed legacy divergent paths and updated docs.
