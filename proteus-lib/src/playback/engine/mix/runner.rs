@@ -45,6 +45,23 @@ impl Drop for DecodeWorkerJoinGuard {
 }
 
 /// Spawn the mixing thread and return a receiver of mixed audio buffers.
+///
+/// Runtime flow summary:
+///
+/// 1. Build shuffle runtime plan for `start_time` (`current_sources` + `upcoming_events`).
+/// 2. Spawn initial decode workers (container fast-path or per-slot source workers).
+/// 3. Wait for startup buffering threshold (`start_buffer_ms`) before active mixing.
+/// 4. Per loop iteration:
+/// - apply due shuffle events based on source-consumed timeline,
+/// - rotate runtime track keys for changed slots and keep old keys in short fade-out,
+/// - collect active/fading buffer snapshots and mix metadata,
+/// - run pending effects reset / inline effects transition updates,
+/// - mix source audio into premix and run output-stage DSP/tail handling,
+/// - send mixed chunks over channel to playback worker.
+/// 5. Drain remaining effect tails and exit when sources/premix/tails are fully exhausted.
+///
+/// Key timing detail:
+/// - Shuffle boundary timing is based on source frames consumed, not post-DSP output.
 pub fn spawn_mix_thread(
     args: MixThreadArgs,
 ) -> (mpsc::Receiver<(SamplesBuffer, f64)>, JoinHandle<()>) {
@@ -119,6 +136,10 @@ pub fn spawn_mix_thread(
 
         let prot_locked = prot.clone();
 
+        // Step 1: Build the runtime shuffle plan for this specific start time.
+        //
+        // `current_sources` is the source set that should already be active at
+        // `start_time`, and `upcoming_events` are all future source-switch events.
         let (container_path, mut shuffle_plan) = {
             let prot = prot_locked.lock().unwrap();
             (
@@ -130,11 +151,15 @@ pub fn spawn_mix_thread(
         let upcoming_events: Vec<ShuffleScheduleEntry> =
             shuffle_plan.upcoming_events.drain(..).collect();
         let mut next_shuffle_event_index = 0usize;
+        // Runtime track keys are stable handles into `buffer_map`, while sources
+        // may change at shuffle events. We allocate a new key per source swap so
+        // outgoing audio can keep fading while incoming audio starts immediately.
         let mut active_track_keys: Vec<u16> = (0..active_sources.len()).map(|i| i as u16).collect();
         let mut next_track_key: u16 = active_track_keys.len() as u16;
         let crossfade_frames = ((audio_info.sample_rate as f64 * SHUFFLE_CROSSFADE_MS) / 1000.0)
             .round()
             .max(1.0) as u32;
+        // Map: old track key -> (frames_remaining, total_frames).
         let mut fading_tracks: HashMap<u16, (u32, u32)> = HashMap::new();
 
         #[cfg(not(feature = "debug"))]
@@ -156,6 +181,7 @@ pub fn spawn_mix_thread(
         let mut last_effects_reset = effects_reset.load(std::sync::atomic::Ordering::SeqCst);
         let mut active_inline_transition: Option<ActiveInlineTransition> = None;
 
+        // Step 2: Compute startup/mixing thresholds and allocate staging buffers.
         let start_buffer_ms = buffer_settings.lock().unwrap().start_buffer_ms;
         let start_samples = ((audio_info.sample_rate as f32 * start_buffer_ms) / 1000.0) as usize
             * audio_info.channels as usize;
@@ -172,6 +198,8 @@ pub fn spawn_mix_thread(
             let batch_samples =
                 convolution_reverb::preferred_batch_samples(audio_info.channels.max(1) as usize);
             if batch_samples > 0 {
+                // Align chunk size to convolution-friendly batch boundaries to
+                // reduce boundary artifacts and improve throughput stability.
                 min_mix_samples =
                     ((min_mix_samples + batch_samples - 1) / batch_samples) * batch_samples;
             }
@@ -213,6 +241,12 @@ pub fn spawn_mix_thread(
         };
         let mut decode_workers = DecodeWorkerJoinGuard::default();
 
+        // Step 3: Start source decode workers.
+        //
+        // Fast path: one shared container reader when all active sources are
+        // track IDs and there are no future shuffle events.
+        //
+        // General path: one decode worker per active slot/source pair.
         let use_container_buffering = container_path.is_some()
             && upcoming_events.is_empty()
             && active_sources
@@ -259,6 +293,8 @@ pub fn spawn_mix_thread(
             }
         }
 
+        // Step 4: Warm up effects on silence so first audible buffers do not
+        // pay one-time setup cost in the real-time loop.
         if warmup_samples > 0 {
             let warmup_start = Instant::now();
             let mut processed = vec![0.0_f32; warmup_samples];
@@ -279,16 +315,21 @@ pub fn spawn_mix_thread(
             );
         }
 
+        // Step 5: Main mix loop.
         loop {
             if abort.load(Ordering::SeqCst) {
                 break;
             }
 
+            // Current schedule time is driven by source frames consumed, not by
+            // post-DSP output length. This keeps shuffle points aligned even
+            // when effects produce tails.
             let current_source_ms = if audio_info.sample_rate > 0 {
                 (source_timeline_frames.saturating_mul(1000)) / audio_info.sample_rate as u64
             } else {
                 0
             };
+            // Apply all shuffle events that are now due.
             while next_shuffle_event_index < upcoming_events.len()
                 && upcoming_events[next_shuffle_event_index].at_ms <= current_source_ms
             {
@@ -301,9 +342,12 @@ pub fn spawn_mix_thread(
                     if event.sources[slot_index] == active_sources[slot_index] {
                         continue;
                     }
+                    // Keep old key alive for a short fade-out window.
                     if let Some(old_key) = active_track_keys.get(slot_index).copied() {
                         fading_tracks.insert(old_key, (crossfade_frames, crossfade_frames));
                     }
+                    // Swap slot to a new runtime key/source and start decoding
+                    // that source from the event timestamp.
                     let new_key = next_track_key;
                     next_track_key = next_track_key.saturating_add(1);
                     active_sources[slot_index] = event.sources[slot_index].clone();
@@ -319,6 +363,8 @@ pub fn spawn_mix_thread(
                 }
                 next_shuffle_event_index += 1;
             }
+            // Apply pending per-slot level/pan updates. These are keyed by slot
+            // index from UI controls and remapped to current runtime keys here.
             apply_pending_track_mix_updates(
                 &inline_track_mix_updates,
                 &slot_channel_gains,
@@ -360,6 +406,7 @@ pub fn spawn_mix_thread(
 
             let finished_snapshot = finished_tracks.lock().unwrap().clone();
             let mut all_buffers_full = true;
+            // Track cleanup and producer-pressure snapshot.
             for (track_key, buffer) in buffer_snapshot.iter() {
                 let len = buffer.lock().unwrap().len();
                 if len == 0 {
@@ -376,6 +423,7 @@ pub fn spawn_mix_thread(
             }
 
             if !removable_tracks.is_empty() {
+                // Remove fully drained keys that are no longer active/fading.
                 let mut map = hash_buffer_copy.lock().unwrap();
                 for track_id in removable_tracks.drain(..) {
                     map.remove(&track_id);
@@ -383,6 +431,8 @@ pub fn spawn_mix_thread(
                 }
             }
 
+            // If no active buffers/tails/premix remain and no more events are
+            // pending, the mix thread has no further work.
             if active_buffer_snapshot.is_empty()
                 && effects_buffer.lock().unwrap().len() == 0
                 && premix_buffer.is_empty()
@@ -392,6 +442,8 @@ pub fn spawn_mix_thread(
             }
 
             if !started {
+                // Startup gate: wait until each active track has enough buffered
+                // samples (or has already finished).
                 let finished = finished_tracks.lock().unwrap();
                 let ready = active_buffer_snapshot.iter().all(|(track_key, buffer)| {
                     let len = buffer.lock().unwrap().len();
@@ -411,6 +463,9 @@ pub fn spawn_mix_thread(
             let mut did_work = false;
             let current_reset = effects_reset.load(std::sync::atomic::Ordering::SeqCst);
             if current_reset != last_effects_reset {
+                // Explicit reset path (seek/restart/settings refresh):
+                // clear DSP state, flush tails, clear premix, and rebuild the
+                // effect context from current container settings.
                 let mut effects_guard = effects.lock().unwrap();
                 for effect in effects_guard.iter_mut() {
                     effect.reset_state();
@@ -443,6 +498,8 @@ pub fn spawn_mix_thread(
             }
 
             if let Some(update) = inline_effects_update.lock().unwrap().take() {
+                // Inline chain update path. With non-zero transition, keep both
+                // old and new chains active and crossfade outputs over time.
                 let transition_samples = ((update.transition_ms / 1000.0)
                     * audio_info.sample_rate.max(1) as f32)
                     .round() as usize
@@ -490,6 +547,8 @@ pub fn spawn_mix_thread(
                 .min()
                 .unwrap_or(0);
             let has_tail = effects_len > 0;
+            // We only mix fresh track samples when there is enough aligned data
+            // available (or final remainder for finished tracks) and premix has room.
             let should_mix_tracks = !active_buffer_snapshot.is_empty()
                 && premix_buffer.len() < premix_max_samples
                 && ((!all_tracks_finished && active_min_len >= min_mix_samples)
@@ -548,6 +607,8 @@ pub fn spawn_mix_thread(
                 && premix_buffer.is_empty()
                 && all_tracks_finished
             {
+                // Final drain trigger: no source audio is left. Ask effects for
+                // tail output using empty input with `drain=true`.
                 #[cfg(feature = "debug")]
                 log::debug!("mix drain trigger: flushing effect tail with empty input");
                 let drained = if let Some(transition) = active_inline_transition.as_mut() {
@@ -598,11 +659,16 @@ pub fn spawn_mix_thread(
             }
 
             if should_mix_tracks || has_tail || !premix_buffer.is_empty() {
+                // Step 6: Generate output in two phases:
+                //   1) pull/mix source buffers into premix (optional this loop),
+                //   2) run output stage (effects + tail handling) and send chunk.
                 let input_channels = audio_info.channels as u16;
                 let sample_rate = audio_info.sample_rate as u32;
                 let channel_count = input_channels.max(1) as usize;
 
                 if should_mix_tracks {
+                    // Provide upcoming boundary to track mixer so it can clamp
+                    // chunk size and avoid crossing a shuffle event in one chunk.
                     let next_event_ms = upcoming_events
                         .get(next_shuffle_event_index)
                         .map(|event| event.at_ms);
@@ -624,6 +690,7 @@ pub fn spawn_mix_thread(
                         sample_rate,
                         channel_count,
                     });
+                    // Advance source timeline by consumed source frames only.
                     source_timeline_frames =
                         source_timeline_frames.saturating_add(consumed_source_frames);
                 }
@@ -701,6 +768,8 @@ pub fn spawn_mix_thread(
                 }
             }
 
+            // Sleep briefly when producers still need room/data and we have no
+            // tail/premix to process; otherwise wake producers after making room.
             if !all_buffers_full
                 && effects_buffer.lock().unwrap().len() == 0
                 && premix_buffer.is_empty()
@@ -723,6 +792,11 @@ pub fn spawn_mix_thread(
     (receiver, handle)
 }
 
+/// Apply queued per-slot inline track-mix updates (level/pan) to active runtime keys.
+///
+/// The control layer queues updates by logical slot index. Because shuffle events
+/// can rotate a slot onto a new runtime key, this function remaps slot updates to
+/// the currently active key before writing channel gains.
 fn apply_pending_track_mix_updates(
     inline_track_mix_updates: &Arc<Mutex<Vec<InlineTrackMixUpdate>>>,
     slot_channel_gains: &Arc<Mutex<Vec<Vec<f32>>>>,
@@ -730,6 +804,8 @@ fn apply_pending_track_mix_updates(
     track_channel_gains: &Arc<Mutex<HashMap<u16, Vec<f32>>>>,
     channels: usize,
 ) {
+    // Drain all pending updates in one lock pass to minimize contention with
+    // the control/UI thread that enqueues updates.
     let updates = {
         let mut pending = inline_track_mix_updates.lock().unwrap();
         std::mem::take(&mut *pending)
@@ -744,6 +820,8 @@ fn apply_pending_track_mix_updates(
         if update.slot_index >= slot_gains.len() {
             continue;
         }
+        // Track mix updates target logical slots, but active decode buffers are
+        // keyed by runtime track keys that may rotate after shuffle events.
         let gains = compute_track_channel_gains(update.level, update.pan, channels);
         slot_gains[update.slot_index] = gains.clone();
         if let Some(track_key) = active_track_keys.get(update.slot_index).copied() {
