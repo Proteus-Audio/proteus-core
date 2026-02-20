@@ -34,4 +34,5 @@ Welcome. This index links to short, practical explanations of the DSP `AudioEffe
 - `convolution-reverb-boundary-discontinuity.md`
 - `player-data-flows.md`
 - `player-run-playback-thread-sample-flow.md`
+- `player-shuffle-points-playback.md`
 - `player-set-effects-inline.md`
