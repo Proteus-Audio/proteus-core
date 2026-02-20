@@ -72,7 +72,7 @@ Use a unified decoder strategy:
 - **Single container file mode** (`.prot/.mka`): one container decode worker reads packets and calls router.
 - **File-path mode**: one decode worker per unique file path reads packets and calls router.
 
-In both cases, decode workers become producers of `(source_key, packet_ts, samples)` events; router decides destination instance buffers.
+In both cases, decode workers become producers of `(samples, source_key, packet_ts)` events; router decides destination instance buffers.
 
 ### 4) Two-stage mixing model
 
