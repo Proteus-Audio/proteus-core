@@ -34,23 +34,24 @@ Examples (from requirement):
 
 To support these cases safely, represent each occurrence with an explicit `InstanceId`, even if source id/path matches another instance.
 
-### 2) Introduce intermediary orchestrator for buffer routing
+### 2) Introduce intermediary orchestrator for buffer routing/mixing
 
 Create a dedicated intermediary struct that owns routing decisions and buffer-fill behavior.
 
 Proposed module:
 
-- `proteus-lib/src/playback/engine/mix/schedule_router.rs`
+- `proteus-lib/src/playback/engine/mix/buffer_mixer.rs`
 
 Proposed primary struct:
 
-- `ScheduleBufferRouter`
+- `BufferMixer` (rename from `ScheduleBufferRouter` for clarity)
 
 Responsibilities:
 
 - own buffer-instance metadata (instance id, source key, logical track index, active windows).
-- own the per-instance ring buffers (or references to them).
-- route decoded sample packets to the right instance buffers.
+- own the per-instance ring buffers directly as internal `dasp_ring_buffer::Bounded` buffers.
+- initialize with the runtime shuffle schedule (or derived runtime instance plan) so routing decisions are schedule-driven.
+- route decoded sample packets to the right internal instance buffers.
 - fill inactive-but-live instances with zeros to keep all instance timelines aligned.
 - determine whether a decoded source can be ignored at a given timestamp.
 - provide deterministic per-instance EOF state.
@@ -59,20 +60,22 @@ Core API to implement (requirement-specific):
 
 - `route_packet(samples: &[f32], source: SourceKey, packet_ts: f64) -> RouteDecision`
 
+`route_packet` writes into `BufferMixer`-owned internal buffers. `RouteDecision` is returned only as debug/troubleshooting telemetry for the decode side.
+
 Where `RouteDecision` includes:
 
-- target instance ids to receive decoded samples,
-- instance ids to zero-fill for that packet time span,
+- target instance ids that were written with decoded samples,
+- instance ids that were zero-filled for that packet time span,
 - source ignored flag when source is irrelevant for active/future windows.
 
 ### 3) Decoder topology
 
 Use a unified decoder strategy:
 
-- **Single container file mode** (`.prot/.mka`): one container decode worker reads packets and calls router.
-- **File-path mode**: one decode worker per unique file path reads packets and calls router.
+- **Single container file mode** (`.prot/.mka`): one container decode worker reads packets and calls `BufferMixer`.
+- **File-path mode**: one decode worker per unique file path reads packets and calls `BufferMixer`.
 
-In both cases, decode workers become producers of `(samples, source_key, packet_ts)` events; router decides destination instance buffers.
+In both cases, decode workers become producers of `(samples, source_key, packet_ts)` events; `BufferMixer` performs routing and internal buffer writes.
 
 ### 4) Two-stage mixing model
 
@@ -107,7 +110,7 @@ This preserves modularity and makes per-track vs global DSP boundaries explicit.
 : `{ start_ms, end_ms }` (`end_ms = None` for tail).
 
 - `RouteDecision`
-: `{ sample_targets, zero_fill_targets, ignored }`.
+: debug telemetry from `route_packet`: `{ sample_targets_written, zero_fill_targets_written, ignored }`.
 
 ## Existing schedule API
 
@@ -131,22 +134,23 @@ Proposed additions in `container/prot.rs`:
 - per-instance produced samples,
 - per-instance zero-filled samples,
 - per-instance EOF reached timestamp,
-- router drops/ignores.
+- mixer drops/ignores.
 2. Add temporary structured logging around shuffle boundary transitions.
 
 Exit criteria:
 
 - current behavior still passes `cargo check` and existing tests.
 
-## Phase 1: Introduce router and runtime instance plan (no behavior switch yet)
+## Phase 1: Introduce `BufferMixer` and runtime instance plan (no behavior switch yet)
 
-1. Add `schedule_router.rs` with `ScheduleBufferRouter` and `RouteDecision`.
+1. Add `buffer_mixer.rs` with `BufferMixer` and `RouteDecision`.
 2. Add schedule expansion from grouped logical tracks to concrete instances + active windows.
-3. Add unit tests for expansion and routing decisions, including duplicate-source scenarios from requirements.
+3. Add `BufferMixer::new(...)` initialization that requires shuffle schedule/runtime instance plan and allocates internal `dasp_ring_buffer::Bounded` per instance.
+4. Add unit tests for expansion and routing decisions, including duplicate-source scenarios from requirements.
 
 Exit criteria:
 
-- router tests pass,
+- `BufferMixer` tests pass,
 - no runtime path switched yet.
 
 ## Phase 2: Unify decode producers to packet events
@@ -159,11 +163,11 @@ Exit criteria:
 
 Exit criteria:
 
-- both decoder sources can feed router in test harness.
+- both decoder sources can feed `BufferMixer` in test harness.
 
-## Phase 3: Router-owned buffer filling + zero-fill alignment
+## Phase 3: `BufferMixer`-owned buffer filling + zero-fill alignment
 
-1. Move instance-buffer write responsibility into router.
+1. Move instance-buffer write responsibility fully into `BufferMixer`.
 2. Implement zero-fill logic for inactive windows per instance.
 3. Implement ignore logic for irrelevant packets/sources.
 4. Implement deterministic per-instance EOF completion and aggregate EOF signal.
@@ -199,7 +203,7 @@ Exit criteria:
 
 ## Phase 6: Remove legacy branches and clean up
 
-1. Remove container fast-path branching that bypasses router model.
+1. Remove container fast-path branching that bypasses `BufferMixer` model.
 2. Remove obsolete shuffle runtime key/fading structures if no longer needed.
 3. Update knowledge-base docs and inline comments to reflect new model.
 
@@ -216,7 +220,7 @@ Exit criteria:
 - duplicates at same timestamp,
 - duplicates across logical tracks,
 - `selections_count > 1` mappings.
-- router decisions:
+- `BufferMixer` decisions:
 - packet routes to correct instances,
 - inactive instances get zero-fill,
 - irrelevant source is ignored.
@@ -243,7 +247,7 @@ Exit criteria:
 
 ## Proposed Module Layout
 
-- `proteus-lib/src/playback/engine/mix/schedule_router.rs` (new)
+- `proteus-lib/src/playback/engine/mix/buffer_mixer.rs` (new)
 - `proteus-lib/src/playback/engine/mix/decoder_events.rs` (new, optional)
 - `proteus-lib/src/playback/engine/mix/track_stage.rs` (new, logical-track premix)
 - `proteus-lib/src/dsp/effects/pan.rs` (new)
@@ -262,7 +266,7 @@ Exit criteria:
 
 ## Deliverables
 
-- [ ] Router + runtime instance plan implementation.
+- [ ] `BufferMixer` + runtime instance plan implementation.
 - [ ] Unified decoder event ingestion.
 - [ ] Two-stage logical-track mix pipeline.
 - [ ] New stereo `Pan` effect integrated into per-track stage.
