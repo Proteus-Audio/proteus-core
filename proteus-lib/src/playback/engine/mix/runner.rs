@@ -8,18 +8,21 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::thread::JoinHandle;
 use std::time::Duration;
-use std::time::Instant;
 
-use crate::audio::buffer::TrackBuffer;
-use crate::container::prot::{ShuffleScheduleEntry, ShuffleSource};
+use log::warn;
+use symphonia::core::audio::AudioBufferRef;
+use symphonia::core::codecs::{Decoder, DecoderOptions, CODEC_TYPE_NULL};
+use symphonia::core::errors::Error;
+use symphonia::core::formats::{SeekMode, SeekTo};
+use symphonia::core::units::{Time, TimeBase};
+
+use crate::container::prot::ShuffleSource;
 use crate::dsp::effects::{convolution_reverb, AudioEffect, EffectContext};
-use crate::track::{buffer_container_tracks, ContainerTrackArgs};
+use crate::tools::tools::open_file;
 
-use super::super::premix::PremixBuffer;
-use super::super::{compute_track_channel_gains, InlineTrackMixUpdate};
+use super::buffer_mixer::{BufferMixer, SourceKey};
+use super::decoder_events::DecodedPacket;
 use super::effects::run_effect_chain;
-use super::source_spawner::SourceSpawner;
-use super::track_mix::{mix_tracks_into_premix, TrackMixArgs};
 use super::types::ActiveInlineTransition;
 use super::MixThreadArgs;
 
@@ -38,30 +41,13 @@ impl Drop for DecodeWorkerJoinGuard {
     fn drop(&mut self) {
         for worker in self.workers.drain(..) {
             if worker.join().is_err() {
-                log::warn!("decode worker panicked during join");
+                warn!("decode worker panicked during join");
             }
         }
     }
 }
 
 /// Spawn the mixing thread and return a receiver of mixed audio buffers.
-///
-/// Runtime flow summary:
-///
-/// 1. Build shuffle runtime plan for `start_time` (`current_sources` + `upcoming_events`).
-/// 2. Spawn initial decode workers (container fast-path or per-slot source workers).
-/// 3. Wait for startup buffering threshold (`start_buffer_ms`) before active mixing.
-/// 4. Per loop iteration:
-/// - apply due shuffle events based on source-consumed timeline,
-/// - rotate runtime track keys for changed slots and keep old keys in short fade-out,
-/// - collect active/fading buffer snapshots and mix metadata,
-/// - run pending effects reset / inline effects transition updates,
-/// - mix source audio into premix and run output-stage DSP/tail handling,
-/// - send mixed chunks over channel to playback worker.
-/// 5. Drain remaining effect tails and exit when sources/premix/tails are fully exhausted.
-///
-/// Key timing detail:
-/// - Shuffle boundary timing is based on source frames consumed, not post-DSP output.
 pub fn spawn_mix_thread(
     args: MixThreadArgs,
 ) -> (mpsc::Receiver<(SamplesBuffer, f64)>, JoinHandle<()>) {
@@ -69,11 +55,11 @@ pub fn spawn_mix_thread(
 
     let MixThreadArgs {
         audio_info,
-        buffer_map,
+        buffer_map: _buffer_map,
         buffer_notify,
-        effects_buffer,
-        track_weights,
-        track_channel_gains,
+        effects_buffer: _effects_buffer,
+        track_weights: _track_weights,
+        track_channel_gains: _track_channel_gains,
         effects_reset,
         inline_effects_update,
         inline_track_mix_updates,
@@ -88,105 +74,35 @@ pub fn spawn_mix_thread(
 
     let handle = thread::spawn(move || {
         const MIN_MIX_MS: f32 = 300.0;
-        const SHUFFLE_CROSSFADE_MS: f64 = 5.0;
-        #[cfg(feature = "debug")]
-        let mut avg_overrun_ms = 0.0_f64;
-        #[cfg(feature = "debug")]
-        let mut avg_chain_ksps = 0.0_f64;
-        #[cfg(feature = "debug")]
-        let mut min_chain_ksps = f64::INFINITY;
-        #[cfg(feature = "debug")]
-        let mut max_chain_ksps = 0.0_f64;
-        #[cfg(feature = "debug")]
-        let mut max_overrun_ms = 0.0_f64;
-        #[allow(unused_mut)]
-        let mut underrun_count = 0_u64;
-        #[cfg(feature = "debug")]
-        let mut last_underrun_log = Instant::now();
-        #[cfg(feature = "debug")]
-        let mut last_startup_log = Instant::now();
-        #[cfg(feature = "debug")]
-        let startup_log_start = Instant::now();
-        #[cfg(feature = "debug")]
-        let mut last_pop_log = Instant::now();
-        #[cfg(feature = "debug")]
-        let mut last_boundary_log = Instant::now();
-        #[cfg(feature = "debug")]
-        let mut pop_count = 0_u64;
-        #[cfg(feature = "debug")]
-        let mut clip_count = 0_u64;
-        #[cfg(feature = "debug")]
-        let mut nan_count = 0_u64;
-        #[cfg(feature = "debug")]
-        let mut last_samples: Vec<f32> = Vec::new();
-        #[cfg(feature = "debug")]
-        let mut boundary_initialized = false;
-        #[cfg(feature = "debug")]
-        let mut boundary_count = 0_u64;
-        #[cfg(feature = "debug")]
-        let mut effect_boundary_initialized: Vec<bool> = Vec::new();
-        #[cfg(feature = "debug")]
-        let mut effect_last_samples: Vec<Vec<f32>> = Vec::new();
-        #[cfg(feature = "debug")]
-        let mut effect_boundary_counts: Vec<u64> = Vec::new();
-        #[cfg(feature = "debug")]
-        let mut effect_boundary_logs: Vec<Instant> = Vec::new();
-        #[cfg(feature = "debug")]
-        let alpha = 0.1_f64;
 
         let prot_locked = prot.clone();
-
-        // Step 1: Build the runtime shuffle plan for this specific start time.
-        //
-        // `current_sources` is the source set that should already be active at
-        // `start_time`, and `upcoming_events` are all future source-switch events.
-        let (container_path, mut shuffle_plan) = {
+        let (instance_plan, container_path, mut effect_context, track_mix_settings_by_slot) = {
             let prot = prot_locked.lock().unwrap();
             (
+                prot.build_runtime_instance_plan(start_time),
                 prot.get_container_path(),
-                prot.build_runtime_shuffle_plan(start_time),
+                EffectContext {
+                    sample_rate: prot.info.sample_rate,
+                    channels: prot.info.channels as usize,
+                    container_path: prot.get_container_path(),
+                    impulse_response_spec: prot.get_impulse_response_spec(),
+                    impulse_response_tail_db: prot.get_impulse_response_tail_db().unwrap_or(-60.0),
+                },
+                prot.get_track_mix_settings(),
             )
         };
-        let mut active_sources = shuffle_plan.current_sources.clone();
-        let upcoming_events: Vec<ShuffleScheduleEntry> =
-            shuffle_plan.upcoming_events.drain(..).collect();
-        let mut next_shuffle_event_index = 0usize;
-        // Runtime track keys are stable handles into `buffer_map`, while sources
-        // may change at shuffle events. We allocate a new key per source swap so
-        // outgoing audio can keep fading while incoming audio starts immediately.
-        let mut active_track_keys: Vec<u16> = (0..active_sources.len()).map(|i| i as u16).collect();
-        let mut next_track_key: u16 = active_track_keys.len() as u16;
-        let crossfade_frames = ((audio_info.sample_rate as f64 * SHUFFLE_CROSSFADE_MS) / 1000.0)
-            .round()
-            .max(1.0) as u32;
-        // Map: old track key -> (frames_remaining, total_frames).
-        let mut fading_tracks: HashMap<u16, (u32, u32)> = HashMap::new();
 
-        #[cfg(not(feature = "debug"))]
-        let _ = &dsp_metrics;
+        if instance_plan.instances.is_empty() {
+            abort.store(true, Ordering::SeqCst);
+            return;
+        }
 
-        let hash_buffer_copy = buffer_map.clone();
-
-        let mut effect_context = {
-            let prot = prot_locked.lock().unwrap();
-            EffectContext {
-                sample_rate: prot.info.sample_rate,
-                channels: prot.info.channels as usize,
-                container_path: prot.get_container_path(),
-                impulse_response_spec: prot.get_impulse_response_spec(),
-                impulse_response_tail_db: prot.get_impulse_response_tail_db().unwrap_or(-60.0),
-            }
-        };
-
-        let mut last_effects_reset = effects_reset.load(std::sync::atomic::Ordering::SeqCst);
-        let mut active_inline_transition: Option<ActiveInlineTransition> = None;
-
-        // Step 2: Compute startup/mixing thresholds and allocate staging buffers.
         let start_buffer_ms = buffer_settings.lock().unwrap().start_buffer_ms;
         let start_samples = ((audio_info.sample_rate as f32 * start_buffer_ms) / 1000.0) as usize
             * audio_info.channels as usize;
         let min_mix_frames = ((audio_info.sample_rate as f32 * MIN_MIX_MS) / 1000.0) as usize;
         let mut min_mix_samples = min_mix_frames.max(1) * audio_info.channels as usize;
+
         let has_convolution = {
             let effects_guard = effects.lock().unwrap();
             effects_guard.iter().any(|effect| match effect {
@@ -198,281 +114,119 @@ pub fn spawn_mix_thread(
             let batch_samples =
                 convolution_reverb::preferred_batch_samples(audio_info.channels.max(1) as usize);
             if batch_samples > 0 {
-                // Align chunk size to convolution-friendly batch boundaries to
-                // reduce boundary artifacts and improve throughput stability.
                 min_mix_samples =
                     ((min_mix_samples + batch_samples - 1) / batch_samples) * batch_samples;
             }
         }
-        let mut started = start_samples == 0;
-        let mut mix_buffer = vec![0.0_f32; min_mix_samples];
-        let mut premix_buffer = PremixBuffer::new();
-        let premix_max_samples = (start_samples.max(min_mix_samples).max(1)).saturating_mul(4);
-        let warmup_samples = min_mix_samples;
-        let track_buffer_size = (audio_info.sample_rate as usize * 10).max(start_samples * 2);
-        let slot_channel_gains: Arc<Mutex<Vec<Vec<f32>>>> = Arc::new(Mutex::new({
-            let gains = track_channel_gains.lock().unwrap();
-            active_track_keys
-                .iter()
-                .map(|key| {
-                    gains
-                        .get(key)
-                        .cloned()
-                        .unwrap_or_else(|| vec![1.0; audio_info.channels.max(1) as usize])
-                })
-                .collect()
-        }));
-        // Track timeline based on source consumption, not post-DSP output, so
-        // shuffle boundaries remain stable even when effects queue tail samples.
-        let mut source_timeline_frames =
-            (start_time.max(0.0) * audio_info.sample_rate.max(1) as f64).round() as u64;
 
-        let source_spawner = SourceSpawner {
-            buffer_map: hash_buffer_copy.clone(),
-            buffer_notify: buffer_notify.clone(),
-            track_weights: track_weights.clone(),
-            track_channel_gains: track_channel_gains.clone(),
-            finished_tracks: finished_tracks.clone(),
-            abort: abort.clone(),
-            container_path: container_path.clone(),
+        let mut track_mix_by_logical: HashMap<usize, (f32, f32)> = HashMap::new();
+        for instance in instance_plan.instances.iter() {
+            track_mix_by_logical
+                .entry(instance.logical_track_index)
+                .or_insert_with(|| {
+                    track_mix_settings_by_slot
+                        .get(&(instance.slot_index as u16))
+                        .copied()
+                        .unwrap_or((1.0, 0.0))
+                });
+        }
+
+        let track_buffer_size = (audio_info.sample_rate as usize * 10).max(start_samples * 2);
+        let mut buffer_mixer = BufferMixer::new(
+            instance_plan,
+            audio_info.sample_rate,
+            audio_info.channels.max(1) as usize,
             track_buffer_size,
-            output_channels: audio_info.channels as u8,
-            fallback_channel_gains: slot_channel_gains.clone(),
-        };
+            track_mix_by_logical,
+            min_mix_samples,
+        );
+
+        let (packet_tx, packet_rx) = mpsc::sync_channel::<DecodedPacket>(64);
         let mut decode_workers = DecodeWorkerJoinGuard::default();
 
-        // Step 3: Start source decode workers.
-        //
-        // Fast path: one shared container reader when all active sources are
-        // track IDs and there are no future shuffle events.
-        //
-        // General path: one decode worker per active slot/source pair.
-        let use_container_buffering = container_path.is_some()
-            && upcoming_events.is_empty()
-            && active_sources
-                .iter()
-                .all(|source| matches!(source, ShuffleSource::TrackId(_)));
-        if use_container_buffering {
-            let track_entries: Vec<(u16, u32)> = active_sources
-                .iter()
-                .enumerate()
-                .filter_map(|(slot_index, source)| match source {
-                    ShuffleSource::TrackId(track_id) => active_track_keys
-                        .get(slot_index)
-                        .copied()
-                        .map(|key| (key, *track_id)),
-                    ShuffleSource::FilePath(_) => None,
-                })
-                .collect();
-            if !track_entries.is_empty() {
-                let handle = buffer_container_tracks(
-                    ContainerTrackArgs {
-                        file_path: container_path.clone().unwrap_or_default(),
-                        track_entries,
-                        buffer_map: buffer_map.clone(),
-                        buffer_notify: Some(buffer_notify.clone()),
-                        track_weights: Some(track_weights.clone()),
-                        finished_tracks: finished_tracks.clone(),
-                        start_time,
-                        channels: audio_info.channels as u8,
-                        track_eos_ms: buffer_settings.lock().unwrap().track_eos_ms,
-                    },
+        let mut track_ids = HashSet::new();
+        let mut file_paths = HashSet::new();
+        for source in buffer_mixer.sources() {
+            match source {
+                SourceKey::TrackId(track_id) => {
+                    track_ids.insert(track_id);
+                }
+                SourceKey::FilePath(path) => {
+                    file_paths.insert(path);
+                }
+            }
+        }
+
+        if !track_ids.is_empty() {
+            if let Some(path) = container_path {
+                decode_workers.push(spawn_container_decode_worker(
+                    path,
+                    track_ids.into_iter().collect(),
+                    start_time,
+                    audio_info.channels as u8,
+                    packet_tx.clone(),
                     abort.clone(),
-                );
-                decode_workers.push(handle);
-            }
-        } else {
-            for (slot_index, source) in active_sources.iter().enumerate() {
-                if let Some(track_key) = active_track_keys.get(slot_index).copied() {
-                    if let Some(handle) =
-                        source_spawner.spawn(slot_index, track_key, source, start_time)
-                    {
-                        decode_workers.push(handle);
-                    }
-                }
+                ));
             }
         }
 
-        // Step 4: Warm up effects on silence so first audible buffers do not
-        // pay one-time setup cost in the real-time loop.
+        for path in file_paths {
+            decode_workers.push(spawn_file_decode_worker(
+                path,
+                start_time,
+                audio_info.channels as u8,
+                packet_tx.clone(),
+                abort.clone(),
+            ));
+        }
+        drop(packet_tx);
+
+        let warmup_samples = min_mix_samples;
         if warmup_samples > 0 {
-            let warmup_start = Instant::now();
             let mut processed = vec![0.0_f32; warmup_samples];
-            {
-                let mut effects_guard = effects.lock().unwrap();
-                for effect in effects_guard.iter_mut() {
-                    processed = effect.process(&processed, &effect_context, false);
-                }
+            let mut effects_guard = effects.lock().unwrap();
+            for effect in effects_guard.iter_mut() {
+                processed = effect.process(&processed, &effect_context, false);
             }
-            {
-                let mut tail_buffer = effects_buffer.lock().unwrap();
-                while tail_buffer.pop().is_some() {}
-            }
-            log::info!(
-                "DSP warmup: {:.2}ms ({} samples)",
-                warmup_start.elapsed().as_secs_f64() * 1000.0,
-                warmup_samples
-            );
+            let _ = processed;
         }
 
-        // Step 5: Main mix loop.
+        let mut started = start_samples == 0;
+        let mut last_effects_reset = effects_reset.load(Ordering::SeqCst);
+        let mut active_inline_transition: Option<ActiveInlineTransition> = None;
+
         loop {
             if abort.load(Ordering::SeqCst) {
                 break;
             }
 
-            // Current schedule time is driven by source frames consumed, not by
-            // post-DSP output length. This keeps shuffle points aligned even
-            // when effects produce tails.
-            let current_source_ms = if audio_info.sample_rate > 0 {
-                (source_timeline_frames.saturating_mul(1000)) / audio_info.sample_rate as u64
-            } else {
-                0
-            };
-            // Apply all shuffle events that are now due.
-            while next_shuffle_event_index < upcoming_events.len()
-                && upcoming_events[next_shuffle_event_index].at_ms <= current_source_ms
-            {
-                let event = &upcoming_events[next_shuffle_event_index];
-                let event_seconds = event.at_ms as f64 / 1000.0;
-                for slot_index in 0..event.sources.len() {
-                    if slot_index >= active_sources.len() {
-                        continue;
-                    }
-                    if event.sources[slot_index] == active_sources[slot_index] {
-                        continue;
-                    }
-                    // Keep old key alive for a short fade-out window.
-                    if let Some(old_key) = active_track_keys.get(slot_index).copied() {
-                        fading_tracks.insert(old_key, (crossfade_frames, crossfade_frames));
-                    }
-                    // Swap slot to a new runtime key/source and start decoding
-                    // that source from the event timestamp.
-                    let new_key = next_track_key;
-                    next_track_key = next_track_key.saturating_add(1);
-                    active_sources[slot_index] = event.sources[slot_index].clone();
-                    active_track_keys[slot_index] = new_key;
-                    if let Some(handle) = source_spawner.spawn(
-                        slot_index,
-                        new_key,
-                        &active_sources[slot_index],
-                        event_seconds,
-                    ) {
-                        decode_workers.push(handle);
-                    }
-                }
-                next_shuffle_event_index += 1;
-            }
-            // Apply pending per-slot level/pan updates. These are keyed by slot
-            // index from UI controls and remapped to current runtime keys here.
-            apply_pending_track_mix_updates(
-                &inline_track_mix_updates,
-                &slot_channel_gains,
-                &active_track_keys,
-                &track_channel_gains,
-                audio_info.channels.max(1) as usize,
-            );
-            let active_key_set: HashSet<u16> = active_track_keys.iter().copied().collect();
-            let fading_key_set: HashSet<u16> = fading_tracks.keys().copied().collect();
-            let retained_key_set: HashSet<u16> = active_key_set
-                .iter()
-                .copied()
-                .chain(fading_key_set.iter().copied())
-                .collect();
-
-            let buffer_snapshot: Vec<(u16, TrackBuffer)> = {
-                let map = hash_buffer_copy.lock().unwrap();
-                map.iter().map(|(k, v)| (*k, v.clone())).collect()
-            };
-            let active_buffer_snapshot: Vec<(u16, TrackBuffer)> = buffer_snapshot
-                .iter()
-                .filter(|(track_key, _)| active_key_set.contains(track_key))
-                .map(|(track_key, buffer)| (*track_key, buffer.clone()))
-                .collect();
-            let fading_buffer_snapshot: Vec<(u16, TrackBuffer)> = buffer_snapshot
-                .iter()
-                .filter(|(track_key, _)| fading_key_set.contains(track_key))
-                .map(|(track_key, buffer)| (*track_key, buffer.clone()))
-                .collect();
-            let weights_snapshot: HashMap<u16, f32> = {
-                let weights = track_weights.lock().unwrap();
-                weights.clone()
-            };
-            let channel_gains_snapshot: HashMap<u16, Vec<f32>> = {
-                let gains = track_channel_gains.lock().unwrap();
-                gains.clone()
-            };
-            let mut removable_tracks: Vec<u16> = Vec::new();
-
-            let finished_snapshot = finished_tracks.lock().unwrap().clone();
-            let mut all_buffers_full = true;
-            // Track cleanup and producer-pressure snapshot.
-            for (track_key, buffer) in buffer_snapshot.iter() {
-                let len = buffer.lock().unwrap().len();
-                if len == 0 {
-                    if finished_snapshot.contains(track_key)
-                        && !retained_key_set.contains(track_key)
-                    {
-                        removable_tracks.push(*track_key);
-                        continue;
-                    }
-                    if active_key_set.contains(track_key) {
-                        all_buffers_full = false;
-                    }
-                }
-            }
-
-            if !removable_tracks.is_empty() {
-                // Remove fully drained keys that are no longer active/fading.
-                let mut map = hash_buffer_copy.lock().unwrap();
-                for track_id in removable_tracks.drain(..) {
-                    map.remove(&track_id);
-                    fading_tracks.remove(&track_id);
-                }
-            }
-
-            // If no active buffers/tails/premix remain and no more events are
-            // pending, the mix thread has no further work.
-            if active_buffer_snapshot.is_empty()
-                && effects_buffer.lock().unwrap().len() == 0
-                && premix_buffer.is_empty()
-                && next_shuffle_event_index >= upcoming_events.len()
-            {
-                break;
-            }
-
-            if !started {
-                // Startup gate: wait until each active track has enough buffered
-                // samples (or has already finished).
-                let finished = finished_tracks.lock().unwrap();
-                let ready = active_buffer_snapshot.iter().all(|(track_key, buffer)| {
-                    let len = buffer.lock().unwrap().len();
-                    finished.contains(track_key) || len >= start_samples
-                });
-                if ready {
-                    started = true;
+            while let Ok(packet) = packet_rx.try_recv() {
+                if packet.eos_flag {
+                    buffer_mixer.signal_finish(&packet.source_key);
                 } else {
-                    let (guard, _) = buffer_notify
-                        .wait_timeout(hash_buffer_copy.lock().unwrap(), Duration::from_millis(20))
-                        .unwrap();
-                    drop(guard);
-                    continue;
+                    let _ = buffer_mixer.route_packet(
+                        &packet.samples,
+                        packet.source_key.clone(),
+                        packet.packet_ts,
+                    );
                 }
             }
 
-            let mut did_work = false;
-            let current_reset = effects_reset.load(std::sync::atomic::Ordering::SeqCst);
+            // Updates are by slot index; map slot->logical track through the runtime plan.
+            let updates = {
+                let mut pending = inline_track_mix_updates.lock().unwrap();
+                std::mem::take(&mut *pending)
+            };
+            for update in updates {
+                buffer_mixer.set_track_mix_by_slot(update.slot_index, update.level, update.pan);
+            }
+
+            let current_reset = effects_reset.load(Ordering::SeqCst);
             if current_reset != last_effects_reset {
-                // Explicit reset path (seek/restart/settings refresh):
-                // clear DSP state, flush tails, clear premix, and rebuild the
-                // effect context from current container settings.
                 let mut effects_guard = effects.lock().unwrap();
                 for effect in effects_guard.iter_mut() {
                     effect.reset_state();
                 }
-                let mut tail_buffer = effects_buffer.lock().unwrap();
-                while tail_buffer.pop().is_some() {}
-                premix_buffer.clear();
                 active_inline_transition = None;
                 inline_effects_update.lock().unwrap().take();
                 effect_context = {
@@ -488,18 +242,9 @@ pub fn spawn_mix_thread(
                     }
                 };
                 last_effects_reset = current_reset;
-                #[cfg(feature = "debug")]
-                {
-                    effect_boundary_initialized.clear();
-                    effect_last_samples.clear();
-                    effect_boundary_counts.clear();
-                    effect_boundary_logs.clear();
-                }
             }
 
             if let Some(update) = inline_effects_update.lock().unwrap().take() {
-                // Inline chain update path. With non-zero transition, keep both
-                // old and new chains active and crossfade outputs over time.
                 let transition_samples = ((update.transition_ms / 1000.0)
                     * audio_info.sample_rate.max(1) as f32)
                     .round() as usize
@@ -529,93 +274,29 @@ pub fn spawn_mix_thread(
                 }
             }
 
-            let effects_len = effects_buffer.lock().unwrap().len();
-            let all_tracks_finished = active_track_keys
-                .iter()
-                .all(|track_key| finished_snapshot.contains(track_key))
-                && next_shuffle_event_index >= upcoming_events.len();
-            let active_min_len = active_buffer_snapshot
-                .iter()
-                .filter(|(track_key, _)| !finished_snapshot.contains(track_key))
-                .map(|(_, buffer)| buffer.lock().unwrap().len())
-                .min()
-                .unwrap_or(0);
-            let finished_min_len = active_buffer_snapshot
-                .iter()
-                .filter(|(track_key, _)| finished_snapshot.contains(track_key))
-                .map(|(_, buffer)| buffer.lock().unwrap().len())
-                .min()
-                .unwrap_or(0);
-            let has_tail = effects_len > 0;
-            // We only mix fresh track samples when there is enough aligned data
-            // available (or final remainder for finished tracks) and premix has room.
-            let should_mix_tracks = !active_buffer_snapshot.is_empty()
-                && premix_buffer.len() < premix_max_samples
-                && ((!all_tracks_finished && active_min_len >= min_mix_samples)
-                    || (all_tracks_finished && finished_min_len > 0));
-
-            #[cfg(feature = "debug")]
-            if started
-                && startup_log_start.elapsed().as_secs_f64() <= 8.0
-                && last_startup_log.elapsed().as_millis() >= 200
-            {
-                let mut sizes: Vec<String> = Vec::new();
-                for (track_key, buffer) in active_buffer_snapshot.iter() {
-                    let len = buffer.lock().unwrap().len();
-                    sizes.push(format!("{}={}", track_key, len));
+            if !started {
+                if buffer_mixer.mix_ready_with_min_samples(start_samples.max(min_mix_samples)) {
+                    started = true;
+                } else {
+                    thread::sleep(Duration::from_millis(10));
+                    continue;
                 }
-                log::debug!(
-                    "startup buffers: t={:.2}s active_min={} finished_min={} tail={} sizes=[{}]",
-                    startup_log_start.elapsed().as_secs_f64(),
-                    active_min_len,
-                    finished_min_len,
-                    effects_len,
-                    sizes.join(", ")
-                );
-                last_startup_log = Instant::now();
             }
 
-            #[cfg(feature = "debug")]
-            if started && !should_mix_tracks && !has_tail && premix_buffer.is_empty() {
-                underrun_count = underrun_count.saturating_add(1);
-                if last_underrun_log.elapsed().as_secs_f64() >= 1.0 {
-                    log::warn!(
-                        "DSP underrun: active_min_len={} finished_min_len={} effects_len={} tracks={} finished={}",
-                        active_min_len,
-                        finished_min_len,
-                        effects_len,
-                        active_buffer_snapshot.len(),
-                        finished_snapshot.len()
+            if let Some(samples) = buffer_mixer.take_samples() {
+                let processed = if let Some(transition) = active_inline_transition.as_mut() {
+                    let old_out = run_effect_chain(
+                        &mut transition.old_effects,
+                        &samples,
+                        &effect_context,
+                        false,
                     );
-                    last_underrun_log = Instant::now();
-                }
-                if let Ok(mut metrics) = dsp_metrics.lock() {
-                    metrics.underrun_count = underrun_count;
-                    metrics.underrun_active = true;
-                }
-            }
-
-            let no_active_source_samples = active_buffer_snapshot
-                .iter()
-                .all(|(_, buffer)| buffer.lock().unwrap().len() == 0)
-                && fading_buffer_snapshot
-                    .iter()
-                    .all(|(_, buffer)| buffer.lock().unwrap().len() == 0);
-
-            if no_active_source_samples
-                && effects_len == 0
-                && premix_buffer.is_empty()
-                && all_tracks_finished
-            {
-                // Final drain trigger: no source audio is left. Ask effects for
-                // tail output using empty input with `drain=true`.
-                #[cfg(feature = "debug")]
-                log::debug!("mix drain trigger: flushing effect tail with empty input");
-                let drained = if let Some(transition) = active_inline_transition.as_mut() {
-                    let old_out =
-                        run_effect_chain(&mut transition.old_effects, &[], &effect_context, true);
-                    let new_out =
-                        run_effect_chain(&mut transition.new_effects, &[], &effect_context, true);
+                    let new_out = run_effect_chain(
+                        &mut transition.new_effects,
+                        &samples,
+                        &effect_context,
+                        false,
+                    );
                     let len = old_out.len().max(new_out.len());
                     let mut blended = Vec::with_capacity(len);
                     for sample_index in 0..len {
@@ -632,133 +313,30 @@ pub fn spawn_mix_thread(
                         .clamp(0.0, 1.0);
                         blended.push((old_sample * (1.0 - mix)) + (new_sample * mix));
                     }
+                    transition.remaining_samples = transition
+                        .remaining_samples
+                        .saturating_sub(samples.len().max(1));
+                    if transition.remaining_samples == 0 {
+                        let mut effects_guard = effects.lock().unwrap();
+                        *effects_guard = transition.new_effects.clone();
+                        active_inline_transition = None;
+                    }
                     blended
                 } else {
                     let mut effects_guard = effects.lock().unwrap();
-                    run_effect_chain(&mut effects_guard, &[], &effect_context, true)
+                    run_effect_chain(&mut effects_guard, &samples, &effect_context, false)
                 };
-                if !drained.is_empty() {
-                    let input_channels = audio_info.channels as u16;
-                    let sample_rate = audio_info.sample_rate as u32;
-                    match super::output_stage::send_samples(
-                        &sender,
-                        input_channels,
-                        sample_rate,
-                        drained,
-                    ) {
-                        super::output_stage::SendStatus::Sent => {}
-                        super::output_stage::SendStatus::Empty => {}
-                        super::output_stage::SendStatus::Disconnected => {
-                            abort.store(true, Ordering::SeqCst);
-                            break;
-                        }
-                    }
-                    continue;
-                }
-                break;
-            }
 
-            if should_mix_tracks || has_tail || !premix_buffer.is_empty() {
-                // Step 6: Generate output in two phases:
-                //   1) pull/mix source buffers into premix (optional this loop),
-                //   2) run output stage (effects + tail handling) and send chunk.
                 let input_channels = audio_info.channels as u16;
                 let sample_rate = audio_info.sample_rate as u32;
-                let channel_count = input_channels.max(1) as usize;
-
-                if should_mix_tracks {
-                    // Provide upcoming boundary to track mixer so it can clamp
-                    // chunk size and avoid crossing a shuffle event in one chunk.
-                    let next_event_ms = upcoming_events
-                        .get(next_shuffle_event_index)
-                        .map(|event| event.at_ms);
-                    let (consumed_source_frames, _mixed) = mix_tracks_into_premix(TrackMixArgs {
-                        mix_buffer: &mut mix_buffer,
-                        premix_buffer: &mut premix_buffer,
-                        active_buffer_snapshot: &active_buffer_snapshot,
-                        fading_buffer_snapshot: &fading_buffer_snapshot,
-                        weights_snapshot: &weights_snapshot,
-                        channel_gains_snapshot: &channel_gains_snapshot,
-                        fading_tracks: &mut fading_tracks,
-                        min_mix_samples,
-                        premix_max_samples,
-                        all_tracks_finished,
-                        active_min_len,
-                        finished_min_len,
-                        next_event_ms,
-                        current_source_ms,
-                        sample_rate,
-                        channel_count,
-                    });
-                    // Advance source timeline by consumed source frames only.
-                    source_timeline_frames =
-                        source_timeline_frames.saturating_add(consumed_source_frames);
-                }
-
-                let samples = super::output_stage::produce_output_samples(
-                    super::output_stage::OutputStageArgs {
-                        effects_buffer: &effects_buffer,
-                        premix_buffer: &mut premix_buffer,
-                        min_mix_samples,
-                        all_tracks_finished,
-                        input_channels,
-                        sample_rate,
-                        effect_context: &effect_context,
-                        active_inline_transition: &mut active_inline_transition,
-                        effects: &effects,
-                        buffer_settings: &buffer_settings,
-                        dsp_metrics: &dsp_metrics,
-                        underrun_count,
-                        track_key_count: active_buffer_snapshot.len(),
-                        finished_track_count: finished_snapshot.len(),
-                        prot_key_count: active_track_keys.len(),
-                        #[cfg(feature = "debug")]
-                        avg_overrun_ms: &mut avg_overrun_ms,
-                        #[cfg(feature = "debug")]
-                        avg_chain_ksps: &mut avg_chain_ksps,
-                        #[cfg(feature = "debug")]
-                        min_chain_ksps: &mut min_chain_ksps,
-                        #[cfg(feature = "debug")]
-                        max_chain_ksps: &mut max_chain_ksps,
-                        #[cfg(feature = "debug")]
-                        max_overrun_ms: &mut max_overrun_ms,
-                        #[cfg(feature = "debug")]
-                        pop_count: &mut pop_count,
-                        #[cfg(feature = "debug")]
-                        clip_count: &mut clip_count,
-                        #[cfg(feature = "debug")]
-                        nan_count: &mut nan_count,
-                        #[cfg(feature = "debug")]
-                        last_pop_log: &mut last_pop_log,
-                        #[cfg(feature = "debug")]
-                        last_boundary_log: &mut last_boundary_log,
-                        #[cfg(feature = "debug")]
-                        last_samples: &mut last_samples,
-                        #[cfg(feature = "debug")]
-                        boundary_initialized: &mut boundary_initialized,
-                        #[cfg(feature = "debug")]
-                        boundary_count: &mut boundary_count,
-                        #[cfg(feature = "debug")]
-                        effect_boundary_initialized: &mut effect_boundary_initialized,
-                        #[cfg(feature = "debug")]
-                        effect_last_samples: &mut effect_last_samples,
-                        #[cfg(feature = "debug")]
-                        effect_boundary_counts: &mut effect_boundary_counts,
-                        #[cfg(feature = "debug")]
-                        effect_boundary_logs: &mut effect_boundary_logs,
-                        #[cfg(feature = "debug")]
-                        alpha,
-                    },
-                );
-
                 match super::output_stage::send_samples(
                     &sender,
                     input_channels,
                     sample_rate,
-                    samples,
+                    processed,
                 ) {
                     super::output_stage::SendStatus::Sent => {
-                        did_work = true;
+                        buffer_notify.notify_all();
                     }
                     super::output_stage::SendStatus::Empty => {}
                     super::output_stage::SendStatus::Disconnected => {
@@ -766,24 +344,59 @@ pub fn spawn_mix_thread(
                         break;
                     }
                 }
-            }
 
-            // Sleep briefly when producers still need room/data and we have no
-            // tail/premix to process; otherwise wake producers after making room.
-            if !all_buffers_full
-                && effects_buffer.lock().unwrap().len() == 0
-                && premix_buffer.is_empty()
-            {
-                let (guard, _) = buffer_notify
-                    .wait_timeout(hash_buffer_copy.lock().unwrap(), Duration::from_millis(20))
-                    .unwrap();
-                drop(guard);
-            } else {
-                if did_work {
-                    buffer_notify.notify_all();
+                if let Ok(mut metrics) = dsp_metrics.lock() {
+                    metrics.track_key_count = buffer_mixer.instance_count();
+                    metrics.prot_key_count = buffer_mixer.logical_track_count();
+                    metrics.finished_track_count = buffer_mixer.finished_instance_count();
                 }
-                drop(buffer_snapshot);
+            } else if buffer_mixer.mix_finished() {
+                let drained = if let Some(transition) = active_inline_transition.as_mut() {
+                    let old_out =
+                        run_effect_chain(&mut transition.old_effects, &[], &effect_context, true);
+                    let new_out =
+                        run_effect_chain(&mut transition.new_effects, &[], &effect_context, true);
+                    let len = old_out.len().max(new_out.len());
+                    let mut blended = Vec::with_capacity(len);
+                    for sample_index in 0..len {
+                        let old_sample = old_out.get(sample_index).copied().unwrap_or(0.0);
+                        let new_sample = new_out.get(sample_index).copied().unwrap_or(0.0);
+                        blended.push((old_sample + new_sample) * 0.5);
+                    }
+                    blended
+                } else {
+                    let mut effects_guard = effects.lock().unwrap();
+                    run_effect_chain(&mut effects_guard, &[], &effect_context, true)
+                };
+
+                if drained.is_empty() {
+                    break;
+                }
+
+                let input_channels = audio_info.channels as u16;
+                let sample_rate = audio_info.sample_rate as u32;
+                match super::output_stage::send_samples(
+                    &sender,
+                    input_channels,
+                    sample_rate,
+                    drained,
+                ) {
+                    super::output_stage::SendStatus::Sent => {}
+                    super::output_stage::SendStatus::Empty => break,
+                    super::output_stage::SendStatus::Disconnected => {
+                        abort.store(true, Ordering::SeqCst);
+                        break;
+                    }
+                }
+            } else {
+                thread::sleep(Duration::from_millis(2));
             }
+        }
+
+        let mut finished = finished_tracks.lock().unwrap();
+        finished.clear();
+        for index in 0..buffer_mixer.instance_count() {
+            finished.push(index as u16);
         }
 
         drop(decode_workers);
@@ -792,40 +405,238 @@ pub fn spawn_mix_thread(
     (receiver, handle)
 }
 
-/// Apply queued per-slot inline track-mix updates (level/pan) to active runtime keys.
-///
-/// The control layer queues updates by logical slot index. Because shuffle events
-/// can rotate a slot onto a new runtime key, this function remaps slot updates to
-/// the currently active key before writing channel gains.
-fn apply_pending_track_mix_updates(
-    inline_track_mix_updates: &Arc<Mutex<Vec<InlineTrackMixUpdate>>>,
-    slot_channel_gains: &Arc<Mutex<Vec<Vec<f32>>>>,
-    active_track_keys: &[u16],
-    track_channel_gains: &Arc<Mutex<HashMap<u16, Vec<f32>>>>,
-    channels: usize,
-) {
-    // Drain all pending updates in one lock pass to minimize contention with
-    // the control/UI thread that enqueues updates.
-    let updates = {
-        let mut pending = inline_track_mix_updates.lock().unwrap();
-        std::mem::take(&mut *pending)
-    };
-    if updates.is_empty() {
-        return;
+fn spawn_file_decode_worker(
+    file_path: String,
+    start_time: f64,
+    channels: u8,
+    sender: mpsc::SyncSender<DecodedPacket>,
+    abort: Arc<std::sync::atomic::AtomicBool>,
+) -> JoinHandle<()> {
+    thread::spawn(move || {
+        let (mut decoder, mut format) = open_file(&file_path);
+        let Some(track) = format
+            .tracks()
+            .iter()
+            .find(|track| track.codec_params.codec != CODEC_TYPE_NULL)
+            .cloned()
+        else {
+            let _ = sender.send(DecodedPacket {
+                source_key: SourceKey::FilePath(file_path),
+                packet_ts: 0.0,
+                samples: Vec::new(),
+                eos_flag: true,
+            });
+            return;
+        };
+
+        let seconds = start_time.floor() as u64;
+        let frac_of_second = start_time.fract();
+        let time = Time::new(seconds, frac_of_second);
+        let _ = format.seek(
+            SeekMode::Coarse,
+            SeekTo::Time {
+                time,
+                track_id: Some(track.id),
+            },
+        );
+
+        let time_base = track.codec_params.time_base;
+        let sample_rate = track.codec_params.sample_rate;
+        let source_key = SourceKey::FilePath(file_path.clone());
+
+        loop {
+            if abort.load(Ordering::Relaxed) {
+                break;
+            }
+
+            let packet = match format.next_packet() {
+                Ok(packet) => packet,
+                Err(_) => break,
+            };
+            if packet.track_id() != track.id {
+                continue;
+            }
+
+            let packet_ts = packet_ts_seconds(packet.ts(), time_base, sample_rate, start_time);
+            match decoder.decode(&packet) {
+                Ok(decoded) => {
+                    let samples = interleaved_samples(decoded, channels);
+                    if samples.is_empty() {
+                        continue;
+                    }
+                    if sender
+                        .send(DecodedPacket {
+                            source_key: source_key.clone(),
+                            packet_ts,
+                            samples,
+                            eos_flag: false,
+                        })
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+                Err(Error::DecodeError(_)) => {}
+                Err(_) => break,
+            }
+        }
+
+        let _ = sender.send(DecodedPacket {
+            source_key,
+            packet_ts: 0.0,
+            samples: Vec::new(),
+            eos_flag: true,
+        });
+    })
+}
+
+fn spawn_container_decode_worker(
+    file_path: String,
+    track_ids: Vec<u32>,
+    start_time: f64,
+    channels: u8,
+    sender: mpsc::SyncSender<DecodedPacket>,
+    abort: Arc<std::sync::atomic::AtomicBool>,
+) -> JoinHandle<()> {
+    thread::spawn(move || {
+        let mut format = crate::tools::tools::get_reader(&file_path);
+        let mut decoders: HashMap<u32, Box<dyn Decoder>> = HashMap::new();
+        let mut time_bases: HashMap<u32, Option<TimeBase>> = HashMap::new();
+        let mut sample_rates: HashMap<u32, Option<u32>> = HashMap::new();
+        let wanted: HashSet<u32> = track_ids.iter().copied().collect();
+
+        for track_id in wanted.iter().copied() {
+            let Some(track) = format.tracks().iter().find(|track| track.id == track_id) else {
+                continue;
+            };
+            let dec_opts: DecoderOptions = Default::default();
+            if let Ok(decoder) =
+                symphonia::default::get_codecs().make(&track.codec_params, &dec_opts)
+            {
+                decoders.insert(track_id, decoder);
+                time_bases.insert(track_id, track.codec_params.time_base);
+                sample_rates.insert(track_id, track.codec_params.sample_rate);
+            }
+        }
+
+        if decoders.is_empty() {
+            for track_id in wanted {
+                let _ = sender.send(DecodedPacket {
+                    source_key: SourceKey::TrackId(track_id),
+                    packet_ts: 0.0,
+                    samples: Vec::new(),
+                    eos_flag: true,
+                });
+            }
+            return;
+        }
+
+        if let Some(first_track_id) = decoders.keys().next().copied() {
+            let seconds = start_time.floor() as u64;
+            let frac_of_second = start_time.fract();
+            let time = Time::new(seconds, frac_of_second);
+            let _ = format.seek(
+                SeekMode::Coarse,
+                SeekTo::Time {
+                    time,
+                    track_id: Some(first_track_id),
+                },
+            );
+        }
+
+        loop {
+            if abort.load(Ordering::Relaxed) {
+                break;
+            }
+
+            let packet = match format.next_packet() {
+                Ok(packet) => packet,
+                Err(_) => break,
+            };
+            let track_id = packet.track_id();
+            let Some(decoder) = decoders.get_mut(&track_id) else {
+                continue;
+            };
+
+            let packet_ts = packet_ts_seconds(
+                packet.ts(),
+                time_bases.get(&track_id).copied().flatten(),
+                sample_rates.get(&track_id).copied().flatten(),
+                start_time,
+            );
+            match decoder.decode(&packet) {
+                Ok(decoded) => {
+                    let samples = interleaved_samples(decoded, channels);
+                    if samples.is_empty() {
+                        continue;
+                    }
+                    if sender
+                        .send(DecodedPacket {
+                            source_key: SourceKey::TrackId(track_id),
+                            packet_ts,
+                            samples,
+                            eos_flag: false,
+                        })
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+                Err(Error::DecodeError(_)) => {}
+                Err(_) => break,
+            }
+        }
+
+        for track_id in decoders.keys().copied() {
+            let _ = sender.send(DecodedPacket {
+                source_key: SourceKey::TrackId(track_id),
+                packet_ts: 0.0,
+                samples: Vec::new(),
+                eos_flag: true,
+            });
+        }
+    })
+}
+
+fn interleaved_samples(decoded: AudioBufferRef<'_>, channels: u8) -> Vec<f32> {
+    let channels = channels.max(1) as usize;
+    let mut out_channels: Vec<Vec<f32>> = Vec::with_capacity(channels);
+    for channel in 0..channels {
+        out_channels.push(crate::track::convert::process_channel(
+            decoded.clone(),
+            channel,
+        ));
     }
 
-    let mut slot_gains = slot_channel_gains.lock().unwrap();
-    let mut key_gains = track_channel_gains.lock().unwrap();
-    for update in updates {
-        if update.slot_index >= slot_gains.len() {
-            continue;
-        }
-        // Track mix updates target logical slots, but active decode buffers are
-        // keyed by runtime track keys that may rotate after shuffle events.
-        let gains = compute_track_channel_gains(update.level, update.pan, channels);
-        slot_gains[update.slot_index] = gains.clone();
-        if let Some(track_key) = active_track_keys.get(update.slot_index).copied() {
-            key_gains.insert(track_key, gains);
-        }
+    if out_channels.is_empty() {
+        return Vec::new();
     }
+
+    let left = out_channels[0].clone();
+    let right = out_channels
+        .get(1)
+        .cloned()
+        .unwrap_or_else(|| out_channels[0].clone());
+
+    left.into_iter()
+        .zip(right)
+        .flat_map(|(l, r)| [l, r])
+        .collect()
+}
+
+fn packet_ts_seconds(
+    ts: u64,
+    time_base: Option<TimeBase>,
+    sample_rate: Option<u32>,
+    start_time: f64,
+) -> f64 {
+    let absolute = if let Some(base) = time_base {
+        let time = base.calc_time(ts);
+        time.seconds as f64 + time.frac
+    } else if let Some(rate) = sample_rate {
+        ts as f64 / rate.max(1) as f64
+    } else {
+        0.0
+    };
+    (absolute - start_time).max(0.0)
 }

@@ -43,6 +43,7 @@ pub(crate) struct ActiveWindow {
 pub(crate) struct RuntimeInstanceMeta {
     pub instance_id: usize,
     pub logical_track_index: usize,
+    pub slot_index: usize,
     pub source_key: ShuffleSource,
     pub active_windows: Vec<ActiveWindow>,
     pub selection_index: usize,
@@ -561,6 +562,7 @@ impl Prot {
                 if let Some(meta) = build_segment_instance(
                     next_instance_id,
                     logical_track_index,
+                    slot_index,
                     selection_index,
                     current_source.as_ref().unwrap(),
                     current_start,
@@ -584,6 +586,7 @@ impl Prot {
                 if let Some(meta) = build_segment_instance(
                     next_instance_id,
                     logical_track_index,
+                    slot_index,
                     selection_index,
                     source,
                     current_start,
@@ -1210,6 +1213,7 @@ fn build_slot_layout(slot_count: usize, slot_spans: &[usize]) -> (Vec<(usize, us
 fn build_segment_instance(
     instance_id: usize,
     logical_track_index: usize,
+    slot_index: usize,
     selection_index: usize,
     source: &ShuffleSource,
     segment_start_ms: u64,
@@ -1234,6 +1238,7 @@ fn build_segment_instance(
     Some(RuntimeInstanceMeta {
         instance_id,
         logical_track_index,
+        slot_index,
         source_key: source.clone(),
         active_windows: vec![ActiveWindow {
             start_ms: relative_start,

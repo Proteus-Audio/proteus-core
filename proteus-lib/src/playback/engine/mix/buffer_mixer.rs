@@ -1,6 +1,6 @@
 //! Schedule-driven source router and logical-track mixer.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use dasp_ring_buffer::Bounded;
 
@@ -78,9 +78,12 @@ impl BufferInstance {
 pub(crate) struct BufferMixer {
     sample_rate: u32,
     channels: usize,
+    mix_chunk_samples: usize,
+    consumed_samples: usize,
     instances: Vec<BufferInstance>,
     track_instances: Vec<Vec<usize>>,
     track_mix_settings: HashMap<usize, (f32, f32)>,
+    slot_to_logical: HashMap<usize, usize>,
 }
 
 impl BufferMixer {
@@ -91,9 +94,12 @@ impl BufferMixer {
         channels: usize,
         capacity_samples: usize,
         track_mix_settings: HashMap<usize, (f32, f32)>,
+        mix_chunk_samples: usize,
     ) -> Self {
         let mut instances = Vec::with_capacity(plan.instances.len());
+        let mut slot_to_logical = HashMap::new();
         for meta in plan.instances {
+            slot_to_logical.insert(meta.slot_index, meta.logical_track_index);
             instances.push(BufferInstance::new(meta, capacity_samples));
         }
 
@@ -108,9 +114,12 @@ impl BufferMixer {
         Self {
             sample_rate: sample_rate.max(1),
             channels: channels.max(1),
+            mix_chunk_samples: mix_chunk_samples.max(1),
+            consumed_samples: 0,
             instances,
             track_instances,
             track_mix_settings,
+            slot_to_logical,
         }
     }
 
@@ -194,25 +203,45 @@ impl BufferMixer {
 
     /// Mark all instances for `source_key` as finished.
     pub(crate) fn signal_finish(&mut self, source_key: &SourceKey) {
+        let eof_ms = samples_to_ms(self.consumed_samples, self.sample_rate, self.channels);
         for instance in self.instances.iter_mut() {
             if SourceKey::from(&instance.meta.source_key) != *source_key {
                 continue;
             }
             if !instance.finished {
                 instance.finished = true;
-                instance.eof_reached_ms = Some(0);
+                instance.eof_reached_ms = Some(eof_ms);
             }
         }
     }
 
     /// True when each instance in the logical track has samples or is finished.
     pub(crate) fn track_ready(&self, logical_track_index: usize) -> bool {
+        self.track_ready_with_min_samples(logical_track_index, 1)
+    }
+
+    /// True when each instance in the logical track has at least `min_samples`
+    /// available (or is finished/not currently active).
+    pub(crate) fn track_ready_with_min_samples(
+        &self,
+        logical_track_index: usize,
+        min_samples: usize,
+    ) -> bool {
         let Some(instances) = self.track_instances.get(logical_track_index) else {
             return true;
         };
+
         instances.iter().all(|instance_index| {
             let instance = &self.instances[*instance_index];
-            instance.finished || instance.buffer.len() > 0
+            if !instance_needs_data(
+                instance,
+                self.consumed_samples,
+                self.sample_rate,
+                self.channels,
+            ) {
+                return true;
+            }
+            instance.finished || instance.buffer.len() >= min_samples.max(1)
         })
     }
 
@@ -221,14 +250,27 @@ impl BufferMixer {
         let Some(instances) = self.track_instances.get(logical_track_index) else {
             return true;
         };
-        instances
-            .iter()
-            .all(|instance_index| self.instances[*instance_index].finished)
+        instances.iter().all(|instance_index| {
+            let instance = &self.instances[*instance_index];
+            instance.finished
+                || instance_fully_past_window(
+                    instance,
+                    self.consumed_samples,
+                    self.sample_rate,
+                    self.channels,
+                )
+        })
     }
 
     /// True when all logical tracks are ready.
     pub(crate) fn mix_ready(&self) -> bool {
-        (0..self.track_instances.len()).all(|track_index| self.track_ready(track_index))
+        self.mix_ready_with_min_samples(1)
+    }
+
+    /// True when all logical tracks are ready for at least `min_samples`.
+    pub(crate) fn mix_ready_with_min_samples(&self, min_samples: usize) -> bool {
+        (0..self.track_instances.len())
+            .all(|track_index| self.track_ready_with_min_samples(track_index, min_samples))
     }
 
     /// True when all logical tracks are finished.
@@ -264,7 +306,19 @@ impl BufferMixer {
             let mut track_min = usize::MAX;
             for instance_index in track_indices {
                 let instance = &self.instances[*instance_index];
-                let available = if instance.buffer.len() > 0 {
+                let available = if !instance_needs_data(
+                    instance,
+                    self.consumed_samples,
+                    self.sample_rate,
+                    self.channels,
+                ) || instance_fully_past_window(
+                    instance,
+                    self.consumed_samples,
+                    self.sample_rate,
+                    self.channels,
+                ) {
+                    usize::MAX
+                } else if instance.buffer.len() > 0 {
                     instance.buffer.len()
                 } else if instance.finished {
                     usize::MAX
@@ -276,7 +330,11 @@ impl BufferMixer {
             ready_samples_per_track.push(track_min);
         }
 
-        let to_consume = ready_samples_per_track.into_iter().min().unwrap_or(0);
+        let to_consume = ready_samples_per_track
+            .into_iter()
+            .min()
+            .unwrap_or(0)
+            .min(self.mix_chunk_samples);
         if to_consume == 0 || to_consume == usize::MAX {
             return None;
         }
@@ -287,6 +345,19 @@ impl BufferMixer {
 
             for instance_index in track_indices {
                 let instance = &mut self.instances[*instance_index];
+                if !instance_needs_data(
+                    instance,
+                    self.consumed_samples,
+                    self.sample_rate,
+                    self.channels,
+                ) || instance_fully_past_window(
+                    instance,
+                    self.consumed_samples,
+                    self.sample_rate,
+                    self.channels,
+                ) {
+                    continue;
+                }
                 for sample in track_buffer.iter_mut().take(to_consume) {
                     if let Some(value) = instance.buffer.pop() {
                         *sample += value;
@@ -303,6 +374,7 @@ impl BufferMixer {
             logical_tracks.push(track_buffer);
         }
 
+        self.consumed_samples = self.consumed_samples.saturating_add(to_consume);
         Some(combine_tracks_equal_weight(&logical_tracks))
     }
 
@@ -319,6 +391,49 @@ impl BufferMixer {
                 )
             })
             .collect()
+    }
+
+    /// Return unique source keys referenced by this runtime plan.
+    pub(crate) fn sources(&self) -> Vec<SourceKey> {
+        let mut set = HashSet::new();
+        for instance in self.instances.iter() {
+            set.insert(SourceKey::from(&instance.meta.source_key));
+        }
+        set.into_iter().collect()
+    }
+
+    /// Number of concrete instances in the mixer.
+    pub(crate) fn instance_count(&self) -> usize {
+        self.instances.len()
+    }
+
+    /// Number of logical tracks represented by the plan.
+    pub(crate) fn logical_track_count(&self) -> usize {
+        self.track_instances.len()
+    }
+
+    /// Count instances that are finished or fully elapsed.
+    pub(crate) fn finished_instance_count(&self) -> usize {
+        self.instances
+            .iter()
+            .filter(|instance| {
+                instance.finished
+                    || instance_fully_past_window(
+                        instance,
+                        self.consumed_samples,
+                        self.sample_rate,
+                        self.channels,
+                    )
+            })
+            .count()
+    }
+
+    /// Update per-track mix controls using a slot index.
+    pub(crate) fn set_track_mix_by_slot(&mut self, slot_index: usize, level: f32, pan: f32) {
+        if let Some(logical_track_index) = self.slot_to_logical.get(&slot_index).copied() {
+            self.track_mix_settings
+                .insert(logical_track_index, (level.max(0.0), pan.clamp(-1.0, 1.0)));
+        }
     }
 }
 
@@ -396,6 +511,62 @@ fn packet_overlap_samples(
     spans
 }
 
+fn instance_needs_data(
+    instance: &BufferInstance,
+    consumed_samples: usize,
+    sample_rate: u32,
+    channels: usize,
+) -> bool {
+    let start_sample = window_start_samples(instance, sample_rate, channels);
+    let end_sample = window_end_samples(instance, sample_rate, channels);
+    consumed_samples >= start_sample && end_sample.map(|end| consumed_samples < end).unwrap_or(true)
+}
+
+fn instance_fully_past_window(
+    instance: &BufferInstance,
+    consumed_samples: usize,
+    sample_rate: u32,
+    channels: usize,
+) -> bool {
+    let Some(end_sample) = window_end_samples(instance, sample_rate, channels) else {
+        return false;
+    };
+    consumed_samples >= end_sample && instance.buffer.len() == 0
+}
+
+fn window_start_samples(instance: &BufferInstance, sample_rate: u32, channels: usize) -> usize {
+    let start_ms = instance
+        .meta
+        .active_windows
+        .first()
+        .map(|window| window.start_ms)
+        .unwrap_or(0);
+    ms_to_samples(start_ms, sample_rate, channels)
+}
+
+fn window_end_samples(
+    instance: &BufferInstance,
+    sample_rate: u32,
+    channels: usize,
+) -> Option<usize> {
+    let end_ms = instance
+        .meta
+        .active_windows
+        .last()
+        .and_then(|window| window.end_ms);
+    end_ms.map(|ms| ms_to_samples(ms, sample_rate, channels))
+}
+
+fn ms_to_samples(ms: u64, sample_rate: u32, channels: usize) -> usize {
+    let frames = ((ms as f64 / 1000.0) * sample_rate as f64).round() as usize;
+    frames.saturating_mul(channels)
+}
+
+fn samples_to_ms(samples: usize, sample_rate: u32, channels: usize) -> u64 {
+    let frames = samples / channels.max(1);
+    ((frames as f64 / sample_rate.max(1) as f64) * 1000.0).round() as u64
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
@@ -413,6 +584,7 @@ mod tests {
                 RuntimeInstanceMeta {
                     instance_id: 0,
                     logical_track_index: 0,
+                    slot_index: 0,
                     source_key: ShuffleSource::TrackId(1),
                     active_windows: vec![ActiveWindow {
                         start_ms: 0,
@@ -424,6 +596,7 @@ mod tests {
                 RuntimeInstanceMeta {
                     instance_id: 1,
                     logical_track_index: 1,
+                    slot_index: 1,
                     source_key: ShuffleSource::TrackId(2),
                     active_windows: vec![ActiveWindow {
                         start_ms: 0,
@@ -439,7 +612,7 @@ mod tests {
 
     #[test]
     fn route_packet_targets_and_zero_fills_instances() {
-        let mut mixer = BufferMixer::new(simple_plan(), 48_000, 2, 8, HashMap::new());
+        let mut mixer = BufferMixer::new(simple_plan(), 48_000, 2, 8, HashMap::new(), 4);
 
         let decision = mixer.route_packet(&[1.0, 1.0, 0.5, 0.5], SourceKey::TrackId(1), 0.0);
         assert_eq!(decision.sample_targets_written, vec![0]);
@@ -449,7 +622,7 @@ mod tests {
 
     #[test]
     fn readiness_and_take_samples_are_synchronized() {
-        let mut mixer = BufferMixer::new(simple_plan(), 48_000, 2, 16, HashMap::new());
+        let mut mixer = BufferMixer::new(simple_plan(), 48_000, 2, 16, HashMap::new(), 4);
 
         mixer.route_packet(&[1.0, 1.0, 1.0, 1.0], SourceKey::TrackId(1), 0.0);
         assert!(mixer.mix_ready());
@@ -466,7 +639,7 @@ mod tests {
 
     #[test]
     fn signal_finish_propagates_track_and_mix_finished() {
-        let mut mixer = BufferMixer::new(simple_plan(), 48_000, 2, 8, HashMap::new());
+        let mut mixer = BufferMixer::new(simple_plan(), 48_000, 2, 8, HashMap::new(), 4);
         mixer.signal_finish(&SourceKey::TrackId(1));
         assert!(mixer.track_finished(0));
         assert!(!mixer.mix_finished());
@@ -480,7 +653,7 @@ mod tests {
     fn fill_state_aggregates_as_expected() {
         let mut track_mix = HashMap::new();
         track_mix.insert(0usize, (1.0_f32, 0.0_f32));
-        let mut mixer = BufferMixer::new(simple_plan(), 48_000, 2, 2, track_mix);
+        let mut mixer = BufferMixer::new(simple_plan(), 48_000, 2, 2, track_mix, 4);
         assert_eq!(mixer.mix_fill_state(), FillState::NotFull);
 
         let _ = mixer.route_packet(&[1.0, 1.0, 1.0, 1.0], SourceKey::TrackId(1), 0.0);
