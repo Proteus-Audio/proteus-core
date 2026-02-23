@@ -4,7 +4,9 @@ use log::{debug, error, info, warn};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::{Arc, Condvar, Mutex};
 
+use crate::dsp::utils::fade_interleaved_per_frame;
 use crate::logging::log_on_line;
+use crate::playback::engine::mix::utils::TransitionDirection;
 use crate::{
     container::prot::{RuntimeInstanceMeta, RuntimeInstancePlan, ShuffleSource},
     logging::{clear_logfile, log},
@@ -338,6 +340,7 @@ pub(crate) struct BufferMixer {
     track_mix_settings: HashMap<usize, (f32, f32)>,
     slot_to_logical: HashMap<usize, usize>,
     decode_backpressure: Arc<DecodeBackpressure>,
+    crossfade_ms: usize,
 }
 
 impl BufferMixer {
@@ -378,6 +381,7 @@ impl BufferMixer {
             track_mix_settings,
             slot_to_logical,
             decode_backpressure,
+            crossfade_ms: 2,
         }
     }
 
@@ -431,21 +435,8 @@ impl BufferMixer {
                 &instance.meta.active_windows,
             );
 
-            // let cover = map_cover(&overlap, samples.len(), Some(80));
-            let cover = map_cover(&overlap, samples.len(), None);
-
-            let first_window = &instance.meta.active_windows.first();
-            let first_window_start = if first_window.is_some() && first_window.unwrap().start_ms > 0
-            {
-                first_window.unwrap().start_ms as f64 / 1000.0
-            } else {
-                0.0
-            };
-
-            let last_of_window = overlap
-                .last()
-                .map(|(_, end)| *end < samples.len())
-                .unwrap_or(false);
+            let cover_transition = self.crossfade_ms * self.sample_rate as usize / 1000;
+            let cover = map_cover(&overlap, samples.len(), Some(cover_transition));
 
             // if last_of_window || (first_window_start > 0.0 && first_window_start > packet_ts) {
             debug!(
@@ -508,7 +499,62 @@ impl BufferMixer {
                             .zero_filled_samples
                             .saturating_add((end_sample - start_sample) as u64);
                     }
-                    _ => {}
+
+                    Cover::Transition((direction, (start_sample, end_sample))) => {
+                        if start_sample >= end_sample || end_sample > samples.len() {
+                            continue;
+                        }
+
+                        let slice_length = end_sample - start_sample;
+
+                        info!(
+                            "Transition starting at: {}",
+                            packet_ts
+                                + (samples_to_ms(start_sample, self.sample_rate, self.channels)
+                                    as f64
+                                    / 1000.0)
+                        );
+
+                        let (ramp_start, ramp_end) = match direction {
+                            TransitionDirection::Up => {
+                                let starting_val = (cover_transition as f32 - slice_length as f32)
+                                    / cover_transition as f32;
+
+                                (starting_val, 1.0)
+                            }
+                            TransitionDirection::Down => {
+                                let ending_val = (cover_transition as f32 - slice_length as f32)
+                                    / cover_transition as f32;
+
+                                (1.0, ending_val)
+                            }
+                        };
+
+                        info!("Ramp: {:?}", (ramp_start, ramp_end));
+
+                        let mut slice: Vec<f32> =
+                            samples[start_sample..end_sample].iter().copied().collect();
+
+                        fade_interleaved_per_frame(&mut slice, self.channels, ramp_start, ramp_end);
+
+                        let push = push_owned_slice(
+                            &mut instance.buffer,
+                            instance.buffer_capacity_samples,
+                            slice,
+                            &mut instance.full,
+                        );
+                        self.decode_backpressure.on_samples_pushed(
+                            instance_index,
+                            push.written_samples,
+                            instance.full,
+                        );
+                        if push.wrote_any {
+                            wrote_real = true;
+                        }
+                        instance.produced_samples = instance
+                            .produced_samples
+                            .saturating_add((end_sample - start_sample) as u64);
+                    }
                 }
             }
 
@@ -845,6 +891,27 @@ impl BufferMixer {
 struct PushResult {
     written_samples: usize,
     wrote_any: bool,
+}
+
+fn push_owned_slice(
+    buffer: &mut VecDeque<f32>,
+    capacity_samples: usize,
+    slice: Vec<f32>,
+    full_flag: &mut bool,
+) -> PushResult {
+    let mut result = PushResult::default();
+    let mut overflow = false;
+    for sample in slice.iter() {
+        if buffer.len() >= capacity_samples.max(1) {
+            overflow = true;
+            break;
+        }
+        buffer.push_back(*sample);
+        result.wrote_any = true;
+        result.written_samples += 1;
+    }
+    *full_flag = overflow;
+    result
 }
 
 fn push_slice(

@@ -1,0 +1,25 @@
+pub fn fade_interleaved_per_frame(samples: &mut [f32], channels: usize, start: f32, end: f32) {
+    assert!(channels > 0);
+    let samples_len = samples.len();
+    let frames = samples_len / channels;
+    if frames == 0 {
+        return;
+    }
+    if frames == 1 {
+        let g = end; // or start—pick your convention
+        for s in &mut samples[..channels.min(samples_len)] {
+            *s *= g;
+        }
+        return;
+    }
+
+    let step = (end - start) / (frames as f32 - 1.0);
+    let mut gain = start;
+
+    for frame in samples[..frames * channels].chunks_exact_mut(channels) {
+        for s in frame.iter_mut() {
+            *s *= gain;
+        }
+        gain += step;
+    }
+}
