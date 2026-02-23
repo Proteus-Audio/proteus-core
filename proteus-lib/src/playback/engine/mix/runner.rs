@@ -552,6 +552,10 @@ pub fn spawn_mix_thread(
         }
 
         decode_backpressure.shutdown();
+        // Drop the packet receiver before joining decode workers so any worker
+        // blocked on `packet_tx.send(...)` wakes with `SendError` instead of
+        // deadlocking teardown during seek/stop.
+        drop(packet_rx);
         drop(decode_workers);
     });
 
