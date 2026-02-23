@@ -217,6 +217,7 @@ struct ConvolutionReverbState {
     output_buffer: Vec<f32>,
     block_out: Vec<f32>,
     block_samples: usize,
+    tail_drained: bool,
 }
 
 impl ConvolutionReverbState {
@@ -230,6 +231,7 @@ impl ConvolutionReverbState {
             output_buffer: Vec::new(),
             block_out: Vec::new(),
             block_samples,
+            tail_drained: false,
         }
     }
 
@@ -239,11 +241,15 @@ impl ConvolutionReverbState {
         self.output_buffer.clear();
         self.block_out.clear();
         self.block_samples = self.reverb.block_size_samples();
+        self.tail_drained = false;
     }
 
     fn process(&mut self, samples: &[f32], drain: bool) -> Vec<f32> {
         if samples.is_empty() {
             if !drain {
+                return Vec::new();
+            }
+            if self.tail_drained {
                 return Vec::new();
             }
 
@@ -252,8 +258,11 @@ impl ConvolutionReverbState {
                 out.extend(self.output_buffer.drain(..));
             }
             out.extend(self.drain_tail_blocks());
+            self.tail_drained = true;
             return out;
         }
+
+        self.tail_drained = false;
 
         if self.block_samples == 0 {
             return self.reverb.process(samples);
@@ -306,7 +315,6 @@ impl ConvolutionReverbState {
         }
 
         let mut drained = Vec::new();
-        let mut saw_non_silent = false;
         let mut trailing_silent_blocks = 0usize;
         let silence = vec![0.0_f32; self.block_samples.max(1)];
 
@@ -322,7 +330,6 @@ impl ConvolutionReverbState {
                 .fold(0.0_f32, |acc, sample| acc.max(sample.abs()));
 
             if max_abs > DRAIN_SILENCE_EPSILON {
-                saw_non_silent = true;
                 trailing_silent_blocks = 0;
             } else {
                 trailing_silent_blocks = trailing_silent_blocks.saturating_add(1);
@@ -330,7 +337,7 @@ impl ConvolutionReverbState {
 
             drained.extend_from_slice(&self.block_out);
 
-            if saw_non_silent && trailing_silent_blocks >= DRAIN_SILENT_BLOCKS_TO_STOP {
+            if trailing_silent_blocks >= DRAIN_SILENT_BLOCKS_TO_STOP {
                 break;
             }
         }

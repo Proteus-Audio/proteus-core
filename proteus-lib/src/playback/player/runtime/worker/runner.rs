@@ -368,14 +368,13 @@ fn update_chunk_lengths(ctx: &ThreadContext, loop_state: &mut LoopState) {
 
     ctx.last_time_update_ms.store(now_ms(), Ordering::Relaxed);
 
-    // While buffering is active, infer consumed chunks from sink queue depth.
-    if !loop_state.buffering_done.load(Ordering::Relaxed) {
-        let chunks_played = chunk_lengths.len().saturating_sub(sink.len());
-        for _ in 0..chunks_played {
-            timer.reset();
-            timer.start();
-            *time_chunks_passed += chunk_lengths.remove(0);
-        }
+    // Infer consumed chunks from sink queue depth for the entire run, including
+    // the post-buffering drain phase, so the playback clock keeps advancing.
+    let chunks_played = chunk_lengths.len().saturating_sub(sink.len());
+    for _ in 0..chunks_played {
+        timer.reset();
+        timer.start();
+        *time_chunks_passed += chunk_lengths.remove(0);
     }
 
     if sink.is_paused() {
