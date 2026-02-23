@@ -75,7 +75,7 @@ pub fn spawn_mix_thread(
     } = args;
 
     let handle = thread::spawn(move || {
-        const MIN_MIX_MS: f32 = 30.0;
+        const MIN_MIX_MS: f32 = 300.0;
         let mut running_count = 0;
 
         let prot_locked = prot.clone();
@@ -237,11 +237,13 @@ pub fn spawn_mix_thread(
                     if packet.eos_flag {
                         buffer_mixer.signal_finish(&packet.source_key);
                     } else {
-                        let _ = buffer_mixer.route_packet(
+                        let _decision = buffer_mixer.route_packet(
                             &packet.samples,
                             packet.source_key.clone(),
                             packet.packet_ts,
                         );
+
+                        // if packet.samples.len() != decision.sample_targets_written
                     }
                 }
             }
@@ -361,7 +363,7 @@ pub fn spawn_mix_thread(
 
             if let Some(samples) = samples_for_processing {
                 running_count += samples.len();
-                info!("Processed {} samples so far!", running_count);
+                debug!("Processed {} samples so far!", running_count);
                 if samples.len() < convolution_batch_samples {
                     warn!(
                         "Only processing {} samples! (Convolution wants {})",

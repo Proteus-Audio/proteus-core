@@ -72,6 +72,7 @@ struct BufferInstance {
 struct DecodeBackpressureInstance {
     capacity_samples: usize,
     buffered_samples: usize,
+    reserved_samples: usize,
     finished: bool,
 }
 
@@ -103,6 +104,7 @@ impl DecodeBackpressure {
             state.instances.push(DecodeBackpressureInstance {
                 capacity_samples: instance.buffer_capacity_samples,
                 buffered_samples: instance.buffer.len(),
+                reserved_samples: 0,
                 finished: instance.finished,
             });
         }
@@ -137,6 +139,7 @@ impl DecodeBackpressure {
             }
             let status = source_room_status(&guard, source, required_samples);
             if status.allowed {
+                reserve_source_room(&mut guard, source, required_samples);
                 if wait_count > 0 {
                     debug!(
                         "decode_backpressure wait satisfied: source={:?} required_samples={} waits={} details={}",
@@ -173,27 +176,36 @@ impl DecodeBackpressure {
         }
     }
 
-    fn on_samples_pushed(&self, instance_index: usize, pushed_samples: usize, is_full: bool) {
-        if pushed_samples == 0 && !is_full {
+    fn on_samples_pushed(
+        &self,
+        instance_index: usize,
+        attempted_samples: usize,
+        pushed_samples: usize,
+        is_full: bool,
+    ) {
+        if attempted_samples == 0 && pushed_samples == 0 && !is_full {
             return;
         }
         let mut guard = self.state.lock().unwrap();
         if let Some(instance) = guard.instances.get_mut(instance_index) {
+            instance.reserved_samples = instance.reserved_samples.saturating_sub(attempted_samples);
             instance.buffered_samples = instance
                 .buffered_samples
                 .saturating_add(pushed_samples)
                 .min(instance.capacity_samples.max(1));
             debug!(
-                "decode_backpressure push: instance_index={} pushed_samples={} buffered={} capacity={} finished={} full_flag={}",
+                "decode_backpressure push: instance_index={} attempted_samples={} pushed_samples={} reserved={} buffered={} capacity={} finished={} full_flag={}",
                 instance_index,
+                attempted_samples,
                 pushed_samples,
+                instance.reserved_samples,
                 instance.buffered_samples,
                 instance.capacity_samples,
                 instance.finished,
                 is_full
             );
         }
-        if pushed_samples > 0 || !is_full {
+        if attempted_samples > 0 || pushed_samples > 0 || !is_full {
             self.cv.notify_all();
         }
     }
@@ -206,9 +218,10 @@ impl DecodeBackpressure {
         if let Some(instance) = guard.instances.get_mut(instance_index) {
             instance.buffered_samples = instance.buffered_samples.saturating_sub(popped_samples);
             debug!(
-                "decode_backpressure pop: instance_index={} popped_samples={} buffered={} capacity={} finished={}",
+                "decode_backpressure pop: instance_index={} popped_samples={} reserved={} buffered={} capacity={} finished={}",
                 instance_index,
                 popped_samples,
+                instance.reserved_samples,
                 instance.buffered_samples,
                 instance.capacity_samples,
                 instance.finished
@@ -222,9 +235,13 @@ impl DecodeBackpressure {
         if let Some(instance) = guard.instances.get_mut(instance_index) {
             if !instance.finished {
                 instance.finished = true;
+                instance.reserved_samples = 0;
                 debug!(
-                    "decode_backpressure finished: instance_index={} buffered={} capacity={}",
-                    instance_index, instance.buffered_samples, instance.capacity_samples
+                    "decode_backpressure finished: instance_index={} reserved={} buffered={} capacity={}",
+                    instance_index,
+                    instance.reserved_samples,
+                    instance.buffered_samples,
+                    instance.capacity_samples
                 );
                 self.cv.notify_all();
             }
@@ -263,7 +280,6 @@ fn source_room_status(
 
     let mut saw_unfinished = false;
     let mut all_have_target_room = true;
-    let mut any_has_progress_room = false;
     let mut parts = Vec::new();
 
     for instance_index in instance_indices {
@@ -275,18 +291,24 @@ fn source_room_status(
             continue;
         }
         saw_unfinished = true;
-        let free = instance
-            .capacity_samples
-            .saturating_sub(instance.buffered_samples);
+        let occupied = instance
+            .buffered_samples
+            .saturating_add(instance.reserved_samples)
+            .min(instance.capacity_samples);
+        let free = instance.capacity_samples.saturating_sub(occupied);
 
         // A packet may be larger than the per-instance ring capacity, so "full packet room"
         // is impossible in that case. Clamp the target to preserve liveness.
         let target_room = required_samples.min(instance.capacity_samples.max(1));
         all_have_target_room &= free >= target_room;
-        any_has_progress_room |= free > 0;
         parts.push(format!(
-            "i{}:buf={}/{} free={} target={}",
-            instance_index, instance.buffered_samples, instance.capacity_samples, free, target_room
+            "i{}:buf={} res={} /{} free={} target={}",
+            instance_index,
+            instance.buffered_samples,
+            instance.reserved_samples,
+            instance.capacity_samples,
+            free,
+            target_room
         ));
     }
 
@@ -297,19 +319,40 @@ fn source_room_status(
         };
     }
 
-    // Prefer the stricter "all instances have room" check, but allow progress when at least one
-    // unfinished instance can accept data. This avoids deadlocking decode on future/repeated
-    // instances that are already full while current playback still needs packets from the source.
-    let allowed = all_have_target_room || any_has_progress_room;
+    // Routing writes a full packet span (real samples or underlay) into every unfinished instance
+    // for the source. Allowing partial room here silently drops packet tails and compresses time.
+    let allowed = all_have_target_room;
     SourceRoomStatus {
         allowed,
         summary: format!(
-            "allowed={} all_target={} any_progress={} [{}]",
+            "allowed={} all_target={} [{}]",
             allowed,
             all_have_target_room,
-            any_has_progress_room,
             parts.join(", ")
         ),
+    }
+}
+
+fn reserve_source_room(
+    state: &mut DecodeBackpressureState,
+    source: &SourceKey,
+    required_samples: usize,
+) {
+    let Some(instance_indices) = state.source_to_instances.get(source).cloned() else {
+        return;
+    };
+    for instance_index in instance_indices {
+        let Some(instance) = state.instances.get_mut(instance_index) else {
+            continue;
+        };
+        if instance.finished {
+            continue;
+        }
+        let reserve = required_samples.min(instance.capacity_samples.max(1));
+        instance.reserved_samples = instance
+            .reserved_samples
+            .saturating_add(reserve)
+            .min(instance.capacity_samples.max(1));
     }
 }
 
@@ -471,15 +514,24 @@ impl BufferMixer {
                         );
                         self.decode_backpressure.on_samples_pushed(
                             instance_index,
+                            end_sample - start_sample,
                             push.written_samples,
                             instance.full,
                         );
                         if push.wrote_any {
                             wrote_real = true;
                         }
+                        if push.written_samples < (end_sample - start_sample) {
+                            warn!(
+                                "Partial overlap write for i{}: wrote {} / {} samples",
+                                instance.meta.instance_id,
+                                push.written_samples,
+                                end_sample - start_sample
+                            );
+                        }
                         instance.produced_samples = instance
                             .produced_samples
-                            .saturating_add((end_sample - start_sample) as u64);
+                            .saturating_add(push.written_samples as u64);
                     }
                     Cover::Underlay((start_sample, end_sample)) => {
                         let length = end_sample - start_sample;
@@ -492,15 +544,22 @@ impl BufferMixer {
                         );
                         self.decode_backpressure.on_samples_pushed(
                             instance_index,
+                            length,
                             push.written_samples,
                             instance.full,
                         );
                         if push.wrote_any {
                             wrote_zero = true;
                         }
+                        if push.written_samples < length {
+                            warn!(
+                                "Partial underlay write for i{}: wrote {} / {} samples",
+                                instance.meta.instance_id, push.written_samples, length
+                            );
+                        }
                         instance.zero_filled_samples = instance
                             .zero_filled_samples
-                            .saturating_add((end_sample - start_sample) as u64);
+                            .saturating_add(push.written_samples as u64);
                     }
 
                     Cover::Transition((direction, (start_sample, end_sample))) => {
@@ -548,15 +607,22 @@ impl BufferMixer {
                         );
                         self.decode_backpressure.on_samples_pushed(
                             instance_index,
+                            slice_length,
                             push.written_samples,
                             instance.full,
                         );
                         if push.wrote_any {
                             wrote_real = true;
                         }
+                        if push.written_samples < slice_length {
+                            warn!(
+                                "Partial transition write for i{}: wrote {} / {} samples",
+                                instance.meta.instance_id, push.written_samples, slice_length
+                            );
+                        }
                         instance.produced_samples = instance
                             .produced_samples
-                            .saturating_add((end_sample - start_sample) as u64);
+                            .saturating_add(push.written_samples as u64);
                     }
                 }
             }
@@ -812,10 +878,11 @@ impl BufferMixer {
 
                 if popped_samples == 0 && !self.pop_warning.contains(&instance.meta.instance_id) {
                     warn!(
-                        "ZERO! i{} ( finished: {}, ts: {} )",
+                        "ZERO! i{} ( finished: {}, ts: {}, total_samples: {} )",
                         instance.meta.instance_id,
                         instance.finished,
-                        samples_to_ms(self.consumed_samples, self.sample_rate, self.channels)
+                        samples_to_ms(self.consumed_samples, self.sample_rate, self.channels),
+                        instance.produced_samples + instance.zero_filled_samples
                     );
                     self.pop_warning.push(instance.meta.instance_id);
                 }
