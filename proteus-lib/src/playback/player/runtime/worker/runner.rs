@@ -300,13 +300,16 @@ fn check_runtime_state(ctx: &ThreadContext, loop_state: &mut LoopState) -> bool 
         return false;
     }
 
-    let sink = ctx.sink_mutex.lock().unwrap();
     let state = *ctx.play_state.lock().unwrap();
     let start_sink_chunks = ctx
         .buffer_settings_for_state
         .lock()
         .unwrap()
         .start_sink_chunks;
+
+    // Lock ordering matters during live seek/stop: control thread takes
+    // play_state -> sink, so avoid taking sink -> play_state here.
+    let sink = ctx.sink_mutex.lock().unwrap();
 
     // Gate startup/resume until enough chunks are queued to reduce underflow.
     if state == PlayerState::Resuming && start_sink_chunks > 0 && sink.len() < start_sink_chunks {
@@ -316,10 +319,12 @@ fn check_runtime_state(ctx: &ThreadContext, loop_state: &mut LoopState) -> bool 
 
     if state == PlayerState::Pausing {
         pause_sink(ctx, loop_state, &sink, 0.1);
+        drop(sink);
         ctx.play_state
             .lock()
             .unwrap()
             .clone_from(&PlayerState::Paused);
+        return true;
     }
 
     if state == PlayerState::Resuming {
@@ -340,10 +345,12 @@ fn check_runtime_state(ctx: &ThreadContext, loop_state: &mut LoopState) -> bool 
         };
 
         resume_sink(ctx, &sink, fade_length);
+        drop(sink);
         ctx.play_state
             .lock()
             .unwrap()
             .clone_from(&PlayerState::Playing);
+        return true;
     }
 
     true
