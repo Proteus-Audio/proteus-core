@@ -7,7 +7,7 @@ use std::sync::{mpsc::RecvTimeoutError, Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use log::{error, warn};
+use log::{error, info, warn};
 
 use crate::playback::engine::PlayerEngine;
 use crate::tools::timer;
@@ -70,6 +70,12 @@ pub(in crate::playback::player::runtime) fn run_playback_thread(
 ) {
     let _thread_guard = PlaybackThreadGuard::new(ctx.playback_thread_exists.clone());
     let start_time = ts.unwrap_or(0.0);
+    if let Some(elapsed_ms) = play_trace_elapsed_ms(&ctx) {
+        info!(
+            "play trace: playback worker start playback_id={} ts={:.3} +{}ms",
+            playback_id, start_time, elapsed_ms
+        );
+    }
 
     let mut engine = PlayerEngine::new(
         ctx.prot.clone(),
@@ -87,9 +93,15 @@ pub(in crate::playback::player::runtime) fn run_playback_thread(
         Some(stream) => stream,
         None => return,
     };
+    if let Some(elapsed_ms) = play_trace_elapsed_ms(&ctx) {
+        info!("play trace: output stream opened +{}ms", elapsed_ms);
+    }
     let mixer = stream.mixer().clone();
 
     initialize_sink(&ctx, &mixer);
+    if let Some(elapsed_ms) = play_trace_elapsed_ms(&ctx) {
+        info!("play trace: sink initialized +{}ms", elapsed_ms);
+    }
     set_duration_from_engine(&ctx, &engine);
     set_start_time(&ctx, start_time);
     append_startup_silence(&ctx);
@@ -97,12 +109,22 @@ pub(in crate::playback::player::runtime) fn run_playback_thread(
     let mut loop_state = LoopState::new(start_time);
 
     let receiver = engine.start_receiver();
+    if let Some(elapsed_ms) = play_trace_elapsed_ms(&ctx) {
+        info!("play trace: engine receiver started +{}ms", elapsed_ms);
+    }
+    let mut logged_first_engine_chunk = false;
     loop {
         if ctx.abort.load(Ordering::SeqCst) {
             break;
         }
         match receiver.recv_timeout(Duration::from_millis(20)) {
             Ok(chunk) => {
+                if !logged_first_engine_chunk {
+                    logged_first_engine_chunk = true;
+                    if let Some(elapsed_ms) = play_trace_elapsed_ms(&ctx) {
+                        info!("play trace: first engine chunk received +{}ms", elapsed_ms);
+                    }
+                }
                 update_sink(&ctx, &mut loop_state, playback_id, chunk);
                 if ctx.abort.load(Ordering::SeqCst) {
                     break;
@@ -261,9 +283,18 @@ fn pause_sink(ctx: &ThreadContext, loop_state: &LoopState, sink: &Sink, fade_sec
 /// * `fade_seconds` - Fade duration in seconds.
 fn resume_sink(ctx: &ThreadContext, sink: &Sink, fade_seconds: f32) {
     let target_volume = *ctx.volume.lock().unwrap();
+    if let Some(elapsed_ms) = play_trace_elapsed_ms(ctx) {
+        info!(
+            "play trace: resume_sink begin fade_s={:.3} target_volume={:.3} +{}ms",
+            fade_seconds, target_volume, elapsed_ms
+        );
+    }
     if fade_seconds <= 0.0 {
         sink.play();
         sink.set_volume(target_volume);
+        if let Some(elapsed_ms) = play_trace_elapsed_ms(ctx) {
+            info!("play trace: resume_sink sink.play() immediate +{}ms", elapsed_ms);
+        }
         return;
     }
 
@@ -275,10 +306,16 @@ fn resume_sink(ctx: &ThreadContext, sink: &Sink, fade_seconds: f32) {
     sink.set_volume(current);
     let fade_increments = ((target_volume - current) / (fade_seconds * 100.0)).max(0.000_001);
     sink.play();
+    if let Some(elapsed_ms) = play_trace_elapsed_ms(ctx) {
+        info!("play trace: resume_sink sink.play() +{}ms", elapsed_ms);
+    }
     while sink.volume() < target_volume {
         let next = (sink.volume() + fade_increments).min(target_volume);
         sink.set_volume(next);
         thread::sleep(Duration::from_millis(5));
+    }
+    if let Some(elapsed_ms) = play_trace_elapsed_ms(ctx) {
+        info!("play trace: resume_sink fade complete +{}ms", elapsed_ms);
     }
 }
 
@@ -328,6 +365,14 @@ fn check_runtime_state(ctx: &ThreadContext, loop_state: &mut LoopState) -> bool 
     }
 
     if state == PlayerState::Resuming {
+        if let Some(elapsed_ms) = play_trace_elapsed_ms(ctx) {
+            info!(
+                "play trace: resuming gate passed sink_len={} start_sink_chunks={} +{}ms",
+                sink.len(),
+                start_sink_chunks,
+                elapsed_ms
+            );
+        }
         let fade_length = if loop_state.startup_fade_pending {
             loop_state.startup_fade_pending = false;
             if let Some(ms) = ctx.next_resume_fade_ms.lock().unwrap().take() {
@@ -504,8 +549,20 @@ fn update_sink(
     }
 
     let (delay_ms, late) = update_append_timing(loop_state, length_in_seconds);
+    let trace_ms = ctx.play_command_ms.load(Ordering::Relaxed);
+    let now = now_ms();
+    let prev_last_chunk_ms = ctx.last_chunk_ms.load(Ordering::Relaxed);
+    if trace_ms > 0 && prev_last_chunk_ms < trace_ms {
+        info!(
+            "play trace: first sink append after command chunk_ms={:.2} delay_ms={:.2} late={} +{}ms",
+            length_in_seconds * 1000.0,
+            delay_ms,
+            late,
+            now.saturating_sub(trace_ms)
+        );
+    }
     ctx.audio_heard.store(true, Ordering::Relaxed);
-    ctx.last_chunk_ms.store(now_ms(), Ordering::Relaxed);
+    ctx.last_chunk_ms.store(now, Ordering::Relaxed);
 
     {
         let mut meter = ctx.output_meter.lock().unwrap();
@@ -548,6 +605,15 @@ fn update_sink(
     // Keep UI time and state responsive on every append.
     update_chunk_lengths(ctx, loop_state);
     check_runtime_state(ctx, loop_state);
+}
+
+fn play_trace_elapsed_ms(ctx: &ThreadContext) -> Option<u64> {
+    let trace_ms = ctx.play_command_ms.load(Ordering::Relaxed);
+    if trace_ms == 0 {
+        None
+    } else {
+        Some(now_ms().saturating_sub(trace_ms))
+    }
 }
 
 /// Mark producer buffering complete and finalize expected drain duration.

@@ -6,6 +6,7 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread;
+use log::info;
 
 use super::super::Player;
 use super::now_ms;
@@ -19,6 +20,17 @@ impl Player {
     /// * `ts` - Optional starting time in seconds. When `None`, playback starts
     ///   from `0.0`.
     pub(in crate::playback::player) fn initialize_thread(&mut self, ts: Option<f64>) {
+        let trace_ms = self.play_command_ms.load(Ordering::Relaxed);
+        let now = now_ms();
+        if trace_ms > 0 {
+            info!(
+                "play trace: initialize_thread start ts={:?} +{}ms",
+                ts,
+                now.saturating_sub(trace_ms)
+            );
+        } else {
+            info!("play trace: initialize_thread start ts={:?}", ts);
+        }
         self.join_playback_thread();
 
         let mut finished_tracks = self.finished_tracks.lock().unwrap();
@@ -57,6 +69,7 @@ impl Player {
             audio_info: self.info.clone(),
             next_resume_fade_ms: self.next_resume_fade_ms.clone(),
             audio_heard: self.audio_heard.clone(),
+            play_command_ms: self.play_command_ms.clone(),
             volume: self.volume.clone(),
             sink_mutex: self.sink.clone(),
             buffer_done_thread_flag: self.buffering_done.clone(),
@@ -66,5 +79,14 @@ impl Player {
 
         let handle = thread::spawn(move || run_playback_thread(context, playback_id, ts));
         *self.playback_thread_handle.lock().unwrap() = Some(handle);
+        if trace_ms > 0 {
+            info!(
+                "play trace: initialize_thread spawned playback_id={} +{}ms",
+                playback_id,
+                now_ms().saturating_sub(trace_ms)
+            );
+        } else {
+            info!("play trace: initialize_thread spawned playback_id={}", playback_id);
+        }
     }
 }

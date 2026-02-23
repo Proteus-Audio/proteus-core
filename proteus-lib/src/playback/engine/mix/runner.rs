@@ -8,7 +8,6 @@ use std::sync::Arc;
 use std::thread;
 use std::thread::JoinHandle;
 use std::time::Duration;
-#[cfg(feature = "debug")]
 use std::time::Instant;
 
 use log::{debug, error, info, warn};
@@ -75,6 +74,8 @@ pub fn spawn_mix_thread(
     } = args;
 
     let handle = thread::spawn(move || {
+        let startup_trace = Instant::now();
+        info!("mix startup trace: thread start");
         const MIN_MIX_MS: f32 = 30.0;
         let mut running_count = 0;
 
@@ -94,6 +95,11 @@ pub fn spawn_mix_thread(
                 prot.get_track_mix_settings(),
             )
         };
+        info!(
+            "mix startup trace: runtime plan built in {}ms (instances={})",
+            startup_trace.elapsed().as_millis(),
+            instance_plan.instances.len()
+        );
 
         if instance_plan.instances.is_empty() {
             abort.store(true, Ordering::SeqCst);
@@ -153,6 +159,13 @@ pub fn spawn_mix_thread(
             track_mix_by_logical,
             min_mix_samples,
         );
+        info!(
+            "mix startup trace: buffer_mixer ready in {}ms (track_buffer_size={} min_mix_samples={} start_samples={})",
+            startup_trace.elapsed().as_millis(),
+            track_buffer_size,
+            min_mix_samples,
+            start_samples
+        );
         let decode_backpressure = buffer_mixer.decode_backpressure();
 
         let (packet_tx, packet_rx) = mpsc::sync_channel::<Option<DecodedPacket>>(64);
@@ -196,6 +209,24 @@ pub fn spawn_mix_thread(
             ));
         }
         drop(packet_tx);
+        info!(
+            "mix startup trace: decode workers spawned in {}ms (container_sources={} file_sources={})",
+            startup_trace.elapsed().as_millis(),
+            if buffer_mixer
+                .sources()
+                .iter()
+                .any(|s| matches!(s, SourceKey::TrackId(_)))
+            {
+                1
+            } else {
+                0
+            },
+            buffer_mixer
+                .sources()
+                .iter()
+                .filter(|s| matches!(s, SourceKey::FilePath(_)))
+                .count()
+        );
 
         let warmup_samples = min_mix_samples;
         if warmup_samples > 0 {
@@ -206,6 +237,11 @@ pub fn spawn_mix_thread(
             }
             let _ = processed;
         }
+        info!(
+            "mix startup trace: effect warmup complete in {}ms (warmup_samples={})",
+            startup_trace.elapsed().as_millis(),
+            warmup_samples
+        );
 
         let mut started = start_samples == 0;
         let mut last_effects_reset = effects_reset.load(Ordering::SeqCst);
@@ -223,6 +259,11 @@ pub fn spawn_mix_thread(
         let mut min_chain_ksps = f64::INFINITY;
         #[cfg(feature = "debug")]
         let mut max_chain_ksps = 0.0_f64;
+        let mut logged_first_packet_drain = false;
+        let mut logged_first_packet_route = false;
+        let mut logged_start_gate = false;
+        let mut logged_first_take_samples = false;
+        let mut logged_first_output_send = false;
 
         loop {
             if abort.load(Ordering::SeqCst) {
@@ -230,6 +271,13 @@ pub fn spawn_mix_thread(
             }
 
             while let Ok(packet) = packet_rx.try_recv() {
+                if !logged_first_packet_drain {
+                    info!(
+                        "mix startup trace: first packet dequeued from decode channel at {}ms",
+                        startup_trace.elapsed().as_millis()
+                    );
+                    logged_first_packet_drain = true;
+                }
                 if packet.is_none() {
                     buffer_mixer.signal_finish_all();
                 } else {
@@ -237,6 +285,16 @@ pub fn spawn_mix_thread(
                     if packet.eos_flag {
                         buffer_mixer.signal_finish(&packet.source_key);
                     } else {
+                        if !logged_first_packet_route {
+                            info!(
+                                "mix startup trace: first packet route start at {}ms (source={:?} ts={:.6} samples={})",
+                                startup_trace.elapsed().as_millis(),
+                                packet.source_key,
+                                packet.packet_ts,
+                                packet.samples.len()
+                            );
+                            logged_first_packet_route = true;
+                        }
                         let _decision = buffer_mixer.route_packet(
                             &packet.samples,
                             packet.source_key.clone(),
@@ -313,6 +371,13 @@ pub fn spawn_mix_thread(
             if !started {
                 if buffer_mixer.mix_ready_with_min_samples(start_samples.max(min_mix_samples)) {
                     started = true;
+                    if !logged_start_gate {
+                        logged_start_gate = true;
+                        info!(
+                            "mix startup trace: start gate satisfied at {}ms",
+                            startup_trace.elapsed().as_millis()
+                        );
+                    }
                 } else {
                     thread::sleep(Duration::from_millis(10));
                     continue;
@@ -333,6 +398,14 @@ pub fn spawn_mix_thread(
 
             if samples_for_processing.is_none() {
                 if let Some(samples) = buffer_mixer.take_samples() {
+                    if !logged_first_take_samples {
+                        logged_first_take_samples = true;
+                        info!(
+                            "mix startup trace: first take_samples at {}ms (samples={})",
+                            startup_trace.elapsed().as_millis(),
+                            samples.len()
+                        );
+                    }
                     // info!("Took {} samples!", samples.len());
                     if convolution_batch_samples > 0 {
                         pending_mix_samples.extend_from_slice(&samples);
@@ -485,6 +558,14 @@ pub fn spawn_mix_thread(
                     processed,
                 ) {
                     super::output_stage::SendStatus::Sent => {
+                        if !logged_first_output_send {
+                            logged_first_output_send = true;
+                            info!(
+                                "mix startup trace: first output chunk sent at {}ms (processed_samples={})",
+                                startup_trace.elapsed().as_millis(),
+                                samples.len()
+                            );
+                        }
                         buffer_notify.notify_all();
                     }
                     super::output_stage::SendStatus::Empty => {}
@@ -571,6 +652,9 @@ fn spawn_file_decode_worker(
     decode_backpressure: Arc<DecodeBackpressure>,
 ) -> JoinHandle<()> {
     thread::spawn(move || {
+        let startup_trace = Instant::now();
+        let mut logged_first_ready = false;
+        let mut logged_first_send = false;
         let (mut decoder, mut format) = open_file(&file_path);
         let Some(track) = format
             .tracks()
@@ -628,6 +712,16 @@ fn spawn_file_decode_worker(
                         packet_ts,
                         samples.len()
                     );
+                    if !logged_first_ready {
+                        logged_first_ready = true;
+                        info!(
+                            "mix startup trace: file worker first decoded packet ready in {}ms (source={:?} ts={:.6} samples={})",
+                            startup_trace.elapsed().as_millis(),
+                            source_key,
+                            packet_ts,
+                            samples.len()
+                        );
+                    }
                     if !decode_backpressure.wait_for_source_room(
                         &source_key,
                         samples.len(),
@@ -657,6 +751,13 @@ fn spawn_file_decode_worker(
                         .is_err()
                     {
                         break;
+                    } else if !logged_first_send {
+                        logged_first_send = true;
+                        info!(
+                            "mix startup trace: file worker first packet sent in {}ms (source={:?})",
+                            startup_trace.elapsed().as_millis(),
+                            source_key
+                        );
                     }
                 }
                 Err(Error::DecodeError(_)) => {}
@@ -683,6 +784,9 @@ fn spawn_container_decode_worker(
     decode_backpressure: Arc<DecodeBackpressure>,
 ) -> JoinHandle<()> {
     thread::spawn(move || {
+        let startup_trace = Instant::now();
+        let mut logged_first_ready = false;
+        let mut logged_first_send = false;
         let mut format = crate::tools::tools::get_reader(&file_path);
         let mut decoders: HashMap<u32, Box<dyn Decoder>> = HashMap::new();
         let mut time_bases: HashMap<u32, Option<TimeBase>> = HashMap::new();
@@ -765,6 +869,16 @@ fn spawn_container_decode_worker(
                         packet_ts,
                         samples.len()
                     );
+                    if !logged_first_ready {
+                        logged_first_ready = true;
+                        info!(
+                            "mix startup trace: container worker first decoded packet ready in {}ms (track_id={} ts={:.6} samples={})",
+                            startup_trace.elapsed().as_millis(),
+                            track_id,
+                            packet_ts,
+                            samples.len()
+                        );
+                    }
                     if !decode_backpressure.wait_for_source_room(
                         &source_key,
                         samples.len(),
@@ -795,6 +909,13 @@ fn spawn_container_decode_worker(
                     {
                         error!("Breaking! End?");
                         break;
+                    } else if !logged_first_send {
+                        logged_first_send = true;
+                        info!(
+                            "mix startup trace: container worker first packet sent in {}ms (track_id={})",
+                            startup_trace.elapsed().as_millis(),
+                            track_id
+                        );
                     }
                 }
                 Err(Error::DecodeError(_)) => {

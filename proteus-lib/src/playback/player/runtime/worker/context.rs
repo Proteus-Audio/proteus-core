@@ -39,6 +39,7 @@ pub(in crate::playback::player::runtime) struct ThreadContext {
     pub(in crate::playback::player::runtime) audio_info: Info,
     pub(in crate::playback::player::runtime) next_resume_fade_ms: Arc<Mutex<Option<f32>>>,
     pub(in crate::playback::player::runtime) audio_heard: Arc<AtomicBool>,
+    pub(in crate::playback::player::runtime) play_command_ms: Arc<AtomicU64>,
     pub(in crate::playback::player::runtime) volume: Arc<Mutex<f32>>,
     pub(in crate::playback::player::runtime) sink_mutex: Arc<Mutex<Sink>>,
     pub(in crate::playback::player::runtime) buffer_done_thread_flag: Arc<AtomicBool>,
