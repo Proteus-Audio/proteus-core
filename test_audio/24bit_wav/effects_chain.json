@@ -1,16 +1,5 @@
 [
   {
-    "ConvolutionReverbSettings": {
-      "enabled": false,
-      "dry_wet": 0.000001,
-      "impulse_response": null,
-      "impulse_response_attachment": null,
-      "impulse_response_path": null,
-      "impulse_response_tail_db": null,
-      "impulse_response_tail": null
-    }
-  },
-  {
     "DiffusionReverbSettings": {
       "enabled": false,
       "mix": 0.0,
