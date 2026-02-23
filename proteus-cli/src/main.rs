@@ -8,6 +8,7 @@ use log::error;
 mod cli;
 mod controls;
 mod logging;
+mod project_files;
 mod runner;
 mod ui;
 

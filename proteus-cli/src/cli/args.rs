@@ -283,6 +283,16 @@ pub fn build_cli() -> Command {
                 )),
         )
         .subcommand(
+            Command::new("init")
+                .about("Generate shuffle/effects JSON for a directory of nested audio files")
+                .arg(
+                    Arg::new("INPUT")
+                        .help("Directory containing nested audio files")
+                        .required(true)
+                        .index(1),
+                ),
+        )
+        .subcommand(
             Command::new("create")
                 .about("Emit default JSON payloads")
                 .subcommand(

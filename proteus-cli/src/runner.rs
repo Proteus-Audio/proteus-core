@@ -1,9 +1,9 @@
 //! Runner for CLI execution, TUI lifecycle, and playback thread orchestration.
 
 use std::{
-    collections::{BTreeMap, VecDeque},
-    fs, io,
-    path::{Path, PathBuf},
+    collections::VecDeque,
+    io,
+    path::Path,
     sync::{Arc, Mutex},
     thread::sleep,
     time::Duration,
@@ -15,19 +15,13 @@ use crossterm::{
     terminal::{self, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use log::{error, info};
-use proteus_lib::dsp::effects::{
-    AudioEffect, CompressorEffect, ConvolutionReverbEffect, DelayReverbEffect,
-    DiffusionReverbEffect, DistortionEffect, GainEffect, HighPassFilterEffect, LimiterEffect,
-    LowPassFilterEffect, MultibandEqEffect,
-};
-use proteus_lib::container::prot::PathsTrack;
 use proteus_lib::playback::player;
 use ratatui::{backend::CrosstermBackend, Terminal};
-use serde::Deserialize;
 use serde::Serialize;
 use symphonia::core::errors::Result;
 
 use crate::logging::LogLine;
+use crate::project_files;
 use crate::{cli, controls, logging, ui};
 
 /// Main CLI execution path: parse args, run benches, or start playback.
@@ -70,6 +64,16 @@ pub fn run(args: &ArgMatches, log_buffer: Arc<Mutex<VecDeque<LogLine>>>) -> Resu
                     -1
                 }
             },
+            "init" => {
+                let dir = sub_args.get_one::<String>("INPUT").unwrap();
+                match project_files::write_init_files(Path::new(dir)) {
+                    Ok(()) => 0,
+                    Err(err) => {
+                        error!("{}", err);
+                        -1
+                    }
+                }
+            }
             _ => {
                 error!("Unknown subcommand");
                 -1
@@ -122,7 +126,7 @@ pub fn run(args: &ArgMatches, log_buffer: Arc<Mutex<VecDeque<LogLine>>>) -> Resu
     let mut player = if is_container {
         player::Player::new(&file_path)
     } else if is_directory {
-        let (tracks, dir_effects_path) = load_directory_playback_config(input_path)
+        let config = project_files::load_directory_playback_config(input_path)
             .map_err(|err| {
                 error!("{}", err);
                 symphonia::core::errors::Error::IoError(std::io::Error::new(
@@ -130,10 +134,10 @@ pub fn run(args: &ArgMatches, log_buffer: Arc<Mutex<VecDeque<LogLine>>>) -> Resu
                     err,
                 ))
             })?;
-        let mut player = player::Player::new_from_file_paths(tracks);
+        let mut player = player::Player::new_from_file_paths(config.tracks);
         if args.get_one::<String>("effects-json").is_none() {
-            if let Some(path) = dir_effects_path {
-                match load_effects_json(path.to_string_lossy().as_ref()) {
+            if let Some(path) = config.effects_json_path {
+                match project_files::load_effects_json(path.to_string_lossy().as_ref()) {
                     Ok(effects) => player.set_effects(effects),
                     Err(err) => {
                         error!("Failed to load effects json from directory: {}", err);
@@ -192,7 +196,7 @@ pub fn run(args: &ArgMatches, log_buffer: Arc<Mutex<VecDeque<LogLine>>>) -> Resu
     player.set_track_eos_ms(track_eos_ms);
     let effects_json_path = args.get_one::<String>("effects-json").cloned();
     if let Some(path) = effects_json_path.as_deref() {
-        match load_effects_json(path) {
+        match project_files::load_effects_json(path) {
             Ok(effects) => player.set_effects(effects),
             Err(err) => {
                 error!("Failed to load effects json: {}", err);
@@ -318,170 +322,6 @@ pub fn run(args: &ArgMatches, log_buffer: Arc<Mutex<VecDeque<LogLine>>>) -> Resu
     Ok(0)
 }
 
-#[derive(Debug, Clone, Deserialize)]
-struct JsonPathsTrack {
-    file_paths: Vec<String>,
-    #[serde(default = "default_level")]
-    level: f32,
-    #[serde(default)]
-    pan: f32,
-    #[serde(default = "default_selections_count")]
-    selections_count: u32,
-    #[serde(default)]
-    shuffle_points: Vec<String>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(untagged)]
-enum ShuffleScheduleFile {
-    Tracks(Vec<JsonPathsTrack>),
-    Wrapped { tracks: Vec<JsonPathsTrack> },
-}
-
-fn default_level() -> f32 {
-    1.0
-}
-
-fn default_selections_count() -> u32 {
-    1
-}
-
-fn load_directory_playback_config(
-    root: &Path,
-) -> std::result::Result<(Vec<PathsTrack>, Option<PathBuf>), String> {
-    let shuffle_path = root.join("shuffle_schedule.json");
-    let effects_path = root.join("effects_chain.json");
-
-    let tracks = if shuffle_path.is_file() {
-        load_paths_tracks_json(root, &shuffle_path)?
-    } else {
-        discover_paths_tracks_from_directory(root)?
-    };
-
-    if tracks.is_empty() {
-        return Err(format!(
-            "No audio files found under directory: {}",
-            root.display()
-        ));
-    }
-
-    let effects = if effects_path.is_file() {
-        Some(effects_path)
-    } else {
-        None
-    };
-
-    Ok((tracks, effects))
-}
-
-fn load_paths_tracks_json(
-    root: &Path,
-    path: &Path,
-) -> std::result::Result<Vec<PathsTrack>, String> {
-    let raw = fs::read_to_string(path)
-        .map_err(|err| format!("failed to read {}: {}", path.display(), err))?;
-    let parsed: ShuffleScheduleFile = serde_json::from_str(&raw)
-        .map_err(|err| format!("failed to parse {}: {}", path.display(), err))?;
-    let json_tracks = match parsed {
-        ShuffleScheduleFile::Tracks(tracks) => tracks,
-        ShuffleScheduleFile::Wrapped { tracks } => tracks,
-    };
-
-    let mut tracks = Vec::with_capacity(json_tracks.len());
-    for track in json_tracks {
-        let mut resolved = Vec::with_capacity(track.file_paths.len());
-        for entry in track.file_paths {
-            let candidate = Path::new(&entry);
-            let resolved_path = if candidate.is_absolute() {
-                candidate.to_path_buf()
-            } else {
-                root.join(candidate)
-            };
-            if !resolved_path.is_file() {
-                return Err(format!(
-                    "shuffle_schedule.json references missing file: {}",
-                    resolved_path.display()
-                ));
-            }
-            resolved.push(resolved_path.to_string_lossy().to_string());
-        }
-        tracks.push(PathsTrack {
-            file_paths: resolved,
-            level: track.level,
-            pan: track.pan,
-            selections_count: track.selections_count.max(1),
-            shuffle_points: track.shuffle_points,
-        });
-    }
-
-    Ok(tracks)
-}
-
-fn discover_paths_tracks_from_directory(root: &Path) -> std::result::Result<Vec<PathsTrack>, String> {
-    let mut grouped: BTreeMap<String, Vec<String>> = BTreeMap::new();
-    collect_audio_files_recursive(root, root, &mut grouped)
-        .map_err(|err| format!("failed to scan {}: {}", root.display(), err))?;
-
-    let mut tracks = Vec::new();
-    for (_group, mut files) in grouped {
-        files.sort();
-        files.dedup();
-        if !files.is_empty() {
-            tracks.push(PathsTrack::new_from_file_paths(files));
-        }
-    }
-    Ok(tracks)
-}
-
-fn collect_audio_files_recursive(
-    root: &Path,
-    dir: &Path,
-    grouped: &mut BTreeMap<String, Vec<String>>,
-) -> io::Result<()> {
-    for entry in fs::read_dir(dir)? {
-        let entry = entry?;
-        let path = entry.path();
-        if path.is_dir() {
-            collect_audio_files_recursive(root, &path, grouped)?;
-            continue;
-        }
-        if !is_supported_audio_file(&path) {
-            continue;
-        }
-        let parent = path.parent().unwrap_or(root);
-        let rel_parent = parent.strip_prefix(root).unwrap_or(parent);
-        let key = if rel_parent.as_os_str().is_empty() {
-            ".".to_string()
-        } else {
-            rel_parent.to_string_lossy().to_string()
-        };
-        grouped
-            .entry(key)
-            .or_default()
-            .push(path.to_string_lossy().to_string());
-    }
-    Ok(())
-}
-
-fn is_supported_audio_file(path: &Path) -> bool {
-    let ext = path
-        .extension()
-        .and_then(|ext| ext.to_str())
-        .map(|ext| ext.to_ascii_lowercase());
-    matches!(
-        ext.as_deref(),
-        Some("wav")
-            | Some("wave")
-            | Some("flac")
-            | Some("aif")
-            | Some("aiff")
-            | Some("mp3")
-            | Some("m4a")
-            | Some("aac")
-            | Some("ogg")
-            | Some("opus")
-    )
-}
 
 #[derive(Serialize)]
 struct PeakWindow {
@@ -658,7 +498,7 @@ fn print_peaks_json(peaks: &proteus_lib::peaks::PeaksData) -> i32 {
 }
 
 fn run_create_effects_json() -> i32 {
-    let effects = default_effects_chain();
+    let effects = project_files::default_effects_chain_enabled();
     match serde_json::to_string_pretty(&effects) {
         Ok(json) => {
             println!("{}", json);
@@ -668,46 +508,6 @@ fn run_create_effects_json() -> i32 {
             error!("Failed to serialize effects: {}", err);
             -1
         }
-    }
-}
-
-fn default_effects_chain() -> Vec<AudioEffect> {
-    vec![
-        AudioEffect::ConvolutionReverb(ConvolutionReverbEffect::default()),
-        AudioEffect::DiffusionReverb(DiffusionReverbEffect::default()),
-        AudioEffect::DelayReverb(DelayReverbEffect::default()),
-        AudioEffect::LowPassFilter(LowPassFilterEffect::default()),
-        AudioEffect::HighPassFilter(HighPassFilterEffect::default()),
-        AudioEffect::Distortion(DistortionEffect::default()),
-        AudioEffect::Gain(GainEffect::default()),
-        AudioEffect::Compressor(CompressorEffect::default()),
-        AudioEffect::Limiter(LimiterEffect::default()),
-        AudioEffect::MultibandEq(MultibandEqEffect::default()),
-    ]
-}
-
-fn load_effects_json(path: &str) -> std::result::Result<Vec<AudioEffect>, String> {
-    let raw =
-        fs::read_to_string(path).map_err(|err| format!("failed to read {}: {}", path, err))?;
-    serde_json::from_str(&raw).map_err(|err| format!("failed to parse json: {}", err))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::io::Write;
-    use tempfile::NamedTempFile;
-
-    #[test]
-    fn load_effects_json_parses_effects() {
-        let effects = default_effects_chain();
-        let json = serde_json::to_string_pretty(&effects).expect("serialize effects");
-
-        let mut file = NamedTempFile::new().expect("temp file");
-        file.write_all(json.as_bytes()).expect("write json");
-
-        let loaded = load_effects_json(file.path().to_str().unwrap()).expect("load json");
-        assert_eq!(loaded.len(), effects.len());
     }
 }
 
