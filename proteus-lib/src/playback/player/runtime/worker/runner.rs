@@ -98,9 +98,15 @@ pub(in crate::playback::player::runtime) fn run_playback_thread(
 
     let receiver = engine.start_receiver();
     loop {
+        if ctx.abort.load(Ordering::SeqCst) {
+            break;
+        }
         match receiver.recv_timeout(Duration::from_millis(20)) {
             Ok(chunk) => {
                 update_sink(&ctx, &mut loop_state, playback_id, chunk);
+                if ctx.abort.load(Ordering::SeqCst) {
+                    break;
+                }
             }
             Err(RecvTimeoutError::Timeout) => {
                 update_chunk_lengths(&ctx, &mut loop_state);
