@@ -76,6 +76,7 @@ pub fn spawn_mix_thread(
 
     let handle = thread::spawn(move || {
         const MIN_MIX_MS: f32 = 30.0;
+        let mut running_count = 0;
 
         let prot_locked = prot.clone();
         let (instance_plan, container_path, mut effect_context, track_mix_settings_by_slot) = {
@@ -359,6 +360,8 @@ pub fn spawn_mix_thread(
             }
 
             if let Some(samples) = samples_for_processing {
+                running_count += samples.len();
+                info!("Processed {} samples so far!", running_count);
                 if samples.len() < convolution_batch_samples {
                     warn!(
                         "Only processing {} samples! (Convolution wants {})",

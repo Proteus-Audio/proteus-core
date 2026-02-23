@@ -786,6 +786,10 @@ impl BufferMixer {
                     continue;
                 }
 
+                if instance.finished && instance.buffer.len() == 0 {
+                    continue;
+                }
+
                 let divisor = 176;
                 let mut logging_buffer: Vec<&str> =
                     Vec::with_capacity((to_consume as f64 / divisor as f64).ceil() as usize);
@@ -806,6 +810,15 @@ impl BufferMixer {
                 self.decode_backpressure
                     .on_samples_popped(*instance_index, popped_samples);
                 debug!("Popped {} samples from i{}", popped_samples, instance_index);
+
+                if popped_samples == 0 {
+                    warn!(
+                        "ZERO! i{} ( finished: {}, len: {} )",
+                        instance.meta.instance_id,
+                        instance.finished,
+                        instance.buffer.len()
+                    );
+                }
 
                 log_buffer(instance, logging_buffer);
             }
