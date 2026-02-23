@@ -1,8 +1,6 @@
 //! Schedule-driven source router and logical-track mixer.
 
-use std::collections::{HashMap, HashSet};
-
-use dasp_ring_buffer::Bounded;
+use std::collections::{HashMap, HashSet, VecDeque};
 use log::{error, info, warn};
 
 use crate::{
@@ -57,7 +55,8 @@ pub(crate) struct RouteDecision {
 #[derive(Debug)]
 struct BufferInstance {
     meta: RuntimeInstanceMeta,
-    buffer: Bounded<Vec<f32>>,
+    buffer: VecDeque<f32>,
+    buffer_capacity_samples: usize,
     full: bool,
     finished: bool,
     produced_samples: u64,
@@ -69,7 +68,8 @@ impl BufferInstance {
     fn new(meta: RuntimeInstanceMeta, capacity_samples: usize) -> Self {
         Self {
             meta,
-            buffer: Bounded::from(vec![0.0_f32; capacity_samples.max(1)]),
+            buffer: VecDeque::with_capacity(capacity_samples.max(1)),
+            buffer_capacity_samples: capacity_samples.max(1),
             full: false,
             finished: false,
             produced_samples: 0,
@@ -199,18 +199,18 @@ impl BufferMixer {
                 .map(|(_, end)| *end < samples.len())
                 .unwrap_or(false);
 
-            if last_of_window || (first_window_start > 0.0 && first_window_start > packet_ts) {
-                info!(
-                    "Instance {} / Track {} / Time {} / Overlap {:?} / Cover {:?}",
-                    instance.meta.instance_id,
-                    instance.meta.logical_track_index,
-                    // samples.len(),
-                    packet_ts,
-                    overlap,
-                    cover,
-                    // first_window.unwrap()
-                );
-            }
+            // if last_of_window || (first_window_start > 0.0 && first_window_start > packet_ts) {
+            info!(
+                "Instance {} / Track {} / Time {} / Overlap {:?} / Cover {:?}",
+                instance.meta.instance_id,
+                instance.meta.logical_track_index,
+                // samples.len(),
+                packet_ts,
+                overlap,
+                cover,
+                // first_window.unwrap()
+            );
+            // }
 
             let mut wrote_real = false;
             let mut wrote_zero = false;
@@ -223,6 +223,7 @@ impl BufferMixer {
 
                         if push_slice(
                             &mut instance.buffer,
+                            instance.buffer_capacity_samples,
                             &samples[start_sample..end_sample],
                             &mut instance.full,
                         ) {
@@ -235,8 +236,12 @@ impl BufferMixer {
                     Cover::Underlay((start_sample, end_sample)) => {
                         let length = end_sample - start_sample;
 
-                        if push_slice(&mut instance.buffer, &vec![0.0; length], &mut instance.full)
-                        {
+                        if push_slice(
+                            &mut instance.buffer,
+                            instance.buffer_capacity_samples,
+                            &vec![0.0; length],
+                            &mut instance.full,
+                        ) {
                             wrote_zero = true;
                         }
                         instance.zero_filled_samples = instance
@@ -453,7 +458,7 @@ impl BufferMixer {
                 let mut aggregate_value = 0.0;
                 for sample in track_buffer.iter_mut().take(to_consume) {
                     count += 1;
-                    if let Some(value) = instance.buffer.pop() {
+                    if let Some(value) = instance.buffer.pop_front() {
                         if count % divisor == 0 {
                             logging_buffer.push(if aggregate_value != 0.0 { "X" } else { "_" });
                         }
@@ -537,15 +542,20 @@ impl BufferMixer {
     }
 }
 
-fn push_slice(buffer: &mut Bounded<Vec<f32>>, slice: &[f32], full_flag: &mut bool) -> bool {
+fn push_slice(
+    buffer: &mut VecDeque<f32>,
+    capacity_samples: usize,
+    slice: &[f32],
+    full_flag: &mut bool,
+) -> bool {
     let mut wrote = false;
     let mut overflow = false;
     for sample in slice.iter().copied() {
-        if buffer.len() >= buffer.max_len() {
+        if buffer.len() >= capacity_samples.max(1) {
             overflow = true;
             break;
         }
-        buffer.push(sample);
+        buffer.push_back(sample);
         wrote = true;
     }
     *full_flag = overflow;
