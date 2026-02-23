@@ -341,6 +341,7 @@ pub(crate) struct BufferMixer {
     slot_to_logical: HashMap<usize, usize>,
     decode_backpressure: Arc<DecodeBackpressure>,
     crossfade_ms: usize,
+    pop_warning: Vec<usize>,
 }
 
 impl BufferMixer {
@@ -354,6 +355,7 @@ impl BufferMixer {
         mix_chunk_samples: usize,
     ) -> Self {
         clear_logfile();
+        // println!("Shuffle plan: {:?}", plan);
         let mut instances = Vec::with_capacity(plan.instances.len());
         let mut slot_to_logical = HashMap::new();
         for meta in plan.instances {
@@ -382,6 +384,7 @@ impl BufferMixer {
             slot_to_logical,
             decode_backpressure,
             crossfade_ms: 2,
+            pop_warning: Vec::new(),
         }
     }
 
@@ -786,10 +789,6 @@ impl BufferMixer {
                     continue;
                 }
 
-                if instance.finished && instance.buffer.len() == 0 {
-                    continue;
-                }
-
                 let divisor = 176;
                 let mut logging_buffer: Vec<&str> =
                     Vec::with_capacity((to_consume as f64 / divisor as f64).ceil() as usize);
@@ -811,13 +810,14 @@ impl BufferMixer {
                     .on_samples_popped(*instance_index, popped_samples);
                 debug!("Popped {} samples from i{}", popped_samples, instance_index);
 
-                if popped_samples == 0 {
+                if popped_samples == 0 && !self.pop_warning.contains(&instance.meta.instance_id) {
                     warn!(
-                        "ZERO! i{} ( finished: {}, len: {} )",
+                        "ZERO! i{} ( finished: {}, ts: {} )",
                         instance.meta.instance_id,
                         instance.finished,
-                        instance.buffer.len()
+                        samples_to_ms(self.consumed_samples, self.sample_rate, self.channels)
                     );
+                    self.pop_warning.push(instance.meta.instance_id);
                 }
 
                 log_buffer(instance, logging_buffer);
