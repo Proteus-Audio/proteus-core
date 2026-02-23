@@ -18,6 +18,7 @@ mod source_spawner;
 mod track_mix;
 mod track_stage;
 mod types;
+mod utils;
 
 pub use runner::spawn_mix_thread;
 pub use types::MixThreadArgs;

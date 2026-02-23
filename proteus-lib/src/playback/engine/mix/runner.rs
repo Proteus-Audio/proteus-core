@@ -4,19 +4,18 @@ use rodio::buffer::SamplesBuffer;
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::Ordering;
 use std::sync::mpsc;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::thread;
 use std::thread::JoinHandle;
 use std::time::Duration;
 
-use log::warn;
+use log::{error, info, warn};
 use symphonia::core::audio::AudioBufferRef;
 use symphonia::core::codecs::{Decoder, DecoderOptions, CODEC_TYPE_NULL};
 use symphonia::core::errors::Error;
 use symphonia::core::formats::{SeekMode, SeekTo};
 use symphonia::core::units::{Time, TimeBase};
 
-use crate::container::prot::ShuffleSource;
 use crate::dsp::effects::{convolution_reverb, AudioEffect, EffectContext};
 use crate::tools::tools::open_file;
 
@@ -141,7 +140,7 @@ pub fn spawn_mix_thread(
             min_mix_samples,
         );
 
-        let (packet_tx, packet_rx) = mpsc::sync_channel::<DecodedPacket>(64);
+        let (packet_tx, packet_rx) = mpsc::sync_channel::<Option<DecodedPacket>>(64);
         let mut decode_workers = DecodeWorkerJoinGuard::default();
 
         let mut track_ids = HashSet::new();
@@ -201,14 +200,19 @@ pub fn spawn_mix_thread(
             }
 
             while let Ok(packet) = packet_rx.try_recv() {
-                if packet.eos_flag {
-                    buffer_mixer.signal_finish(&packet.source_key);
+                if packet.is_none() {
+                    buffer_mixer.signal_finish_all();
                 } else {
-                    let _ = buffer_mixer.route_packet(
-                        &packet.samples,
-                        packet.source_key.clone(),
-                        packet.packet_ts,
-                    );
+                    let packet = packet.unwrap();
+                    if packet.eos_flag {
+                        buffer_mixer.signal_finish(&packet.source_key);
+                    } else {
+                        let _ = buffer_mixer.route_packet(
+                            &packet.samples,
+                            packet.source_key.clone(),
+                            packet.packet_ts,
+                        );
+                    }
                 }
             }
 
@@ -284,6 +288,7 @@ pub fn spawn_mix_thread(
             }
 
             if let Some(samples) = buffer_mixer.take_samples() {
+                info!("Took {} samples!", samples.len());
                 let processed = if let Some(transition) = active_inline_transition.as_mut() {
                     let old_out = run_effect_chain(
                         &mut transition.old_effects,
@@ -351,6 +356,7 @@ pub fn spawn_mix_thread(
                     metrics.finished_track_count = buffer_mixer.finished_instance_count();
                 }
             } else if buffer_mixer.mix_finished() {
+                info!("Mix Finished!!! (in runner)");
                 let drained = if let Some(transition) = active_inline_transition.as_mut() {
                     let old_out =
                         run_effect_chain(&mut transition.old_effects, &[], &effect_context, true);
@@ -409,7 +415,7 @@ fn spawn_file_decode_worker(
     file_path: String,
     start_time: f64,
     channels: u8,
-    sender: mpsc::SyncSender<DecodedPacket>,
+    sender: mpsc::SyncSender<Option<DecodedPacket>>,
     abort: Arc<std::sync::atomic::AtomicBool>,
 ) -> JoinHandle<()> {
     thread::spawn(move || {
@@ -420,12 +426,12 @@ fn spawn_file_decode_worker(
             .find(|track| track.codec_params.codec != CODEC_TYPE_NULL)
             .cloned()
         else {
-            let _ = sender.send(DecodedPacket {
+            let _ = sender.send(Some(DecodedPacket {
                 source_key: SourceKey::FilePath(file_path),
                 packet_ts: 0.0,
                 samples: Vec::new(),
                 eos_flag: true,
-            });
+            }));
             return;
         };
 
@@ -465,12 +471,12 @@ fn spawn_file_decode_worker(
                         continue;
                     }
                     if sender
-                        .send(DecodedPacket {
+                        .send(Some(DecodedPacket {
                             source_key: source_key.clone(),
                             packet_ts,
                             samples,
                             eos_flag: false,
-                        })
+                        }))
                         .is_err()
                     {
                         break;
@@ -481,12 +487,12 @@ fn spawn_file_decode_worker(
             }
         }
 
-        let _ = sender.send(DecodedPacket {
+        let _ = sender.send(Some(DecodedPacket {
             source_key,
             packet_ts: 0.0,
             samples: Vec::new(),
             eos_flag: true,
-        });
+        }));
     })
 }
 
@@ -495,7 +501,7 @@ fn spawn_container_decode_worker(
     track_ids: Vec<u32>,
     start_time: f64,
     channels: u8,
-    sender: mpsc::SyncSender<DecodedPacket>,
+    sender: mpsc::SyncSender<Option<DecodedPacket>>,
     abort: Arc<std::sync::atomic::AtomicBool>,
 ) -> JoinHandle<()> {
     thread::spawn(move || {
@@ -521,12 +527,12 @@ fn spawn_container_decode_worker(
 
         if decoders.is_empty() {
             for track_id in wanted {
-                let _ = sender.send(DecodedPacket {
+                let _ = sender.send(Some(DecodedPacket {
                     source_key: SourceKey::TrackId(track_id),
                     packet_ts: 0.0,
                     samples: Vec::new(),
                     eos_flag: true,
-                });
+                }));
             }
             return;
         }
@@ -551,7 +557,11 @@ fn spawn_container_decode_worker(
 
             let packet = match format.next_packet() {
                 Ok(packet) => packet,
-                Err(_) => break,
+                Err(_) => {
+                    let _ = sender.send(None);
+                    error!("No packet received! End?");
+                    break;
+                }
             };
             let track_id = packet.track_id();
             let Some(decoder) = decoders.get_mut(&track_id) else {
@@ -571,29 +581,35 @@ fn spawn_container_decode_worker(
                         continue;
                     }
                     if sender
-                        .send(DecodedPacket {
+                        .send(Some(DecodedPacket {
                             source_key: SourceKey::TrackId(track_id),
                             packet_ts,
                             samples,
                             eos_flag: false,
-                        })
+                        }))
                         .is_err()
                     {
+                        error!("Breaking! End?");
                         break;
                     }
                 }
-                Err(Error::DecodeError(_)) => {}
-                Err(_) => break,
+                Err(Error::DecodeError(_)) => {
+                    error!("Failed to decode packet");
+                }
+                Err(_) => {
+                    error!("No packet received. End?");
+                    break;
+                }
             }
         }
 
-        for track_id in decoders.keys().copied() {
-            let _ = sender.send(DecodedPacket {
+        for track_id in wanted {
+            let _ = sender.send(Some(DecodedPacket {
                 source_key: SourceKey::TrackId(track_id),
                 packet_ts: 0.0,
                 samples: Vec::new(),
                 eos_flag: true,
-            });
+            }));
         }
     })
 }

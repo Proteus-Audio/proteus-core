@@ -1,6 +1,7 @@
 //! Output-stage DSP helpers for the mix runtime.
 
 use dasp_ring_buffer::Bounded;
+use log::info;
 use rodio::buffer::SamplesBuffer;
 use std::sync::{mpsc, Arc, Mutex};
 #[cfg(feature = "debug")]
@@ -437,5 +438,6 @@ pub(super) fn send_samples(
         log::error!("Failed to send samples: {}", e);
         return SendStatus::Disconnected;
     }
+    // info!("Samples sent successfully of length {}", length_in_seconds);
     SendStatus::Sent
 }

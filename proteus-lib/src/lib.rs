@@ -13,6 +13,7 @@ pub mod audio;
 pub mod container;
 pub mod diagnostics;
 pub mod dsp;
+pub(crate) mod logging;
 pub mod peaks;
 pub mod playback;
 pub mod test_data;
