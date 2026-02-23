@@ -1,8 +1,9 @@
 //! Runner for CLI execution, TUI lifecycle, and playback thread orchestration.
 
 use std::{
-    collections::VecDeque,
+    collections::{BTreeMap, VecDeque},
     fs, io,
+    path::{Path, PathBuf},
     sync::{Arc, Mutex},
     thread::sleep,
     time::Duration,
@@ -19,8 +20,10 @@ use proteus_lib::dsp::effects::{
     DiffusionReverbEffect, DistortionEffect, GainEffect, HighPassFilterEffect, LimiterEffect,
     LowPassFilterEffect, MultibandEqEffect,
 };
+use proteus_lib::container::prot::PathsTrack;
 use proteus_lib::playback::player;
 use ratatui::{backend::CrosstermBackend, Terminal};
+use serde::Deserialize;
 use serde::Serialize;
 use symphonia::core::errors::Result;
 
@@ -112,17 +115,36 @@ pub fn run(args: &ArgMatches, log_buffer: Arc<Mutex<VecDeque<LogLine>>>) -> Resu
         .unwrap();
     let quiet = args.get_flag("quiet");
 
+    let input_path = Path::new(&file_path);
     let is_container = file_path.ends_with(".prot") || file_path.ends_with(".mka");
-    let file_paths = if is_container {
-        vec![vec![]]
-    } else {
-        vec![vec![file_path.clone()]]
-    };
+    let is_directory = input_path.is_dir();
 
     let mut player = if is_container {
         player::Player::new(&file_path)
+    } else if is_directory {
+        let (tracks, dir_effects_path) = load_directory_playback_config(input_path)
+            .map_err(|err| {
+                error!("{}", err);
+                symphonia::core::errors::Error::IoError(std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    err,
+                ))
+            })?;
+        let mut player = player::Player::new_from_file_paths(tracks);
+        if args.get_one::<String>("effects-json").is_none() {
+            if let Some(path) = dir_effects_path {
+                match load_effects_json(path.to_string_lossy().as_ref()) {
+                    Ok(effects) => player.set_effects(effects),
+                    Err(err) => {
+                        error!("Failed to load effects json from directory: {}", err);
+                        return Ok(-1);
+                    }
+                }
+            }
+        }
+        player
     } else {
-        player::Player::new_from_file_paths_legacy(file_paths)
+        player::Player::new_from_file_paths_legacy(vec![vec![file_path.clone()]])
     };
     let start_buffer_ms = args
         .get_one::<String>("start-buffer-ms")
@@ -294,6 +316,171 @@ pub fn run(args: &ArgMatches, log_buffer: Arc<Mutex<VecDeque<LogLine>>>) -> Resu
     }
 
     Ok(0)
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct JsonPathsTrack {
+    file_paths: Vec<String>,
+    #[serde(default = "default_level")]
+    level: f32,
+    #[serde(default)]
+    pan: f32,
+    #[serde(default = "default_selections_count")]
+    selections_count: u32,
+    #[serde(default)]
+    shuffle_points: Vec<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(untagged)]
+enum ShuffleScheduleFile {
+    Tracks(Vec<JsonPathsTrack>),
+    Wrapped { tracks: Vec<JsonPathsTrack> },
+}
+
+fn default_level() -> f32 {
+    1.0
+}
+
+fn default_selections_count() -> u32 {
+    1
+}
+
+fn load_directory_playback_config(
+    root: &Path,
+) -> std::result::Result<(Vec<PathsTrack>, Option<PathBuf>), String> {
+    let shuffle_path = root.join("shuffle_schedule.json");
+    let effects_path = root.join("effects_chain.json");
+
+    let tracks = if shuffle_path.is_file() {
+        load_paths_tracks_json(root, &shuffle_path)?
+    } else {
+        discover_paths_tracks_from_directory(root)?
+    };
+
+    if tracks.is_empty() {
+        return Err(format!(
+            "No audio files found under directory: {}",
+            root.display()
+        ));
+    }
+
+    let effects = if effects_path.is_file() {
+        Some(effects_path)
+    } else {
+        None
+    };
+
+    Ok((tracks, effects))
+}
+
+fn load_paths_tracks_json(
+    root: &Path,
+    path: &Path,
+) -> std::result::Result<Vec<PathsTrack>, String> {
+    let raw = fs::read_to_string(path)
+        .map_err(|err| format!("failed to read {}: {}", path.display(), err))?;
+    let parsed: ShuffleScheduleFile = serde_json::from_str(&raw)
+        .map_err(|err| format!("failed to parse {}: {}", path.display(), err))?;
+    let json_tracks = match parsed {
+        ShuffleScheduleFile::Tracks(tracks) => tracks,
+        ShuffleScheduleFile::Wrapped { tracks } => tracks,
+    };
+
+    let mut tracks = Vec::with_capacity(json_tracks.len());
+    for track in json_tracks {
+        let mut resolved = Vec::with_capacity(track.file_paths.len());
+        for entry in track.file_paths {
+            let candidate = Path::new(&entry);
+            let resolved_path = if candidate.is_absolute() {
+                candidate.to_path_buf()
+            } else {
+                root.join(candidate)
+            };
+            if !resolved_path.is_file() {
+                return Err(format!(
+                    "shuffle_schedule.json references missing file: {}",
+                    resolved_path.display()
+                ));
+            }
+            resolved.push(resolved_path.to_string_lossy().to_string());
+        }
+        tracks.push(PathsTrack {
+            file_paths: resolved,
+            level: track.level,
+            pan: track.pan,
+            selections_count: track.selections_count.max(1),
+            shuffle_points: track.shuffle_points,
+        });
+    }
+
+    Ok(tracks)
+}
+
+fn discover_paths_tracks_from_directory(root: &Path) -> std::result::Result<Vec<PathsTrack>, String> {
+    let mut grouped: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    collect_audio_files_recursive(root, root, &mut grouped)
+        .map_err(|err| format!("failed to scan {}: {}", root.display(), err))?;
+
+    let mut tracks = Vec::new();
+    for (_group, mut files) in grouped {
+        files.sort();
+        files.dedup();
+        if !files.is_empty() {
+            tracks.push(PathsTrack::new_from_file_paths(files));
+        }
+    }
+    Ok(tracks)
+}
+
+fn collect_audio_files_recursive(
+    root: &Path,
+    dir: &Path,
+    grouped: &mut BTreeMap<String, Vec<String>>,
+) -> io::Result<()> {
+    for entry in fs::read_dir(dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.is_dir() {
+            collect_audio_files_recursive(root, &path, grouped)?;
+            continue;
+        }
+        if !is_supported_audio_file(&path) {
+            continue;
+        }
+        let parent = path.parent().unwrap_or(root);
+        let rel_parent = parent.strip_prefix(root).unwrap_or(parent);
+        let key = if rel_parent.as_os_str().is_empty() {
+            ".".to_string()
+        } else {
+            rel_parent.to_string_lossy().to_string()
+        };
+        grouped
+            .entry(key)
+            .or_default()
+            .push(path.to_string_lossy().to_string());
+    }
+    Ok(())
+}
+
+fn is_supported_audio_file(path: &Path) -> bool {
+    let ext = path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| ext.to_ascii_lowercase());
+    matches!(
+        ext.as_deref(),
+        Some("wav")
+            | Some("wave")
+            | Some("flac")
+            | Some("aif")
+            | Some("aiff")
+            | Some("mp3")
+            | Some("m4a")
+            | Some("aac")
+            | Some("ogg")
+            | Some("opus")
+    )
 }
 
 #[derive(Serialize)]

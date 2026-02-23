@@ -7,7 +7,7 @@ pub fn build_cli() -> Command {
     fn with_input_arg(cmd: Command, required: bool) -> Command {
         cmd.arg(
             Arg::new("INPUT")
-                .help("The input file path, or - to use standard input")
+                .help("Input .prot/.mka file, audio file, or directory of nested audio files")
                 .required(required)
                 .index(1),
         )
@@ -160,7 +160,7 @@ pub fn build_cli() -> Command {
         .arg(Arg::new("debug").short('d').help("Show debug output"))
         .arg(
             Arg::new("INPUT")
-                .help("The input file path, or - to use standard input")
+                .help("Input .prot/.mka file, audio file, or directory of nested audio files")
                 .required(false)
                 .index(1),
         )
