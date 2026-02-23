@@ -4,6 +4,7 @@ use log::{debug, error, info, warn};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::{Arc, Condvar, Mutex};
 
+use crate::logging::log_on_line;
 use crate::{
     container::prot::{RuntimeInstanceMeta, RuntimeInstancePlan, ShuffleSource},
     logging::{clear_logfile, log},
@@ -75,6 +76,7 @@ struct DecodeBackpressureInstance {
 #[derive(Debug, Default)]
 struct DecodeBackpressureState {
     shutdown: bool,
+    waiting_threads: usize,
     instances: Vec<DecodeBackpressureInstance>,
     source_to_instances: HashMap<SourceKey, Vec<usize>>,
 }
@@ -159,7 +161,9 @@ impl DecodeBackpressure {
                 );
             }
             wait_count = wait_count.saturating_add(1);
+            guard.waiting_threads = guard.waiting_threads.saturating_add(1);
             guard = self.cv.wait(guard).unwrap();
+            guard.waiting_threads = guard.waiting_threads.saturating_sub(1);
             info!(
                 "decode_backpressure wait wake: source={:?} required_samples={} waits={}",
                 source, required_samples, wait_count
@@ -230,6 +234,10 @@ impl DecodeBackpressure {
         guard.shutdown = true;
         debug!("decode_backpressure shutdown");
         self.cv.notify_all();
+    }
+
+    pub(crate) fn has_waiters(&self) -> bool {
+        self.state.lock().unwrap().waiting_threads > 0
     }
 }
 
@@ -616,6 +624,31 @@ impl BufferMixer {
     }
 
     /// Fill-state aggregate for one logical track.
+    pub(crate) fn instance_buffer_fills(&self) -> Vec<(usize, usize)> {
+        self.instances
+            .iter()
+            .map(|instance| (instance.meta.instance_id, instance.buffer.len()))
+            .collect()
+    }
+
+    /// Fill-state aggregate for one logical track.
+    pub(crate) fn tracks_fill_state(&self) -> Vec<FillState> {
+        let tracks: Vec<FillState> = self
+            .track_instances
+            .iter()
+            .map(|instance_ids| {
+                aggregate_fill_state(
+                    instance_ids
+                        .iter()
+                        .map(|instance_index| self.instances[*instance_index].full),
+                )
+            })
+            .collect();
+
+        tracks
+    }
+
+    /// Fill-state aggregate for one logical track.
     pub(crate) fn track_fill_state(&self, logical_track_index: usize) -> FillState {
         let Some(instances) = self.track_instances.get(logical_track_index) else {
             return FillState::NotFull;
@@ -677,7 +710,10 @@ impl BufferMixer {
 
         let to_consume = min_ready_samples.min(self.mix_chunk_samples);
 
-        if !self.mix_finished() && to_consume < self.mix_chunk_samples {
+        if !self.mix_finished()
+            && to_consume < self.mix_chunk_samples
+            && !self.decode_backpressure.has_waiters()
+        {
             return None;
         }
 
@@ -710,7 +746,7 @@ impl BufferMixer {
                     continue;
                 }
 
-                let divisor = 88;
+                let divisor = 176;
                 let mut logging_buffer: Vec<&str> =
                     Vec::with_capacity((to_consume as f64 / divisor as f64).ceil() as usize);
                 let mut count = 1;
@@ -729,6 +765,7 @@ impl BufferMixer {
                 }
                 self.decode_backpressure
                     .on_samples_popped(*instance_index, popped_samples);
+                info!("Popped {} samples from i{}", popped_samples, instance_index);
 
                 log_buffer(instance, logging_buffer);
             }
@@ -951,15 +988,17 @@ fn log_buffer_header(
 ) {
     let consumed_ms = samples_to_ms(consumed_samples, sample_rate, channels);
 
-    log(&format!(
-        "Track {:?} \n{}\n   ∨\n",
-        logical_track_index, consumed_ms
-    ));
+    log(&format!("T{:?}\n{}\n", logical_track_index, consumed_ms));
 }
 
 fn log_buffer(instance: &BufferInstance, map: Vec<&str>) {
     let instance_id = instance.meta.instance_id;
-    log(&format!("[{}] <- {}\n", map.join(""), instance_id));
+    log(&format!("[{}] <- i{}\n", map.join(""), instance_id));
+
+    // let result = log_on_line(&format!("[{}]", map.join("")), instance_id + 2);
+    // if let Err(e) = result {
+    //     error!("Failed to log_on_line: {}", e);
+    // }
 }
 
 fn window_end_samples(

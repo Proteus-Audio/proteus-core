@@ -17,6 +17,7 @@ use symphonia::core::formats::{SeekMode, SeekTo};
 use symphonia::core::units::{Time, TimeBase};
 
 use crate::dsp::effects::{convolution_reverb, AudioEffect, EffectContext};
+use crate::logging::pivot_buffer_trace::pivot_buffer;
 use crate::tools::tools::open_file;
 
 use super::buffer_mixer::{BufferMixer, DecodeBackpressure, SourceKey};
@@ -72,7 +73,7 @@ pub fn spawn_mix_thread(
     } = args;
 
     let handle = thread::spawn(move || {
-        const MIN_MIX_MS: f32 = 300.0;
+        const MIN_MIX_MS: f32 = 30.0;
 
         let prot_locked = prot.clone();
         let (instance_plan, container_path, mut effect_context, track_mix_settings_by_slot) = {
@@ -290,6 +291,7 @@ pub fn spawn_mix_thread(
                 if buffer_mixer.mix_ready_with_min_samples(start_samples.max(min_mix_samples)) {
                     started = true;
                 } else {
+                    error!("We've stopped in a strange place");
                     thread::sleep(Duration::from_millis(10));
                     continue;
                 }
@@ -364,6 +366,7 @@ pub fn spawn_mix_thread(
                     metrics.finished_track_count = buffer_mixer.finished_instance_count();
                 }
             } else if buffer_mixer.mix_finished() {
+                pivot_buffer();
                 info!("Mix Finished!!! (in runner)");
                 let drained = if let Some(transition) = active_inline_transition.as_mut() {
                     let old_out =
