@@ -8,6 +8,8 @@ use std::sync::Arc;
 use std::thread;
 use std::thread::JoinHandle;
 use std::time::Duration;
+#[cfg(feature = "debug")]
+use std::time::Instant;
 
 use log::{debug, error, info, warn};
 use symphonia::core::audio::AudioBufferRef;
@@ -208,6 +210,18 @@ pub fn spawn_mix_thread(
         let mut last_effects_reset = effects_reset.load(Ordering::SeqCst);
         let mut active_inline_transition: Option<ActiveInlineTransition> = None;
         let mut pending_mix_samples: Vec<f32> = Vec::new();
+        #[cfg(feature = "debug")]
+        let alpha = 0.1_f64;
+        #[cfg(feature = "debug")]
+        let mut avg_overrun_ms = 0.0_f64;
+        #[cfg(feature = "debug")]
+        let mut max_overrun_ms = 0.0_f64;
+        #[cfg(feature = "debug")]
+        let mut avg_chain_ksps = 0.0_f64;
+        #[cfg(feature = "debug")]
+        let mut min_chain_ksps = f64::INFINITY;
+        #[cfg(feature = "debug")]
+        let mut max_chain_ksps = 0.0_f64;
 
         loop {
             if abort.load(Ordering::SeqCst) {
@@ -352,6 +366,17 @@ pub fn spawn_mix_thread(
                         convolution_batch_samples
                     )
                 };
+                #[cfg(feature = "debug")]
+                let audio_time_ms = if audio_info.channels > 0 && audio_info.sample_rate > 0 {
+                    (samples.len() as f64
+                        / audio_info.channels as f64
+                        / audio_info.sample_rate as f64)
+                        * 1000.0
+                } else {
+                    0.0
+                };
+                #[cfg(feature = "debug")]
+                let dsp_start = Instant::now();
                 let processed = if let Some(transition) = active_inline_transition.as_mut() {
                     let old_out = run_effect_chain(
                         &mut transition.old_effects,
@@ -394,6 +419,57 @@ pub fn spawn_mix_thread(
                     let mut effects_guard = effects.lock().unwrap();
                     run_effect_chain(&mut effects_guard, &samples, &effect_context, false)
                 };
+
+                #[cfg(feature = "debug")]
+                {
+                    let dsp_time_ms = dsp_start.elapsed().as_secs_f64() * 1000.0;
+                    let rt_factor = if audio_time_ms > 0.0 {
+                        dsp_time_ms / audio_time_ms
+                    } else {
+                        0.0
+                    };
+                    let overrun_ms = (dsp_time_ms - audio_time_ms).max(0.0);
+                    let overrun = rt_factor > 1.0;
+                    let chain_ksps = if dsp_time_ms > 0.0 {
+                        (processed.len() as f64 / (dsp_time_ms / 1000.0)) / 1000.0
+                    } else {
+                        0.0
+                    };
+
+                    avg_overrun_ms = if avg_overrun_ms == 0.0 {
+                        overrun_ms
+                    } else {
+                        (avg_overrun_ms * (1.0 - alpha)) + (overrun_ms * alpha)
+                    };
+                    avg_chain_ksps = if avg_chain_ksps == 0.0 {
+                        chain_ksps
+                    } else {
+                        (avg_chain_ksps * (1.0 - alpha)) + (chain_ksps * alpha)
+                    };
+
+                    if overrun_ms > 0.0 {
+                        max_overrun_ms = max_overrun_ms.max(overrun_ms);
+                    }
+                    if chain_ksps > 0.0 {
+                        min_chain_ksps = min_chain_ksps.min(chain_ksps);
+                        max_chain_ksps = max_chain_ksps.max(chain_ksps);
+                    }
+
+                    if let Ok(mut metrics) = dsp_metrics.lock() {
+                        metrics.overrun = overrun;
+                        metrics.overrun_ms = overrun_ms;
+                        metrics.avg_overrun_ms = avg_overrun_ms;
+                        metrics.max_overrun_ms = max_overrun_ms;
+                        metrics.chain_ksps = chain_ksps;
+                        metrics.avg_chain_ksps = avg_chain_ksps;
+                        metrics.min_chain_ksps = if min_chain_ksps.is_finite() {
+                            min_chain_ksps
+                        } else {
+                            0.0
+                        };
+                        metrics.max_chain_ksps = max_chain_ksps;
+                    }
+                }
 
                 let input_channels = audio_info.channels as u16;
                 let sample_rate = audio_info.sample_rate as u32;
