@@ -124,7 +124,7 @@ impl DecodeBackpressure {
         let mut wait_count = 0usize;
         loop {
             if guard.shutdown || abort.load(std::sync::atomic::Ordering::Relaxed) {
-                info!(
+                debug!(
                     "decode_backpressure wait abort/shutdown: source={:?} required_samples={} shutdown={} abort={}",
                     source,
                     required_samples,
@@ -136,7 +136,7 @@ impl DecodeBackpressure {
             let status = source_room_status(&guard, source, required_samples);
             if status.allowed {
                 if wait_count > 0 {
-                    info!(
+                    debug!(
                         "decode_backpressure wait satisfied: source={:?} required_samples={} waits={} details={}",
                         source,
                         required_samples,
@@ -147,12 +147,12 @@ impl DecodeBackpressure {
                 return true;
             }
             if wait_count == 0 {
-                info!(
+                debug!(
                     "decode_backpressure wait start: source={:?} required_samples={} details={}",
                     source, required_samples, status.summary
                 );
             } else {
-                info!(
+                debug!(
                     "decode_backpressure wait continue: source={:?} required_samples={} waits={} details={}",
                     source,
                     required_samples,
@@ -164,7 +164,7 @@ impl DecodeBackpressure {
             guard.waiting_threads = guard.waiting_threads.saturating_add(1);
             guard = self.cv.wait(guard).unwrap();
             guard.waiting_threads = guard.waiting_threads.saturating_sub(1);
-            info!(
+            debug!(
                 "decode_backpressure wait wake: source={:?} required_samples={} waits={}",
                 source, required_samples, wait_count
             );
@@ -403,10 +403,6 @@ impl BufferMixer {
             };
         }
 
-        if self.mix_finished() {
-            info!("Finished!");
-        }
-
         let mut decision = RouteDecision::default();
         for (instance_index, instance) in self.instances.iter_mut().enumerate() {
             if instance.finished {
@@ -418,7 +414,7 @@ impl BufferMixer {
             }
 
             if instance_past_window_ts(instance, &packet_ts) {
-                info!(
+                debug!(
                     "Instance {} (Track {}) is finished!!",
                     instance.meta.instance_id, instance.meta.logical_track_index
                 );
@@ -452,7 +448,7 @@ impl BufferMixer {
                 .unwrap_or(false);
 
             // if last_of_window || (first_window_start > 0.0 && first_window_start > packet_ts) {
-            info!(
+            debug!(
                 "Instance {} / Track {} / Time {} / Overlap {:?} / Cover {:?}",
                 instance.meta.instance_id,
                 instance.meta.logical_track_index,
@@ -717,8 +713,6 @@ impl BufferMixer {
             return None;
         }
 
-        warn!("To consume: {}", to_consume);
-
         let mut logical_tracks = Vec::with_capacity(self.track_instances.len());
         for (track_index, track_indices) in self.track_instances.iter().enumerate() {
             let mut track_buffer = vec![0.0_f32; to_consume];
@@ -765,7 +759,7 @@ impl BufferMixer {
                 }
                 self.decode_backpressure
                     .on_samples_popped(*instance_index, popped_samples);
-                info!("Popped {} samples from i{}", popped_samples, instance_index);
+                debug!("Popped {} samples from i{}", popped_samples, instance_index);
 
                 log_buffer(instance, logging_buffer);
             }

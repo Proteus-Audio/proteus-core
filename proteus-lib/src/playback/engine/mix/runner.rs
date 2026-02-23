@@ -118,6 +118,11 @@ pub fn spawn_mix_thread(
                     ((min_mix_samples + batch_samples - 1) / batch_samples) * batch_samples;
             }
         }
+        let convolution_batch_samples = if has_convolution {
+            convolution_reverb::preferred_batch_samples(audio_info.channels.max(1) as usize)
+        } else {
+            0
+        };
 
         let mut track_mix_by_logical: HashMap<usize, (f32, f32)> = HashMap::new();
         for instance in instance_plan.instances.iter() {
@@ -202,6 +207,7 @@ pub fn spawn_mix_thread(
         let mut started = start_samples == 0;
         let mut last_effects_reset = effects_reset.load(Ordering::SeqCst);
         let mut active_inline_transition: Option<ActiveInlineTransition> = None;
+        let mut pending_mix_samples: Vec<f32> = Vec::new();
 
         loop {
             if abort.load(Ordering::SeqCst) {
@@ -291,14 +297,61 @@ pub fn spawn_mix_thread(
                 if buffer_mixer.mix_ready_with_min_samples(start_samples.max(min_mix_samples)) {
                     started = true;
                 } else {
-                    error!("We've stopped in a strange place");
                     thread::sleep(Duration::from_millis(10));
                     continue;
                 }
             }
 
-            if let Some(samples) = buffer_mixer.take_samples() {
-                info!("Took {} samples!", samples.len());
+            let mut samples_for_processing = if convolution_batch_samples > 0
+                && pending_mix_samples.len() >= convolution_batch_samples
+            {
+                Some(
+                    pending_mix_samples
+                        .drain(0..convolution_batch_samples)
+                        .collect::<Vec<f32>>(),
+                )
+            } else {
+                None
+            };
+
+            if samples_for_processing.is_none() {
+                if let Some(samples) = buffer_mixer.take_samples() {
+                    // info!("Took {} samples!", samples.len());
+                    if convolution_batch_samples > 0 {
+                        pending_mix_samples.extend_from_slice(&samples);
+                        if pending_mix_samples.len() >= convolution_batch_samples {
+                            samples_for_processing = Some(
+                                pending_mix_samples
+                                    .drain(0..convolution_batch_samples)
+                                    .collect::<Vec<f32>>(),
+                            );
+                        }
+                    } else {
+                        samples_for_processing = Some(samples);
+                    }
+                }
+            }
+
+            if samples_for_processing.is_none()
+                && buffer_mixer.mix_finished()
+                && !pending_mix_samples.is_empty()
+            {
+                let missing_samples =
+                    convolution_batch_samples - pending_mix_samples.len() as usize;
+
+                // Fill up pending_mix to full length
+                pending_mix_samples.append(&mut vec![0.0; missing_samples]);
+                samples_for_processing = Some(pending_mix_samples.drain(..).collect());
+            }
+
+            if let Some(samples) = samples_for_processing {
+                if samples.len() < convolution_batch_samples {
+                    warn!(
+                        "Only processing {} samples! (Convolution wants {})",
+                        samples.len(),
+                        convolution_batch_samples
+                    )
+                };
                 let processed = if let Some(transition) = active_inline_transition.as_mut() {
                     let old_out = run_effect_chain(
                         &mut transition.old_effects,
