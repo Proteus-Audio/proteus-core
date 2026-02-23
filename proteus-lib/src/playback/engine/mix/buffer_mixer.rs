@@ -3,12 +3,13 @@
 use std::collections::{HashMap, HashSet};
 
 use dasp_ring_buffer::Bounded;
-use log::{error, info};
+use log::{error, info, warn};
 
 use crate::{
     container::prot::{RuntimeInstanceMeta, RuntimeInstancePlan, ShuffleSource},
     logging::{clear_logfile, log},
     playback::engine::mix::utils::{map_cover, Cover},
+    track,
 };
 
 use super::track_stage::{apply_track_gain_pan, combine_tracks_equal_weight};
@@ -185,10 +186,6 @@ impl BufferMixer {
             // let cover = map_cover(&overlap, samples.len(), Some(80));
             let cover = map_cover(&overlap, samples.len(), None);
 
-            if overlap.is_empty() {
-                continue;
-            }
-
             let first_window = &instance.meta.active_windows.first();
             let first_window_start = if first_window.is_some() && first_window.unwrap().start_ms > 0
             {
@@ -197,7 +194,10 @@ impl BufferMixer {
                 0.0
             };
 
-            let last_of_window = overlap.last().unwrap().1 < samples.len();
+            let last_of_window = overlap
+                .last()
+                .map(|(_, end)| *end < samples.len())
+                .unwrap_or(false);
 
             if last_of_window || (first_window_start > 0.0 && first_window_start > packet_ts) {
                 info!(
@@ -212,7 +212,8 @@ impl BufferMixer {
                 );
             }
 
-            let mut wrote_any = false;
+            let mut wrote_real = false;
+            let mut wrote_zero = false;
             for section in cover {
                 match section {
                     Cover::Overlap((start_sample, end_sample)) => {
@@ -220,26 +221,24 @@ impl BufferMixer {
                             continue;
                         }
 
-                        wrote_any |= push_slice(
+                        if push_slice(
                             &mut instance.buffer,
                             &samples[start_sample..end_sample],
                             &mut instance.full,
-                        );
+                        ) {
+                            wrote_real = true;
+                        }
                         instance.produced_samples = instance
                             .produced_samples
                             .saturating_add((end_sample - start_sample) as u64);
                     }
                     Cover::Underlay((start_sample, end_sample)) => {
-                        // if start_sample >= end_sample || end_sample > samples.len() {
-                        //     continue;
-                        // }
                         let length = end_sample - start_sample;
 
-                        wrote_any |= push_slice(
-                            &mut instance.buffer,
-                            &vec![0.0; length],
-                            &mut instance.full,
-                        );
+                        if push_slice(&mut instance.buffer, &vec![0.0; length], &mut instance.full)
+                        {
+                            wrote_zero = true;
+                        }
                         instance.zero_filled_samples = instance
                             .zero_filled_samples
                             .saturating_add((end_sample - start_sample) as u64);
@@ -247,24 +246,15 @@ impl BufferMixer {
                     _ => {}
                 }
             }
-            // for (start_sample, end_sample) in overlap {
-            //     if start_sample >= end_sample || end_sample > samples.len() {
-            //         continue;
-            //     }
 
-            //     wrote_any |= push_slice(
-            //         &mut instance.buffer,
-            //         &samples[start_sample..end_sample],
-            //         &mut instance.full,
-            //     );
-            //     instance.produced_samples = instance
-            //         .produced_samples
-            //         .saturating_add((end_sample - start_sample) as u64);
-            // }
-
-            if wrote_any {
+            if wrote_real {
                 decision
                     .sample_targets_written
+                    .push(instance.meta.instance_id);
+            }
+            if wrote_zero {
+                decision
+                    .zero_fill_targets_written
                     .push(instance.meta.instance_id);
             }
         }
@@ -389,7 +379,7 @@ impl BufferMixer {
         for track_indices in &self.track_instances {
             let mut track_min = usize::MAX;
             for instance_index in track_indices {
-                let instance = &self.instances[*instance_index];
+                let instance = &mut self.instances[*instance_index];
                 let available = if !instance_needs_data(
                     instance,
                     self.consumed_samples,
@@ -401,6 +391,7 @@ impl BufferMixer {
                     self.sample_rate,
                     self.channels,
                 ) {
+                    instance.finished = true;
                     usize::MAX
                 } else if instance.buffer.len() > 0 {
                     instance.buffer.len()
@@ -414,17 +405,19 @@ impl BufferMixer {
             ready_samples_per_track.push(track_min);
         }
 
-        let to_consume = ready_samples_per_track
-            .into_iter()
-            .min()
-            .unwrap_or(0)
-            .min(self.mix_chunk_samples);
-        if to_consume == 0 || to_consume == usize::MAX {
+        let min_ready_samples = ready_samples_per_track.into_iter().min().unwrap_or(0);
+
+        if min_ready_samples == 0 || min_ready_samples == usize::MAX {
             return None;
         }
+
+        let to_consume = min_ready_samples.min(self.mix_chunk_samples);
+
         if !self.mix_finished() && to_consume < self.mix_chunk_samples {
             return None;
         }
+
+        warn!("To consume: {}", to_consume);
 
         let mut logical_tracks = Vec::with_capacity(self.track_instances.len());
         for (track_index, track_indices) in self.track_instances.iter().enumerate() {
@@ -652,7 +645,7 @@ fn instance_past_window_ts(instance: &BufferInstance, ts: &f64) -> bool {
         return false;
     };
 
-    *ts > end_ts
+    *ts >= end_ts
 }
 
 fn window_start_samples(instance: &BufferInstance, sample_rate: u32, channels: usize) -> usize {
@@ -800,5 +793,34 @@ mod tests {
             mixer.mix_fill_state(),
             FillState::Partial | FillState::Full
         ));
+    }
+
+    #[test]
+    fn route_packet_zero_fills_when_packet_is_before_window_start() {
+        let plan = RuntimeInstancePlan {
+            logical_track_count: 1,
+            instances: vec![RuntimeInstanceMeta {
+                instance_id: 0,
+                logical_track_index: 0,
+                slot_index: 0,
+                source_key: ShuffleSource::TrackId(1),
+                active_windows: vec![ActiveWindow {
+                    start_ms: 1000,
+                    end_ms: Some(2000),
+                }],
+                selection_index: 0,
+                occurrence_index: 0,
+            }],
+            event_boundaries_ms: vec![0, 1000],
+        };
+        let mut mixer = BufferMixer::new(plan, 48_000, 2, 16, HashMap::new(), 4);
+
+        let decision = mixer.route_packet(&[1.0, 1.0, 1.0, 1.0], SourceKey::TrackId(1), 0.0);
+        assert!(decision.sample_targets_written.is_empty());
+        assert_eq!(decision.zero_fill_targets_written, vec![0]);
+        assert!(mixer.mix_ready());
+
+        let mixed = mixer.take_samples().expect("zero-filled samples");
+        assert_eq!(mixed, vec![0.0, 0.0, 0.0, 0.0]);
     }
 }
