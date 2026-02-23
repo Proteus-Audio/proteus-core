@@ -130,7 +130,12 @@ pub fn spawn_mix_thread(
                 });
         }
 
-        let track_buffer_size = (audio_info.sample_rate as usize * 10).max(start_samples * 2);
+        // BufferMixer stores interleaved samples, so capacity must be expressed in samples
+        // (not frames). The previous `sample_rate * 10` sizing effectively halved capacity
+        // for stereo and increased overflow risk once zero-fill alignment was enabled.
+        let track_buffer_size =
+            ((audio_info.sample_rate as usize * 10) * audio_info.channels.max(1) as usize)
+                .max(start_samples * 2);
         let mut buffer_mixer = BufferMixer::new(
             instance_plan,
             audio_info.sample_rate,
