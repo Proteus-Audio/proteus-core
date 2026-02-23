@@ -9,7 +9,7 @@ use std::thread;
 use std::thread::JoinHandle;
 use std::time::Duration;
 
-use log::{error, info, warn};
+use log::{debug, error, info, warn};
 use symphonia::core::audio::AudioBufferRef;
 use symphonia::core::codecs::{Decoder, DecoderOptions, CODEC_TYPE_NULL};
 use symphonia::core::errors::Error;
@@ -19,7 +19,7 @@ use symphonia::core::units::{Time, TimeBase};
 use crate::dsp::effects::{convolution_reverb, AudioEffect, EffectContext};
 use crate::tools::tools::open_file;
 
-use super::buffer_mixer::{BufferMixer, SourceKey};
+use super::buffer_mixer::{BufferMixer, DecodeBackpressure, SourceKey};
 use super::decoder_events::DecodedPacket;
 use super::effects::run_effect_chain;
 use super::types::ActiveInlineTransition;
@@ -133,9 +133,9 @@ pub fn spawn_mix_thread(
         // BufferMixer stores interleaved samples, so capacity must be expressed in samples
         // (not frames). The previous `sample_rate * 10` sizing effectively halved capacity
         // for stereo and increased overflow risk once zero-fill alignment was enabled.
-        let track_buffer_size =
-            ((audio_info.sample_rate as usize * 10) * audio_info.channels.max(1) as usize)
-                .max(start_samples * 2);
+        let track_buffer_size = ((audio_info.sample_rate as usize * 10)
+            * audio_info.channels.max(1) as usize)
+            .max(start_samples * 2);
         let mut buffer_mixer = BufferMixer::new(
             instance_plan,
             audio_info.sample_rate,
@@ -144,6 +144,7 @@ pub fn spawn_mix_thread(
             track_mix_by_logical,
             min_mix_samples,
         );
+        let decode_backpressure = buffer_mixer.decode_backpressure();
 
         let (packet_tx, packet_rx) = mpsc::sync_channel::<Option<DecodedPacket>>(64);
         let mut decode_workers = DecodeWorkerJoinGuard::default();
@@ -170,6 +171,7 @@ pub fn spawn_mix_thread(
                     audio_info.channels as u8,
                     packet_tx.clone(),
                     abort.clone(),
+                    decode_backpressure.clone(),
                 ));
             }
         }
@@ -181,6 +183,7 @@ pub fn spawn_mix_thread(
                 audio_info.channels as u8,
                 packet_tx.clone(),
                 abort.clone(),
+                decode_backpressure.clone(),
             ));
         }
         drop(packet_tx);
@@ -410,6 +413,7 @@ pub fn spawn_mix_thread(
             finished.push(index as u16);
         }
 
+        decode_backpressure.shutdown();
         drop(decode_workers);
     });
 
@@ -422,6 +426,7 @@ fn spawn_file_decode_worker(
     channels: u8,
     sender: mpsc::SyncSender<Option<DecodedPacket>>,
     abort: Arc<std::sync::atomic::AtomicBool>,
+    decode_backpressure: Arc<DecodeBackpressure>,
 ) -> JoinHandle<()> {
     thread::spawn(move || {
         let (mut decoder, mut format) = open_file(&file_path);
@@ -475,6 +480,31 @@ fn spawn_file_decode_worker(
                     if samples.is_empty() {
                         continue;
                     }
+                    debug!(
+                        "file decode packet ready: source={:?} ts={:.6} samples={}",
+                        source_key,
+                        packet_ts,
+                        samples.len()
+                    );
+                    if !decode_backpressure.wait_for_source_room(
+                        &source_key,
+                        samples.len(),
+                        abort.as_ref(),
+                    ) {
+                        debug!(
+                            "file decode wait interrupted: source={:?} ts={:.6} samples={}",
+                            source_key,
+                            packet_ts,
+                            samples.len()
+                        );
+                        break;
+                    }
+                    debug!(
+                        "file decode packet send: source={:?} ts={:.6} samples={}",
+                        source_key,
+                        packet_ts,
+                        samples.len()
+                    );
                     if sender
                         .send(Some(DecodedPacket {
                             source_key: source_key.clone(),
@@ -508,6 +538,7 @@ fn spawn_container_decode_worker(
     channels: u8,
     sender: mpsc::SyncSender<Option<DecodedPacket>>,
     abort: Arc<std::sync::atomic::AtomicBool>,
+    decode_backpressure: Arc<DecodeBackpressure>,
 ) -> JoinHandle<()> {
     thread::spawn(move || {
         let mut format = crate::tools::tools::get_reader(&file_path);
@@ -585,9 +616,35 @@ fn spawn_container_decode_worker(
                     if samples.is_empty() {
                         continue;
                     }
+                    let source_key = SourceKey::TrackId(track_id);
+                    debug!(
+                        "container decode packet ready: source={:?} ts={:.6} samples={}",
+                        source_key,
+                        packet_ts,
+                        samples.len()
+                    );
+                    if !decode_backpressure.wait_for_source_room(
+                        &source_key,
+                        samples.len(),
+                        abort.as_ref(),
+                    ) {
+                        debug!(
+                            "container decode wait interrupted: source={:?} ts={:.6} samples={}",
+                            source_key,
+                            packet_ts,
+                            samples.len()
+                        );
+                        break;
+                    }
+                    debug!(
+                        "container decode packet send: source={:?} ts={:.6} samples={}",
+                        source_key,
+                        packet_ts,
+                        samples.len()
+                    );
                     if sender
                         .send(Some(DecodedPacket {
-                            source_key: SourceKey::TrackId(track_id),
+                            source_key,
                             packet_ts,
                             samples,
                             eos_flag: false,

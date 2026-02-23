@@ -1,7 +1,8 @@
 //! Schedule-driven source router and logical-track mixer.
 
+use log::{debug, error, info, warn};
 use std::collections::{HashMap, HashSet, VecDeque};
-use log::{error, info, warn};
+use std::sync::{Arc, Condvar, Mutex};
 
 use crate::{
     container::prot::{RuntimeInstanceMeta, RuntimeInstancePlan, ShuffleSource},
@@ -64,6 +65,244 @@ struct BufferInstance {
     eof_reached_ms: Option<u64>,
 }
 
+#[derive(Debug, Clone)]
+struct DecodeBackpressureInstance {
+    capacity_samples: usize,
+    buffered_samples: usize,
+    finished: bool,
+}
+
+#[derive(Debug, Default)]
+struct DecodeBackpressureState {
+    shutdown: bool,
+    instances: Vec<DecodeBackpressureInstance>,
+    source_to_instances: HashMap<SourceKey, Vec<usize>>,
+}
+
+#[derive(Debug, Default)]
+pub(crate) struct DecodeBackpressure {
+    state: Mutex<DecodeBackpressureState>,
+    cv: Condvar,
+}
+
+impl DecodeBackpressure {
+    fn from_instances(instances: &[BufferInstance]) -> Self {
+        let mut state = DecodeBackpressureState::default();
+        state.instances.reserve(instances.len());
+        for (index, instance) in instances.iter().enumerate() {
+            let source = SourceKey::from(&instance.meta.source_key);
+            state
+                .source_to_instances
+                .entry(source.clone())
+                .or_default()
+                .push(index);
+            state.instances.push(DecodeBackpressureInstance {
+                capacity_samples: instance.buffer_capacity_samples,
+                buffered_samples: instance.buffer.len(),
+                finished: instance.finished,
+            });
+        }
+        Self {
+            state: Mutex::new(state),
+            cv: Condvar::new(),
+        }
+    }
+
+    pub(crate) fn wait_for_source_room(
+        &self,
+        source: &SourceKey,
+        required_samples: usize,
+        abort: &std::sync::atomic::AtomicBool,
+    ) -> bool {
+        if required_samples == 0 {
+            return true;
+        }
+
+        let mut guard = self.state.lock().unwrap();
+        let mut wait_count = 0usize;
+        loop {
+            if guard.shutdown || abort.load(std::sync::atomic::Ordering::Relaxed) {
+                info!(
+                    "decode_backpressure wait abort/shutdown: source={:?} required_samples={} shutdown={} abort={}",
+                    source,
+                    required_samples,
+                    guard.shutdown,
+                    abort.load(std::sync::atomic::Ordering::Relaxed)
+                );
+                return false;
+            }
+            let status = source_room_status(&guard, source, required_samples);
+            if status.allowed {
+                if wait_count > 0 {
+                    info!(
+                        "decode_backpressure wait satisfied: source={:?} required_samples={} waits={} details={}",
+                        source,
+                        required_samples,
+                        wait_count,
+                        status.summary
+                    );
+                }
+                return true;
+            }
+            if wait_count == 0 {
+                info!(
+                    "decode_backpressure wait start: source={:?} required_samples={} details={}",
+                    source, required_samples, status.summary
+                );
+            } else {
+                info!(
+                    "decode_backpressure wait continue: source={:?} required_samples={} waits={} details={}",
+                    source,
+                    required_samples,
+                    wait_count,
+                    status.summary
+                );
+            }
+            wait_count = wait_count.saturating_add(1);
+            guard = self.cv.wait(guard).unwrap();
+            info!(
+                "decode_backpressure wait wake: source={:?} required_samples={} waits={}",
+                source, required_samples, wait_count
+            );
+        }
+    }
+
+    fn on_samples_pushed(&self, instance_index: usize, pushed_samples: usize, is_full: bool) {
+        if pushed_samples == 0 && !is_full {
+            return;
+        }
+        let mut guard = self.state.lock().unwrap();
+        if let Some(instance) = guard.instances.get_mut(instance_index) {
+            instance.buffered_samples = instance
+                .buffered_samples
+                .saturating_add(pushed_samples)
+                .min(instance.capacity_samples.max(1));
+            debug!(
+                "decode_backpressure push: instance_index={} pushed_samples={} buffered={} capacity={} finished={} full_flag={}",
+                instance_index,
+                pushed_samples,
+                instance.buffered_samples,
+                instance.capacity_samples,
+                instance.finished,
+                is_full
+            );
+        }
+        if pushed_samples > 0 || !is_full {
+            self.cv.notify_all();
+        }
+    }
+
+    fn on_samples_popped(&self, instance_index: usize, popped_samples: usize) {
+        if popped_samples == 0 {
+            return;
+        }
+        let mut guard = self.state.lock().unwrap();
+        if let Some(instance) = guard.instances.get_mut(instance_index) {
+            instance.buffered_samples = instance.buffered_samples.saturating_sub(popped_samples);
+            debug!(
+                "decode_backpressure pop: instance_index={} popped_samples={} buffered={} capacity={} finished={}",
+                instance_index,
+                popped_samples,
+                instance.buffered_samples,
+                instance.capacity_samples,
+                instance.finished
+            );
+        }
+        self.cv.notify_all();
+    }
+
+    fn on_finished(&self, instance_index: usize) {
+        let mut guard = self.state.lock().unwrap();
+        if let Some(instance) = guard.instances.get_mut(instance_index) {
+            if !instance.finished {
+                instance.finished = true;
+                debug!(
+                    "decode_backpressure finished: instance_index={} buffered={} capacity={}",
+                    instance_index, instance.buffered_samples, instance.capacity_samples
+                );
+                self.cv.notify_all();
+            }
+        }
+    }
+
+    pub(crate) fn shutdown(&self) {
+        let mut guard = self.state.lock().unwrap();
+        guard.shutdown = true;
+        debug!("decode_backpressure shutdown");
+        self.cv.notify_all();
+    }
+}
+
+#[derive(Debug, Clone)]
+struct SourceRoomStatus {
+    allowed: bool,
+    summary: String,
+}
+
+fn source_room_status(
+    state: &DecodeBackpressureState,
+    source: &SourceKey,
+    required_samples: usize,
+) -> SourceRoomStatus {
+    let Some(instance_indices) = state.source_to_instances.get(source) else {
+        return SourceRoomStatus {
+            allowed: true,
+            summary: "no_instances".to_string(),
+        };
+    };
+
+    let mut saw_unfinished = false;
+    let mut all_have_target_room = true;
+    let mut any_has_progress_room = false;
+    let mut parts = Vec::new();
+
+    for instance_index in instance_indices {
+        let Some(instance) = state.instances.get(*instance_index) else {
+            continue;
+        };
+        if instance.finished {
+            parts.push(format!("i{}:finished", instance_index));
+            continue;
+        }
+        saw_unfinished = true;
+        let free = instance
+            .capacity_samples
+            .saturating_sub(instance.buffered_samples);
+
+        // A packet may be larger than the per-instance ring capacity, so "full packet room"
+        // is impossible in that case. Clamp the target to preserve liveness.
+        let target_room = required_samples.min(instance.capacity_samples.max(1));
+        all_have_target_room &= free >= target_room;
+        any_has_progress_room |= free > 0;
+        parts.push(format!(
+            "i{}:buf={}/{} free={} target={}",
+            instance_index, instance.buffered_samples, instance.capacity_samples, free, target_room
+        ));
+    }
+
+    if !saw_unfinished {
+        return SourceRoomStatus {
+            allowed: true,
+            summary: format!("all_finished [{}]", parts.join(", ")),
+        };
+    }
+
+    // Prefer the stricter "all instances have room" check, but allow progress when at least one
+    // unfinished instance can accept data. This avoids deadlocking decode on future/repeated
+    // instances that are already full while current playback still needs packets from the source.
+    let allowed = all_have_target_room || any_has_progress_room;
+    SourceRoomStatus {
+        allowed,
+        summary: format!(
+            "allowed={} all_target={} any_progress={} [{}]",
+            allowed,
+            all_have_target_room,
+            any_has_progress_room,
+            parts.join(", ")
+        ),
+    }
+}
+
 impl BufferInstance {
     fn new(meta: RuntimeInstanceMeta, capacity_samples: usize) -> Self {
         Self {
@@ -90,6 +329,7 @@ pub(crate) struct BufferMixer {
     track_instances: Vec<Vec<usize>>,
     track_mix_settings: HashMap<usize, (f32, f32)>,
     slot_to_logical: HashMap<usize, usize>,
+    decode_backpressure: Arc<DecodeBackpressure>,
 }
 
 impl BufferMixer {
@@ -118,6 +358,8 @@ impl BufferMixer {
             track_instances[instance.meta.logical_track_index].push(index);
         }
 
+        let decode_backpressure = Arc::new(DecodeBackpressure::from_instances(&instances));
+
         Self {
             sample_rate: sample_rate.max(1),
             channels: channels.max(1),
@@ -127,6 +369,7 @@ impl BufferMixer {
             track_instances,
             track_mix_settings,
             slot_to_logical,
+            decode_backpressure,
         }
     }
 
@@ -157,7 +400,7 @@ impl BufferMixer {
         }
 
         let mut decision = RouteDecision::default();
-        for instance in self.instances.iter_mut() {
+        for (instance_index, instance) in self.instances.iter_mut().enumerate() {
             if instance.finished {
                 continue;
             }
@@ -172,6 +415,7 @@ impl BufferMixer {
                     instance.meta.instance_id, instance.meta.logical_track_index
                 );
                 instance.finished = true;
+                self.decode_backpressure.on_finished(instance_index);
                 continue;
             }
 
@@ -221,12 +465,18 @@ impl BufferMixer {
                             continue;
                         }
 
-                        if push_slice(
+                        let push = push_slice(
                             &mut instance.buffer,
                             instance.buffer_capacity_samples,
                             &samples[start_sample..end_sample],
                             &mut instance.full,
-                        ) {
+                        );
+                        self.decode_backpressure.on_samples_pushed(
+                            instance_index,
+                            push.written_samples,
+                            instance.full,
+                        );
+                        if push.wrote_any {
                             wrote_real = true;
                         }
                         instance.produced_samples = instance
@@ -236,12 +486,18 @@ impl BufferMixer {
                     Cover::Underlay((start_sample, end_sample)) => {
                         let length = end_sample - start_sample;
 
-                        if push_slice(
+                        let push = push_slice(
                             &mut instance.buffer,
                             instance.buffer_capacity_samples,
                             &vec![0.0; length],
                             &mut instance.full,
-                        ) {
+                        );
+                        self.decode_backpressure.on_samples_pushed(
+                            instance_index,
+                            push.written_samples,
+                            instance.full,
+                        );
+                        if push.wrote_any {
                             wrote_zero = true;
                         }
                         instance.zero_filled_samples = instance
@@ -272,13 +528,14 @@ impl BufferMixer {
     /// Mark all instances for `source_key` as finished.
     pub(crate) fn signal_finish(&mut self, source_key: &SourceKey) {
         let eof_ms = samples_to_ms(self.consumed_samples, self.sample_rate, self.channels);
-        for instance in self.instances.iter_mut() {
+        for (instance_index, instance) in self.instances.iter_mut().enumerate() {
             if SourceKey::from(&instance.meta.source_key) != *source_key {
                 continue;
             }
             if !instance.finished {
                 instance.finished = true;
                 instance.eof_reached_ms = Some(eof_ms);
+                self.decode_backpressure.on_finished(instance_index);
             }
         }
     }
@@ -286,10 +543,11 @@ impl BufferMixer {
     /// Mark all instances for `source_key` as finished.
     pub(crate) fn signal_finish_all(&mut self) {
         let eof_ms = samples_to_ms(self.consumed_samples, self.sample_rate, self.channels);
-        for instance in self.instances.iter_mut() {
+        for (instance_index, instance) in self.instances.iter_mut().enumerate() {
             if !instance.finished {
                 instance.finished = true;
                 instance.eof_reached_ms = Some(eof_ms);
+                self.decode_backpressure.on_finished(instance_index);
             }
         }
     }
@@ -397,6 +655,7 @@ impl BufferMixer {
                     self.channels,
                 ) {
                     instance.finished = true;
+                    self.decode_backpressure.on_finished(*instance_index);
                     usize::MAX
                 } else if instance.buffer.len() > 0 {
                     instance.buffer.len()
@@ -456,9 +715,11 @@ impl BufferMixer {
                     Vec::with_capacity((to_consume as f64 / divisor as f64).ceil() as usize);
                 let mut count = 1;
                 let mut aggregate_value = 0.0;
+                let mut popped_samples = 0usize;
                 for sample in track_buffer.iter_mut().take(to_consume) {
                     count += 1;
                     if let Some(value) = instance.buffer.pop_front() {
+                        popped_samples = popped_samples.saturating_add(1);
                         if count % divisor == 0 {
                             logging_buffer.push(if aggregate_value != 0.0 { "X" } else { "_" });
                         }
@@ -466,6 +727,8 @@ impl BufferMixer {
                         *sample += value;
                     }
                 }
+                self.decode_backpressure
+                    .on_samples_popped(*instance_index, popped_samples);
 
                 log_buffer(instance, logging_buffer);
             }
@@ -540,6 +803,17 @@ impl BufferMixer {
                 .insert(logical_track_index, (level.max(0.0), pan.clamp(-1.0, 1.0)));
         }
     }
+
+    /// Shared backpressure handle used by decode workers to block until source buffers have room.
+    pub(crate) fn decode_backpressure(&self) -> Arc<DecodeBackpressure> {
+        Arc::clone(&self.decode_backpressure)
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct PushResult {
+    written_samples: usize,
+    wrote_any: bool,
 }
 
 fn push_slice(
@@ -547,8 +821,8 @@ fn push_slice(
     capacity_samples: usize,
     slice: &[f32],
     full_flag: &mut bool,
-) -> bool {
-    let mut wrote = false;
+) -> PushResult {
+    let mut result = PushResult::default();
     let mut overflow = false;
     for sample in slice.iter().copied() {
         if buffer.len() >= capacity_samples.max(1) {
@@ -556,10 +830,11 @@ fn push_slice(
             break;
         }
         buffer.push_back(sample);
-        wrote = true;
+        result.wrote_any = true;
+        result.written_samples += 1;
     }
     *full_flag = overflow;
-    wrote
+    result
 }
 
 fn aggregate_fill_state<I>(states: I) -> FillState
