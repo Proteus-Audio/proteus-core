@@ -397,6 +397,7 @@ impl BufferMixer {
         track_mix_settings: HashMap<usize, (f32, f32)>,
         mix_chunk_samples: usize,
     ) -> Self {
+        #[cfg(feature = "buffer-map")]
         clear_logfile();
         // println!("Shuffle plan: {:?}", plan);
         let mut instances = Vec::with_capacity(plan.instances.len());
@@ -832,6 +833,7 @@ impl BufferMixer {
         for (track_index, track_indices) in self.track_instances.iter().enumerate() {
             let mut track_buffer = vec![0.0_f32; to_consume];
 
+            #[cfg(feature = "buffer-map")]
             log_buffer_header(
                 track_index,
                 self.sample_rate,
@@ -855,20 +857,37 @@ impl BufferMixer {
                     continue;
                 }
 
+                #[cfg(feature = "buffer-map")]
                 let divisor = 176;
+                #[cfg(feature = "buffer-map")]
                 let mut logging_buffer: Vec<&str> =
                     Vec::with_capacity((to_consume as f64 / divisor as f64).ceil() as usize);
+
+                #[cfg(feature = "buffer-map")]
                 let mut count = 1;
+                #[cfg(feature = "buffer-map")]
                 let mut aggregate_value = 0.0;
+
                 let mut popped_samples = 0usize;
                 for sample in track_buffer.iter_mut().take(to_consume) {
-                    count += 1;
+                    #[cfg(feature = "buffer-map")]
+                    {
+                        count += 1;
+                    }
+
                     if let Some(value) = instance.buffer.pop_front() {
                         popped_samples = popped_samples.saturating_add(1);
+
+                        #[cfg(feature = "buffer-map")]
                         if count % divisor == 0 {
                             logging_buffer.push(if aggregate_value != 0.0 { "X" } else { "_" });
                         }
-                        aggregate_value += value;
+
+                        #[cfg(feature = "buffer-map")]
+                        {
+                            aggregate_value += value;
+                        }
+
                         *sample += value;
                     }
                 }
@@ -887,6 +906,7 @@ impl BufferMixer {
                     self.pop_warning.push(instance.meta.instance_id);
                 }
 
+                #[cfg(feature = "buffer-map")]
                 log_buffer(instance, logging_buffer);
             }
 

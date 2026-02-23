@@ -75,7 +75,7 @@ pub fn spawn_mix_thread(
     } = args;
 
     let handle = thread::spawn(move || {
-        const MIN_MIX_MS: f32 = 300.0;
+        const MIN_MIX_MS: f32 = 30.0;
         let mut running_count = 0;
 
         let prot_locked = prot.clone();
@@ -500,6 +500,7 @@ pub fn spawn_mix_thread(
                     metrics.finished_track_count = buffer_mixer.finished_instance_count();
                 }
             } else if buffer_mixer.mix_finished() {
+                #[cfg(feature = "debug")]
                 pivot_buffer();
                 info!("Mix Finished!!! (in runner)");
                 let drained = if let Some(transition) = active_inline_transition.as_mut() {
