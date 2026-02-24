@@ -22,7 +22,8 @@ impl Player {
     /// * `ts` - Target start position in seconds.
     pub fn play_at(&mut self, ts: f64) {
         let trace_ms = current_ms();
-        self.play_command_ms.store(trace_ms, std::sync::atomic::Ordering::Relaxed);
+        self.play_command_ms
+            .store(trace_ms, std::sync::atomic::Ordering::Relaxed);
         info!("play trace: play_at requested ts={:.3}", ts);
         let mut timestamp = self.ts.lock().unwrap();
         *timestamp = ts;
@@ -55,7 +56,8 @@ impl Player {
     /// If no playback thread is currently alive, a new runtime is created.
     pub fn play(&mut self) {
         let trace_ms = current_ms();
-        self.play_command_ms.store(trace_ms, std::sync::atomic::Ordering::Relaxed);
+        self.play_command_ms
+            .store(trace_ms, std::sync::atomic::Ordering::Relaxed);
         info!("Playing audio");
         let thread_exists = self
             .playback_thread_exists

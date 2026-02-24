@@ -3,10 +3,10 @@
 //! This module prepares shared state, resets per-run counters, and spawns the
 //! worker loop that performs decoding handoff and sink append operations.
 
+use log::info;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread;
-use log::info;
 
 use super::super::Player;
 use super::now_ms;
@@ -110,7 +110,10 @@ impl Player {
                 now_ms().saturating_sub(trace_ms)
             );
         } else {
-            info!("play trace: initialize_thread spawned playback_id={}", playback_id);
+            info!(
+                "play trace: initialize_thread spawned playback_id={}",
+                playback_id
+            );
         }
     }
 }

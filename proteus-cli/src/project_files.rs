@@ -47,7 +47,9 @@ fn default_selections_count() -> u32 {
     1
 }
 
-pub fn load_directory_playback_config(root: &Path) -> std::result::Result<DirectoryPlaybackConfig, String> {
+pub fn load_directory_playback_config(
+    root: &Path,
+) -> std::result::Result<DirectoryPlaybackConfig, String> {
     let shuffle_path = root.join("shuffle_schedule.json");
     let effects_path = root.join("effects_chain.json");
 
@@ -219,7 +221,9 @@ fn discover_paths_tracks_json_from_directory(
     Ok(tracks)
 }
 
-fn discover_paths_tracks_from_directory(root: &Path) -> std::result::Result<Vec<PathsTrack>, String> {
+fn discover_paths_tracks_from_directory(
+    root: &Path,
+) -> std::result::Result<Vec<PathsTrack>, String> {
     let grouped = discover_audio_groups(root)?;
     let mut tracks = Vec::new();
     for (_group, files) in grouped {
@@ -234,7 +238,9 @@ fn discover_paths_tracks_from_directory(root: &Path) -> std::result::Result<Vec<
     Ok(tracks)
 }
 
-fn discover_audio_groups(root: &Path) -> std::result::Result<BTreeMap<String, Vec<PathBuf>>, String> {
+fn discover_audio_groups(
+    root: &Path,
+) -> std::result::Result<BTreeMap<String, Vec<PathBuf>>, String> {
     let mut grouped: BTreeMap<String, Vec<PathBuf>> = BTreeMap::new();
     collect_audio_files_recursive(root, root, &mut grouped)
         .map_err(|err| format!("failed to scan {}: {}", root.display(), err))?;

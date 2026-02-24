@@ -162,7 +162,8 @@ pub(in crate::playback::player::runtime) fn run_playback_thread(
 /// # Returns
 ///
 /// `Some(OutputStream)` on success, otherwise `None` after all retries fail.
-pub(in crate::playback::player::runtime) fn open_output_stream_with_retry() -> Option<OutputStream> {
+pub(in crate::playback::player::runtime) fn open_output_stream_with_retry() -> Option<OutputStream>
+{
     for attempt in 1..=OUTPUT_STREAM_OPEN_RETRIES {
         match OutputStreamBuilder::open_default_stream() {
             Ok(stream) => return Some(stream),
@@ -286,7 +287,10 @@ fn resume_sink(ctx: &ThreadContext, sink: &Sink, fade_seconds: f32) {
         sink.play();
         sink.set_volume(target_volume);
         if let Some(elapsed_ms) = play_trace_elapsed_ms(ctx) {
-            info!("play trace: resume_sink sink.play() immediate +{}ms", elapsed_ms);
+            info!(
+                "play trace: resume_sink sink.play() immediate +{}ms",
+                elapsed_ms
+            );
         }
         return;
     }

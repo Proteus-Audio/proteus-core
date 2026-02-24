@@ -24,7 +24,8 @@ const DRAIN_MAX_BLOCKS: usize = 128;
 const DRAIN_SILENCE_EPSILON: f32 = 1.0e-6;
 const DRAIN_SILENT_BLOCKS_TO_STOP: usize = 2;
 
-type ImpulseResponseCacheMap = HashMap<ImpulseResponseCacheKey, Arc<impulse_response::ImpulseResponse>>;
+type ImpulseResponseCacheMap =
+    HashMap<ImpulseResponseCacheKey, Arc<impulse_response::ImpulseResponse>>;
 static IMPULSE_RESPONSE_CACHE: OnceLock<Mutex<ImpulseResponseCacheMap>> = OnceLock::new();
 type ReverbKernelCacheMap = HashMap<ReverbKernelCacheKey, Arc<reverb::Reverb>>;
 static REVERB_KERNEL_CACHE: OnceLock<Mutex<ReverbKernelCacheMap>> = OnceLock::new();
@@ -498,7 +499,8 @@ fn build_cached_reverb(
         return reverb;
     }
 
-    let mut template = reverb::Reverb::new_with_impulse_response(channels, DEFAULT_DRY_WET, impulse_response);
+    let mut template =
+        reverb::Reverb::new_with_impulse_response(channels, DEFAULT_DRY_WET, impulse_response);
     template.clear_state();
     let template = Arc::new(template);
 
