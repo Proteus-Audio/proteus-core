@@ -28,6 +28,7 @@ struct LoopState {
     final_duration: Arc<Mutex<Option<f64>>>,
     last_meter_time: f64,
     append_timing: Arc<Mutex<(Instant, f64, u64, f64)>>,
+    resuming_gate_started_at: Option<Instant>,
 }
 
 impl LoopState {
@@ -52,6 +53,7 @@ impl LoopState {
             final_duration: Arc::new(Mutex::new(None)),
             last_meter_time: 0.0,
             append_timing: Arc::new(Mutex::new((Instant::now(), 0.0, 0, 0.0))),
+            resuming_gate_started_at: None,
         }
     }
 }
@@ -341,6 +343,9 @@ fn check_runtime_state(ctx: &ThreadContext, loop_state: &mut LoopState) -> bool 
 
     // Gate startup/resume until enough chunks are queued to reduce underflow.
     if state == PlayerState::Resuming && start_sink_chunks > 0 && sink.len() < start_sink_chunks {
+        if loop_state.resuming_gate_started_at.is_none() {
+            loop_state.resuming_gate_started_at = Some(Instant::now());
+        }
         sink.pause();
         return true;
     }
@@ -356,11 +361,17 @@ fn check_runtime_state(ctx: &ThreadContext, loop_state: &mut LoopState) -> bool 
     }
 
     if state == PlayerState::Resuming {
+        let resume_gate_wait_ms = loop_state
+            .resuming_gate_started_at
+            .take()
+            .map(|start| start.elapsed().as_millis())
+            .unwrap_or(0);
         if let Some(elapsed_ms) = play_trace_elapsed_ms(ctx) {
             info!(
-                "play trace: resuming gate passed sink_len={} start_sink_chunks={} +{}ms",
+                "play trace: resuming gate passed sink_len={} start_sink_chunks={} gate_wait_ms={} +{}ms",
                 sink.len(),
                 start_sink_chunks,
+                resume_gate_wait_ms,
                 elapsed_ms
             );
         }
@@ -387,6 +398,10 @@ fn check_runtime_state(ctx: &ThreadContext, loop_state: &mut LoopState) -> bool 
             .unwrap()
             .clone_from(&PlayerState::Playing);
         return true;
+    }
+
+    if state != PlayerState::Resuming {
+        loop_state.resuming_gate_started_at = None;
     }
 
     true
