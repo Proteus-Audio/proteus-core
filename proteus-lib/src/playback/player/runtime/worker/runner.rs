@@ -89,16 +89,7 @@ pub(in crate::playback::player::runtime) fn run_playback_thread(
         ctx.inline_track_mix_updates.clone(),
     );
 
-    let stream = match open_output_stream_with_retry() {
-        Some(stream) => stream,
-        None => return,
-    };
-    if let Some(elapsed_ms) = play_trace_elapsed_ms(&ctx) {
-        info!("play trace: output stream opened +{}ms", elapsed_ms);
-    }
-    let mixer = stream.mixer().clone();
-
-    initialize_sink(&ctx, &mixer);
+    initialize_sink(&ctx, &ctx.output_mixer);
     if let Some(elapsed_ms) = play_trace_elapsed_ms(&ctx) {
         info!("play trace: sink initialized +{}ms", elapsed_ms);
     }
@@ -169,7 +160,7 @@ pub(in crate::playback::player::runtime) fn run_playback_thread(
 /// # Returns
 ///
 /// `Some(OutputStream)` on success, otherwise `None` after all retries fail.
-fn open_output_stream_with_retry() -> Option<OutputStream> {
+pub(in crate::playback::player::runtime) fn open_output_stream_with_retry() -> Option<OutputStream> {
     for attempt in 1..=OUTPUT_STREAM_OPEN_RETRIES {
         match OutputStreamBuilder::open_default_stream() {
             Ok(stream) => return Some(stream),

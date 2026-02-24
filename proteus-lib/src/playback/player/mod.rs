@@ -13,7 +13,7 @@ mod effects;
 mod runtime;
 mod settings;
 
-use rodio::Sink;
+use rodio::{OutputStream, Sink};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
@@ -79,6 +79,7 @@ pub struct Player {
     play_command_ms: Arc<AtomicU64>,
     volume: Arc<Mutex<f32>>,
     sink: Arc<Mutex<Sink>>,
+    output_stream: Arc<Mutex<Option<OutputStream>>>,
     reporter: Option<Arc<Mutex<Reporter>>>,
     buffer_settings: Arc<Mutex<PlaybackBufferSettings>>,
     effects: Arc<Mutex<Vec<AudioEffect>>>,
@@ -115,6 +116,7 @@ impl Clone for Player {
             play_command_ms: self.play_command_ms.clone(),
             volume: self.volume.clone(),
             sink: self.sink.clone(),
+            output_stream: self.output_stream.clone(),
             reporter: self.reporter.clone(),
             buffer_settings: self.buffer_settings.clone(),
             effects: self.effects.clone(),
@@ -227,6 +229,7 @@ impl Player {
             play_command_ms: Arc::new(AtomicU64::new(0)),
             volume: Arc::new(Mutex::new(0.8)),
             sink,
+            output_stream: Arc::new(Mutex::new(None)),
             prot,
             reporter: None,
             buffer_settings: Arc::new(Mutex::new(PlaybackBufferSettings::new(20.0))),
