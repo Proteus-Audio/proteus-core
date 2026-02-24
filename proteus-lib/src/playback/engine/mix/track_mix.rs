@@ -150,6 +150,7 @@ mod tests {
     use super::{mix_tracks_into_premix, TrackMixArgs};
 
     #[test]
+    /// Verifies per-track channel gains are applied during premix accumulation.
     fn mix_applies_channel_gains_per_sample_lane() {
         let buffer: TrackBuffer = Arc::new(Mutex::new(Bounded::from(vec![0.0; 8])));
         {
