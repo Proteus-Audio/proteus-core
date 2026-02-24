@@ -11,7 +11,7 @@ This doc explains runtime data flow in `proteus-lib`, from `Player` construction
 - `proteus-lib/src/playback/player/runtime/thread.rs`: playback thread bootstrap.
 - `proteus-lib/src/playback/player/runtime/worker/runner.rs`: worker loop (sink/device side).
 - `proteus-lib/src/playback/engine/mod.rs`: `PlayerEngine` setup and mix-thread wiring.
-- `proteus-lib/src/playback/engine/mix/runner.rs`: hot mixing loop, source spawning, chunk emission.
+- `proteus-lib/src/playback/engine/mix/runner/mod.rs`: hot mixing loop, source spawning, chunk emission (`decode/` submodule contains file/container decode worker spawning helpers).
 - `proteus-lib/src/playback/engine/mix/track_mix.rs`: per-chunk track mixing.
 - `proteus-lib/src/playback/engine/mix/output_stage.rs`: effect-chain output/tail handling.
 - `proteus-lib/src/container/prot.rs`: container/play-settings model, selection, shuffle schedule.
@@ -58,11 +58,11 @@ Main files:
 
 1. Clears previous `finished_tracks` state.
 2. Creates fresh abort flag/playback generation state and resets runtime markers.
-3. Spawns detached worker thread.
-4. Worker thread (`run_playback_thread`) then:
+3. Lazily opens (or reuses) the persistent output stream owned by `Player`, then captures/clones its `rodio::mixer::Mixer`.
+4. Spawns detached worker thread.
+5. Worker thread (`run_playback_thread`) then:
 - Creates `PlayerEngine`.
-- Opens default output stream.
-- Replaces sink with fresh sink connected to current mixer.
+- Replaces sink with fresh sink connected to the provided/reused mixer.
 - Initializes sink paused at muted volume.
 - Seeds startup silence when configured.
 - Starts receiving mixed chunks and appending to sink.
@@ -99,7 +99,7 @@ Main files:
 
 Main files:
 - `proteus-lib/src/playback/engine/mod.rs`
-- `proteus-lib/src/playback/engine/mix/runner.rs`
+- `proteus-lib/src/playback/engine/mix/runner/mod.rs`
 - `proteus-lib/src/playback/engine/mix/track_mix.rs`
 - `proteus-lib/src/playback/engine/mix/output_stage.rs`
 - `proteus-lib/src/track/single.rs`
@@ -128,7 +128,7 @@ For each track definition (`SettingsTrack` or `PathsTrack`):
 
 Main files:
 - `proteus-lib/src/container/prot.rs`
-- `proteus-lib/src/playback/engine/mix/runner.rs`
+- `proteus-lib/src/playback/engine/mix/runner/mod.rs`
 - `proteus-lib/src/playback/engine/mix/track_mix.rs`
 
 ## Control Flows During Playback
@@ -177,7 +177,7 @@ File:
 Main files:
 - `proteus-lib/src/playback/player/runtime/worker/runner.rs`
 - `proteus-lib/src/playback/engine/mod.rs`
-- `proteus-lib/src/playback/engine/mix/runner.rs`
+- `proteus-lib/src/playback/engine/mix/runner/mod.rs`
 
 ## Mental Model Summary
 

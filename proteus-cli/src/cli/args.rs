@@ -7,7 +7,7 @@ pub fn build_cli() -> Command {
     fn with_input_arg(cmd: Command, required: bool) -> Command {
         cmd.arg(
             Arg::new("INPUT")
-                .help("The input file path, or - to use standard input")
+                .help("Input .prot/.mka file, audio file, or directory of nested audio files")
                 .required(required)
                 .index(1),
         )
@@ -160,7 +160,7 @@ pub fn build_cli() -> Command {
         .arg(Arg::new("debug").short('d').help("Show debug output"))
         .arg(
             Arg::new("INPUT")
-                .help("The input file path, or - to use standard input")
+                .help("Input .prot/.mka file, audio file, or directory of nested audio files")
                 .required(false)
                 .index(1),
         )
@@ -281,6 +281,16 @@ pub fn build_cli() -> Command {
                         ),
                     true,
                 )),
+        )
+        .subcommand(
+            Command::new("init")
+                .about("Generate shuffle/effects JSON for a directory of nested audio files")
+                .arg(
+                    Arg::new("INPUT")
+                        .help("Directory containing nested audio files")
+                        .required(true)
+                        .index(1),
+                ),
         )
         .subcommand(
             Command::new("create")

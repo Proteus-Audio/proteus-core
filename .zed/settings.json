@@ -13,5 +13,10 @@
         }
       }
     }
+  },
+  "languages": {
+    "Plain Text": {
+      "soft_wrap": "none"
+    }
   }
 }

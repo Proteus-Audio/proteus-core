@@ -1,0 +1,62 @@
+{
+  "tracks": [
+    {
+      "file_paths": [
+        "bgclar/op_bgclar1.wav",
+        "bgclar/op_bgclar2.wav",
+        "bgclar/op_bgclar3.wav"
+      ],
+      "level": 1.0,
+      "pan": 0.0,
+      "selections_count": 1,
+      "shuffle_points": [
+        "00:20.000",
+        "00:30.000"
+      ]
+    },
+    {
+      "file_paths": [
+        "clar/op_clar1.wav",
+        "clar/op_clar2.wav",
+        "clar/op_clar3.wav"
+      ],
+      "level": 1.0,
+      "pan": 0.0,
+      "selections_count": 1,
+      "shuffle_points": [
+        "00:15.000",
+        "00:30.000"
+      ]
+    },
+    {
+      "file_paths": [
+        "piano/op_piano1.wav",
+        "piano/op_piano2.wav",
+        "piano/op_piano3.wav",
+        "piano/op_piano4.wav"
+      ],
+      "level": 1.0,
+      "pan": 0.0,
+      "selections_count": 1,
+      "shuffle_points": [
+        "00:20.000",
+        "00:25.000"
+      ]
+    },
+    {
+      "file_paths": [
+        "rythmn/op_rythmn1.wav",
+        "rythmn/op_rythmn2.wav",
+        "rythmn/op_rythmn3.wav",
+        "rythmn/op_rythmn4.wav"
+      ],
+      "level": 1.0,
+      "pan": 0.0,
+      "selections_count": 1,
+      "shuffle_points": [
+        "00:05.000",
+        "00:22.000"
+      ]
+    }
+  ]
+}

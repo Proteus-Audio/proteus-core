@@ -7,7 +7,7 @@ use std::sync::{mpsc::RecvTimeoutError, Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use log::{error, warn};
+use log::{error, info, warn};
 
 use crate::playback::engine::PlayerEngine;
 use crate::tools::timer;
@@ -28,6 +28,7 @@ struct LoopState {
     final_duration: Arc<Mutex<Option<f64>>>,
     last_meter_time: f64,
     append_timing: Arc<Mutex<(Instant, f64, u64, f64)>>,
+    resuming_gate_started_at: Option<Instant>,
 }
 
 impl LoopState {
@@ -52,6 +53,7 @@ impl LoopState {
             final_duration: Arc::new(Mutex::new(None)),
             last_meter_time: 0.0,
             append_timing: Arc::new(Mutex::new((Instant::now(), 0.0, 0, 0.0))),
+            resuming_gate_started_at: None,
         }
     }
 }
@@ -70,6 +72,12 @@ pub(in crate::playback::player::runtime) fn run_playback_thread(
 ) {
     let _thread_guard = PlaybackThreadGuard::new(ctx.playback_thread_exists.clone());
     let start_time = ts.unwrap_or(0.0);
+    if let Some(elapsed_ms) = play_trace_elapsed_ms(&ctx) {
+        info!(
+            "play trace: playback worker start playback_id={} ts={:.3} +{}ms",
+            playback_id, start_time, elapsed_ms
+        );
+    }
 
     let mut engine = PlayerEngine::new(
         ctx.prot.clone(),
@@ -83,13 +91,10 @@ pub(in crate::playback::player::runtime) fn run_playback_thread(
         ctx.inline_track_mix_updates.clone(),
     );
 
-    let stream = match open_output_stream_with_retry() {
-        Some(stream) => stream,
-        None => return,
-    };
-    let mixer = stream.mixer().clone();
-
-    initialize_sink(&ctx, &mixer);
+    initialize_sink(&ctx, &ctx.output_mixer);
+    if let Some(elapsed_ms) = play_trace_elapsed_ms(&ctx) {
+        info!("play trace: sink initialized +{}ms", elapsed_ms);
+    }
     set_duration_from_engine(&ctx, &engine);
     set_start_time(&ctx, start_time);
     append_startup_silence(&ctx);
@@ -97,10 +102,26 @@ pub(in crate::playback::player::runtime) fn run_playback_thread(
     let mut loop_state = LoopState::new(start_time);
 
     let receiver = engine.start_receiver();
+    if let Some(elapsed_ms) = play_trace_elapsed_ms(&ctx) {
+        info!("play trace: engine receiver started +{}ms", elapsed_ms);
+    }
+    let mut logged_first_engine_chunk = false;
     loop {
+        if ctx.abort.load(Ordering::SeqCst) {
+            break;
+        }
         match receiver.recv_timeout(Duration::from_millis(20)) {
             Ok(chunk) => {
+                if !logged_first_engine_chunk {
+                    logged_first_engine_chunk = true;
+                    if let Some(elapsed_ms) = play_trace_elapsed_ms(&ctx) {
+                        info!("play trace: first engine chunk received +{}ms", elapsed_ms);
+                    }
+                }
                 update_sink(&ctx, &mut loop_state, playback_id, chunk);
+                if ctx.abort.load(Ordering::SeqCst) {
+                    break;
+                }
             }
             Err(RecvTimeoutError::Timeout) => {
                 update_chunk_lengths(&ctx, &mut loop_state);
@@ -141,7 +162,8 @@ pub(in crate::playback::player::runtime) fn run_playback_thread(
 /// # Returns
 ///
 /// `Some(OutputStream)` on success, otherwise `None` after all retries fail.
-fn open_output_stream_with_retry() -> Option<OutputStream> {
+pub(in crate::playback::player::runtime) fn open_output_stream_with_retry() -> Option<OutputStream>
+{
     for attempt in 1..=OUTPUT_STREAM_OPEN_RETRIES {
         match OutputStreamBuilder::open_default_stream() {
             Ok(stream) => return Some(stream),
@@ -255,9 +277,21 @@ fn pause_sink(ctx: &ThreadContext, loop_state: &LoopState, sink: &Sink, fade_sec
 /// * `fade_seconds` - Fade duration in seconds.
 fn resume_sink(ctx: &ThreadContext, sink: &Sink, fade_seconds: f32) {
     let target_volume = *ctx.volume.lock().unwrap();
+    if let Some(elapsed_ms) = play_trace_elapsed_ms(ctx) {
+        info!(
+            "play trace: resume_sink begin fade_s={:.3} target_volume={:.3} +{}ms",
+            fade_seconds, target_volume, elapsed_ms
+        );
+    }
     if fade_seconds <= 0.0 {
         sink.play();
         sink.set_volume(target_volume);
+        if let Some(elapsed_ms) = play_trace_elapsed_ms(ctx) {
+            info!(
+                "play trace: resume_sink sink.play() immediate +{}ms",
+                elapsed_ms
+            );
+        }
         return;
     }
 
@@ -269,10 +303,16 @@ fn resume_sink(ctx: &ThreadContext, sink: &Sink, fade_seconds: f32) {
     sink.set_volume(current);
     let fade_increments = ((target_volume - current) / (fade_seconds * 100.0)).max(0.000_001);
     sink.play();
+    if let Some(elapsed_ms) = play_trace_elapsed_ms(ctx) {
+        info!("play trace: resume_sink sink.play() +{}ms", elapsed_ms);
+    }
     while sink.volume() < target_volume {
         let next = (sink.volume() + fade_increments).min(target_volume);
         sink.set_volume(next);
         thread::sleep(Duration::from_millis(5));
+    }
+    if let Some(elapsed_ms) = play_trace_elapsed_ms(ctx) {
+        info!("play trace: resume_sink fade complete +{}ms", elapsed_ms);
     }
 }
 
@@ -294,7 +334,6 @@ fn check_runtime_state(ctx: &ThreadContext, loop_state: &mut LoopState) -> bool 
         return false;
     }
 
-    let sink = ctx.sink_mutex.lock().unwrap();
     let state = *ctx.play_state.lock().unwrap();
     let start_sink_chunks = ctx
         .buffer_settings_for_state
@@ -302,21 +341,44 @@ fn check_runtime_state(ctx: &ThreadContext, loop_state: &mut LoopState) -> bool 
         .unwrap()
         .start_sink_chunks;
 
+    // Lock ordering matters during live seek/stop: control thread takes
+    // play_state -> sink, so avoid taking sink -> play_state here.
+    let sink = ctx.sink_mutex.lock().unwrap();
+
     // Gate startup/resume until enough chunks are queued to reduce underflow.
     if state == PlayerState::Resuming && start_sink_chunks > 0 && sink.len() < start_sink_chunks {
+        if loop_state.resuming_gate_started_at.is_none() {
+            loop_state.resuming_gate_started_at = Some(Instant::now());
+        }
         sink.pause();
         return true;
     }
 
     if state == PlayerState::Pausing {
         pause_sink(ctx, loop_state, &sink, 0.1);
+        drop(sink);
         ctx.play_state
             .lock()
             .unwrap()
             .clone_from(&PlayerState::Paused);
+        return true;
     }
 
     if state == PlayerState::Resuming {
+        let resume_gate_wait_ms = loop_state
+            .resuming_gate_started_at
+            .take()
+            .map(|start| start.elapsed().as_millis())
+            .unwrap_or(0);
+        if let Some(elapsed_ms) = play_trace_elapsed_ms(ctx) {
+            info!(
+                "play trace: resuming gate passed sink_len={} start_sink_chunks={} gate_wait_ms={} +{}ms",
+                sink.len(),
+                start_sink_chunks,
+                resume_gate_wait_ms,
+                elapsed_ms
+            );
+        }
         let fade_length = if loop_state.startup_fade_pending {
             loop_state.startup_fade_pending = false;
             if let Some(ms) = ctx.next_resume_fade_ms.lock().unwrap().take() {
@@ -334,10 +396,16 @@ fn check_runtime_state(ctx: &ThreadContext, loop_state: &mut LoopState) -> bool 
         };
 
         resume_sink(ctx, &sink, fade_length);
+        drop(sink);
         ctx.play_state
             .lock()
             .unwrap()
             .clone_from(&PlayerState::Playing);
+        return true;
+    }
+
+    if state != PlayerState::Resuming {
+        loop_state.resuming_gate_started_at = None;
     }
 
     true
@@ -362,14 +430,13 @@ fn update_chunk_lengths(ctx: &ThreadContext, loop_state: &mut LoopState) {
 
     ctx.last_time_update_ms.store(now_ms(), Ordering::Relaxed);
 
-    // While buffering is active, infer consumed chunks from sink queue depth.
-    if !loop_state.buffering_done.load(Ordering::Relaxed) {
-        let chunks_played = chunk_lengths.len().saturating_sub(sink.len());
-        for _ in 0..chunks_played {
-            timer.reset();
-            timer.start();
-            *time_chunks_passed += chunk_lengths.remove(0);
-        }
+    // Infer consumed chunks from sink queue depth for the entire run, including
+    // the post-buffering drain phase, so the playback clock keeps advancing.
+    let chunks_played = chunk_lengths.len().saturating_sub(sink.len());
+    for _ in 0..chunks_played {
+        timer.reset();
+        timer.start();
+        *time_chunks_passed += chunk_lengths.remove(0);
     }
 
     if sink.is_paused() {
@@ -492,8 +559,20 @@ fn update_sink(
     }
 
     let (delay_ms, late) = update_append_timing(loop_state, length_in_seconds);
+    let trace_ms = ctx.play_command_ms.load(Ordering::Relaxed);
+    let now = now_ms();
+    let prev_last_chunk_ms = ctx.last_chunk_ms.load(Ordering::Relaxed);
+    if trace_ms > 0 && prev_last_chunk_ms < trace_ms {
+        info!(
+            "play trace: first sink append after command chunk_ms={:.2} delay_ms={:.2} late={} +{}ms",
+            length_in_seconds * 1000.0,
+            delay_ms,
+            late,
+            now.saturating_sub(trace_ms)
+        );
+    }
     ctx.audio_heard.store(true, Ordering::Relaxed);
-    ctx.last_chunk_ms.store(now_ms(), Ordering::Relaxed);
+    ctx.last_chunk_ms.store(now, Ordering::Relaxed);
 
     {
         let mut meter = ctx.output_meter.lock().unwrap();
@@ -538,6 +617,15 @@ fn update_sink(
     check_runtime_state(ctx, loop_state);
 }
 
+fn play_trace_elapsed_ms(ctx: &ThreadContext) -> Option<u64> {
+    let trace_ms = ctx.play_command_ms.load(Ordering::Relaxed);
+    if trace_ms == 0 {
+        None
+    } else {
+        Some(now_ms().saturating_sub(trace_ms))
+    }
+}
+
 /// Mark producer buffering complete and finalize expected drain duration.
 ///
 /// # Arguments
@@ -572,9 +660,21 @@ fn is_drain_complete(ctx: &ThreadContext, loop_state: &LoopState, engine: &Playe
         return false;
     }
 
+    // Prefer sink state over computed duration so we don't drop OutputStream
+    // while tail samples are still queued.
+    let sink_empty = {
+        let sink = ctx.sink_mutex.lock().unwrap();
+        sink.empty()
+    };
+    if sink_empty {
+        return true;
+    }
+
+    // Fallback guard: if queue bookkeeping drifts and sink never reports empty,
+    // allow termination only after a small grace period past expected end.
     if let Some(final_duration) = *loop_state.final_duration.lock().unwrap() {
         let time_passed = *ctx.time_passed.lock().unwrap();
-        return time_passed >= (final_duration - 0.001).max(0.0);
+        return time_passed >= (final_duration + 0.25).max(0.0);
     }
 
     false

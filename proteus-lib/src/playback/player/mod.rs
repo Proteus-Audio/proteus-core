@@ -13,9 +13,10 @@ mod effects;
 mod runtime;
 mod settings;
 
-use rodio::Sink;
-use std::sync::atomic::{AtomicBool, AtomicU64};
+use rodio::{OutputStream, Sink};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
+use std::thread::JoinHandle;
 
 use crate::container::prot::{PathsTrack, Prot};
 use crate::diagnostics::reporter::Reporter;
@@ -63,7 +64,6 @@ const OUTPUT_STREAM_OPEN_RETRY_MS: u64 = 100;
 ///
 /// `Player` owns the playback threads, buffering state, and runtime settings
 /// such as volume and reverb configuration.
-#[derive(Clone)]
 pub struct Player {
     pub info: Info,
     pub finished_tracks: Arc<Mutex<Vec<i32>>>,
@@ -71,12 +71,15 @@ pub struct Player {
     state: Arc<Mutex<PlayerState>>,
     abort: Arc<AtomicBool>,
     playback_thread_exists: Arc<AtomicBool>,
+    playback_thread_handle: Arc<Mutex<Option<JoinHandle<()>>>>,
     playback_id: Arc<AtomicU64>,
     duration: Arc<Mutex<f64>>,
     prot: Arc<Mutex<Prot>>,
     audio_heard: Arc<AtomicBool>,
+    play_command_ms: Arc<AtomicU64>,
     volume: Arc<Mutex<f32>>,
     sink: Arc<Mutex<Sink>>,
+    output_stream: Arc<Mutex<Option<OutputStream>>>,
     reporter: Option<Arc<Mutex<Reporter>>>,
     buffer_settings: Arc<Mutex<PlaybackBufferSettings>>,
     effects: Arc<Mutex<Vec<AudioEffect>>>,
@@ -89,8 +92,49 @@ pub struct Player {
     last_chunk_ms: Arc<AtomicU64>,
     last_time_update_ms: Arc<AtomicU64>,
     next_resume_fade_ms: Arc<Mutex<Option<f32>>>,
+    handle_count: Arc<AtomicUsize>,
+    shutdown_once: Arc<AtomicBool>,
     impulse_response_override: Option<ImpulseResponseSpec>,
     impulse_response_tail_override: Option<f32>,
+}
+
+impl Clone for Player {
+    fn clone(&self) -> Self {
+        self.handle_count.fetch_add(1, Ordering::Relaxed);
+        Self {
+            info: self.info.clone(),
+            finished_tracks: self.finished_tracks.clone(),
+            ts: self.ts.clone(),
+            state: self.state.clone(),
+            abort: self.abort.clone(),
+            playback_thread_exists: self.playback_thread_exists.clone(),
+            playback_thread_handle: self.playback_thread_handle.clone(),
+            playback_id: self.playback_id.clone(),
+            duration: self.duration.clone(),
+            prot: self.prot.clone(),
+            audio_heard: self.audio_heard.clone(),
+            play_command_ms: self.play_command_ms.clone(),
+            volume: self.volume.clone(),
+            sink: self.sink.clone(),
+            output_stream: self.output_stream.clone(),
+            reporter: self.reporter.clone(),
+            buffer_settings: self.buffer_settings.clone(),
+            effects: self.effects.clone(),
+            inline_effects_update: self.inline_effects_update.clone(),
+            inline_track_mix_updates: self.inline_track_mix_updates.clone(),
+            dsp_metrics: self.dsp_metrics.clone(),
+            effects_reset: self.effects_reset.clone(),
+            output_meter: self.output_meter.clone(),
+            buffering_done: self.buffering_done.clone(),
+            last_chunk_ms: self.last_chunk_ms.clone(),
+            last_time_update_ms: self.last_time_update_ms.clone(),
+            next_resume_fade_ms: self.next_resume_fade_ms.clone(),
+            handle_count: self.handle_count.clone(),
+            shutdown_once: self.shutdown_once.clone(),
+            impulse_response_override: self.impulse_response_override.clone(),
+            impulse_response_tail_override: self.impulse_response_tail_override,
+        }
+    }
 }
 
 impl Player {
@@ -143,7 +187,10 @@ impl Player {
         let (prot, info) = match path {
             Some(path) => {
                 let prot = Arc::new(Mutex::new(Prot::new(path)));
-                let info = Info::new(path.clone());
+                let info = {
+                    let locked_prot = prot.lock().unwrap();
+                    locked_prot.info.clone()
+                };
                 (prot, info)
             }
             None => {
@@ -175,11 +222,14 @@ impl Player {
             abort: Arc::new(AtomicBool::new(false)),
             ts: Arc::new(Mutex::new(0.0)),
             playback_thread_exists: Arc::new(AtomicBool::new(true)),
+            playback_thread_handle: Arc::new(Mutex::new(None)),
             playback_id: Arc::new(AtomicU64::new(0)),
             duration: Arc::new(Mutex::new(0.0)),
             audio_heard: Arc::new(AtomicBool::new(false)),
+            play_command_ms: Arc::new(AtomicU64::new(0)),
             volume: Arc::new(Mutex::new(0.8)),
             sink,
+            output_stream: Arc::new(Mutex::new(None)),
             prot,
             reporter: None,
             buffer_settings: Arc::new(Mutex::new(PlaybackBufferSettings::new(20.0))),
@@ -197,6 +247,8 @@ impl Player {
             last_chunk_ms: Arc::new(AtomicU64::new(0)),
             last_time_update_ms: Arc::new(AtomicU64::new(0)),
             next_resume_fade_ms: Arc::new(Mutex::new(None)),
+            handle_count: Arc::new(AtomicUsize::new(1)),
+            shutdown_once: Arc::new(AtomicBool::new(false)),
             impulse_response_override: None,
             impulse_response_tail_override: None,
         };
@@ -204,5 +256,83 @@ impl Player {
         this.initialize_thread(None);
 
         this
+    }
+}
+
+impl Drop for Player {
+    fn drop(&mut self) {
+        // Only the last `Player` handle should perform teardown. This count is
+        // independent from worker-thread Arc references.
+        if self.handle_count.fetch_sub(1, Ordering::AcqRel) != 1 {
+            return;
+        }
+        if self.shutdown_once.swap(true, Ordering::AcqRel) {
+            return;
+        }
+
+        if let Some(reporter) = self.reporter.take() {
+            reporter.lock().unwrap().stop();
+        }
+
+        if self
+            .playback_thread_exists
+            .load(std::sync::atomic::Ordering::SeqCst)
+        {
+            self.kill_current();
+        } else {
+            self.abort.store(true, Ordering::SeqCst);
+            self.join_playback_thread();
+        }
+
+        {
+            let sink = self.sink.lock().unwrap();
+            sink.stop();
+            sink.clear();
+        }
+
+        {
+            let mut finished_tracks = self.finished_tracks.lock().unwrap();
+            finished_tracks.clear();
+            finished_tracks.shrink_to_fit();
+        }
+
+        {
+            let mut effects = self.effects.lock().unwrap();
+            effects.clear();
+            effects.shrink_to_fit();
+        }
+
+        {
+            let mut inline_effects_update = self.inline_effects_update.lock().unwrap();
+            *inline_effects_update = None;
+        }
+
+        {
+            let mut inline_track_mix_updates = self.inline_track_mix_updates.lock().unwrap();
+            inline_track_mix_updates.clear();
+            inline_track_mix_updates.shrink_to_fit();
+        }
+
+        {
+            let mut dsp_metrics = self.dsp_metrics.lock().unwrap();
+            *dsp_metrics = DspChainMetrics::default();
+        }
+
+        {
+            let mut output_meter = self.output_meter.lock().unwrap();
+            output_meter.reset();
+        }
+
+        println!("Player dropped");
+
+        *self.duration.lock().unwrap() = 0.0;
+        *self.ts.lock().unwrap() = 0.0;
+        *self.next_resume_fade_ms.lock().unwrap() = None;
+        self.buffering_done.store(false, Ordering::Relaxed);
+        self.last_chunk_ms.store(0, Ordering::Relaxed);
+        self.last_time_update_ms.store(0, Ordering::Relaxed);
+        self.audio_heard.store(false, Ordering::Relaxed);
+        self.impulse_response_override = None;
+        self.impulse_response_tail_override = None;
     }
 }

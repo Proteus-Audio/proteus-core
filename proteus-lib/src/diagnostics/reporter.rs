@@ -1,11 +1,15 @@
 //! Periodic playback state reporter for UI updates.
 
 use std::{
-    sync::{Arc, Mutex},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
+    },
+    thread::JoinHandle,
     time::Duration,
 };
 
-use crate::playback::player::Player;
+use crate::playback::player::PlayerState;
 
 /// Snapshot of playback state sent to UI consumers.
 #[derive(Clone, PartialEq)]
@@ -19,24 +23,35 @@ pub struct Report {
 /// Background reporter that polls the [`Player`] at fixed intervals.
 #[derive(Clone)]
 pub struct Reporter {
-    player: Arc<Mutex<Player>>,
+    time: Arc<Mutex<f64>>,
+    volume: Arc<Mutex<f32>>,
+    duration: Arc<Mutex<f64>>,
+    state: Arc<Mutex<PlayerState>>,
     report: Arc<Mutex<dyn Fn(Report) + Send>>,
     interval: Duration,
-    finish: Arc<Mutex<bool>>,
+    finish: Arc<AtomicBool>,
+    thread_handle: Arc<Mutex<Option<JoinHandle<()>>>>,
 }
 
 impl Reporter {
     /// Create a new reporter for the given player and callback.
     pub fn new(
-        player: Arc<Mutex<Player>>,
+        time: Arc<Mutex<f64>>,
+        volume: Arc<Mutex<f32>>,
+        duration: Arc<Mutex<f64>>,
+        state: Arc<Mutex<PlayerState>>,
         report: Arc<Mutex<dyn Fn(Report) + Send>>,
         interval: Duration,
     ) -> Self {
         Self {
-            player,
+            time,
+            volume,
+            duration,
+            state,
             report,
             interval,
-            finish: Arc::new(Mutex::new(false)),
+            finish: Arc::new(AtomicBool::new(false)),
+            thread_handle: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -49,27 +64,19 @@ impl Reporter {
         };
 
         loop {
-            let player = self.player.lock().unwrap();
-            let time = player.get_time();
-            let volume = player.get_volume();
-            let duration = player.get_duration();
-            let playing = player.is_playing();
-
             let report = Report {
-                time,
-                volume,
-                duration,
-                playing,
+                time: *self.time.lock().unwrap(),
+                volume: *self.volume.lock().unwrap(),
+                duration: *self.duration.lock().unwrap(),
+                playing: *self.state.lock().unwrap() == PlayerState::Playing,
             };
-
-            drop(player);
 
             if report != last_report {
                 (*self.report.lock().unwrap())(report.clone());
                 last_report = report;
             }
 
-            if *self.finish.lock().unwrap() {
+            if self.finish.load(Ordering::Relaxed) {
                 break;
             }
 
@@ -79,16 +86,22 @@ impl Reporter {
 
     /// Start the background reporting thread.
     pub fn start(&self) {
+        self.stop();
+        self.finish.store(false, Ordering::Relaxed);
         let this = self.clone();
-        Some(std::thread::spawn(move || this.run()));
-        *self.finish.lock().unwrap() = false;
+        let handle = std::thread::spawn(move || this.run());
+        *self.thread_handle.lock().unwrap() = Some(handle);
     }
 
     /// Stop the background reporting thread.
     pub fn stop(&self) {
-        *self.finish.lock().unwrap() = true;
-        // if let Some(child) = self.child.take() {
-        //     child.join().unwrap();
-        // }
+        self.finish.store(true, Ordering::Relaxed);
+        if let Some(handle) = self.thread_handle.lock().unwrap().take() {
+            if handle.thread().id() == std::thread::current().id() {
+                log::warn!("reporter stop called from reporter thread; skipping join");
+            } else if handle.join().is_err() {
+                log::warn!("reporter thread panicked during join");
+            }
+        }
     }
 }

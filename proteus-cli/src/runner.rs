@@ -2,7 +2,8 @@
 
 use std::{
     collections::VecDeque,
-    fs, io,
+    io,
+    path::Path,
     sync::{Arc, Mutex},
     thread::sleep,
     time::Duration,
@@ -14,17 +15,13 @@ use crossterm::{
     terminal::{self, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use log::{error, info};
-use proteus_lib::dsp::effects::{
-    AudioEffect, CompressorEffect, ConvolutionReverbEffect, DelayReverbEffect,
-    DiffusionReverbEffect, DistortionEffect, GainEffect, HighPassFilterEffect, LimiterEffect,
-    LowPassFilterEffect, MultibandEqEffect,
-};
 use proteus_lib::playback::player;
 use ratatui::{backend::CrosstermBackend, Terminal};
 use serde::Serialize;
 use symphonia::core::errors::Result;
 
 use crate::logging::LogLine;
+use crate::project_files;
 use crate::{cli, controls, logging, ui};
 
 /// Main CLI execution path: parse args, run benches, or start playback.
@@ -67,6 +64,16 @@ pub fn run(args: &ArgMatches, log_buffer: Arc<Mutex<VecDeque<LogLine>>>) -> Resu
                     -1
                 }
             },
+            "init" => {
+                let dir = sub_args.get_one::<String>("INPUT").unwrap();
+                match project_files::write_init_files(Path::new(dir)) {
+                    Ok(()) => 0,
+                    Err(err) => {
+                        error!("{}", err);
+                        -1
+                    }
+                }
+            }
             _ => {
                 error!("Unknown subcommand");
                 -1
@@ -112,17 +119,35 @@ pub fn run(args: &ArgMatches, log_buffer: Arc<Mutex<VecDeque<LogLine>>>) -> Resu
         .unwrap();
     let quiet = args.get_flag("quiet");
 
+    let input_path = Path::new(&file_path);
     let is_container = file_path.ends_with(".prot") || file_path.ends_with(".mka");
-    let file_paths = if is_container {
-        vec![vec![]]
-    } else {
-        vec![vec![file_path.clone()]]
-    };
+    let is_directory = input_path.is_dir();
 
     let mut player = if is_container {
         player::Player::new(&file_path)
+    } else if is_directory {
+        let config = project_files::load_directory_playback_config(input_path).map_err(|err| {
+            error!("{}", err);
+            symphonia::core::errors::Error::IoError(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                err,
+            ))
+        })?;
+        let mut player = player::Player::new_from_file_paths(config.tracks);
+        if args.get_one::<String>("effects-json").is_none() {
+            if let Some(path) = config.effects_json_path {
+                match project_files::load_effects_json(path.to_string_lossy().as_ref()) {
+                    Ok(effects) => player.set_effects(effects),
+                    Err(err) => {
+                        error!("Failed to load effects json from directory: {}", err);
+                        return Ok(-1);
+                    }
+                }
+            }
+        }
+        player
     } else {
-        player::Player::new_from_file_paths_legacy(file_paths)
+        player::Player::new_from_file_paths_legacy(vec![vec![file_path.clone()]])
     };
     let start_buffer_ms = args
         .get_one::<String>("start-buffer-ms")
@@ -170,7 +195,7 @@ pub fn run(args: &ArgMatches, log_buffer: Arc<Mutex<VecDeque<LogLine>>>) -> Resu
     player.set_track_eos_ms(track_eos_ms);
     let effects_json_path = args.get_one::<String>("effects-json").cloned();
     if let Some(path) = effects_json_path.as_deref() {
-        match load_effects_json(path) {
+        match project_files::load_effects_json(path) {
             Ok(effects) => player.set_effects(effects),
             Err(err) => {
                 error!("Failed to load effects json: {}", err);
@@ -471,7 +496,7 @@ fn print_peaks_json(peaks: &proteus_lib::peaks::PeaksData) -> i32 {
 }
 
 fn run_create_effects_json() -> i32 {
-    let effects = default_effects_chain();
+    let effects = project_files::default_effects_chain_enabled();
     match serde_json::to_string_pretty(&effects) {
         Ok(json) => {
             println!("{}", json);
@@ -481,46 +506,6 @@ fn run_create_effects_json() -> i32 {
             error!("Failed to serialize effects: {}", err);
             -1
         }
-    }
-}
-
-fn default_effects_chain() -> Vec<AudioEffect> {
-    vec![
-        AudioEffect::ConvolutionReverb(ConvolutionReverbEffect::default()),
-        AudioEffect::DiffusionReverb(DiffusionReverbEffect::default()),
-        AudioEffect::DelayReverb(DelayReverbEffect::default()),
-        AudioEffect::LowPassFilter(LowPassFilterEffect::default()),
-        AudioEffect::HighPassFilter(HighPassFilterEffect::default()),
-        AudioEffect::Distortion(DistortionEffect::default()),
-        AudioEffect::Gain(GainEffect::default()),
-        AudioEffect::Compressor(CompressorEffect::default()),
-        AudioEffect::Limiter(LimiterEffect::default()),
-        AudioEffect::MultibandEq(MultibandEqEffect::default()),
-    ]
-}
-
-fn load_effects_json(path: &str) -> std::result::Result<Vec<AudioEffect>, String> {
-    let raw =
-        fs::read_to_string(path).map_err(|err| format!("failed to read {}: {}", path, err))?;
-    serde_json::from_str(&raw).map_err(|err| format!("failed to parse json: {}", err))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::io::Write;
-    use tempfile::NamedTempFile;
-
-    #[test]
-    fn load_effects_json_parses_effects() {
-        let effects = default_effects_chain();
-        let json = serde_json::to_string_pretty(&effects).expect("serialize effects");
-
-        let mut file = NamedTempFile::new().expect("temp file");
-        file.write_all(json.as_bytes()).expect("write json");
-
-        let loaded = load_effects_json(file.path().to_str().unwrap()).expect("load json");
-        assert_eq!(loaded.len(), effects.len());
     }
 }
 

@@ -148,6 +148,7 @@ impl Player {
                 AudioEffect::Compressor(_) => "Compressor".to_string(),
                 AudioEffect::Limiter(_) => "Limiter".to_string(),
                 AudioEffect::MultibandEq(_) => "MultibandEq".to_string(),
+                AudioEffect::Pan(_) => "Pan".to_string(),
             })
             .collect()
     }

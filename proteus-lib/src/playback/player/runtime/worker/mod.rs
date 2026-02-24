@@ -10,4 +10,6 @@ mod guard;
 mod runner;
 
 pub(in crate::playback::player::runtime) use context::ThreadContext;
-pub(in crate::playback::player::runtime) use runner::run_playback_thread;
+pub(in crate::playback::player::runtime) use runner::{
+    open_output_stream_with_retry, run_playback_thread,
+};

@@ -31,6 +31,33 @@ pub(crate) struct ShuffleRuntimePlan {
     pub upcoming_events: Vec<ShuffleScheduleEntry>,
 }
 
+/// Active time range for one instance in milliseconds relative to playback start.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ActiveWindow {
+    pub start_ms: u64,
+    pub end_ms: Option<u64>,
+}
+
+/// Runtime metadata for one concrete source instance.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RuntimeInstanceMeta {
+    pub instance_id: usize,
+    pub logical_track_index: usize,
+    pub slot_index: usize,
+    pub source_key: ShuffleSource,
+    pub active_windows: Vec<ActiveWindow>,
+    pub selection_index: usize,
+    pub occurrence_index: usize,
+}
+
+/// Expanded runtime plan used by schedule-driven routing/mixing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RuntimeInstancePlan {
+    pub logical_track_count: usize,
+    pub instances: Vec<RuntimeInstanceMeta>,
+    pub event_boundaries_ms: Vec<u64>,
+}
+
 /// Parsed `.prot` container with resolved tracks and playback metadata.
 #[derive(Debug, Clone)]
 pub struct Prot {
@@ -320,22 +347,25 @@ impl Prot {
         Vec::new()
     }
 
-    /// Return the full timestamped shuffle schedule for display.
+    /// Return the full timestamped shuffle schedule grouped by logical track.
     ///
-    /// Each entry is `(time_seconds, selected_ids_or_paths)`.
-    pub fn get_shuffle_schedule(&self) -> Vec<(f64, Vec<String>)> {
+    /// Each entry is `(time_seconds, track_groups)`, where `track_groups`
+    /// contains one element per logical track and each inner vector contains all
+    /// selected source IDs/paths for that track (based on `selections_count`).
+    pub fn get_shuffle_schedule(&self) -> Vec<(f64, Vec<Vec<String>>)> {
+        let slot_spans = self.logical_track_slot_spans();
         if self.shuffle_schedule.is_empty() {
             let current = self.get_ids();
             if current.is_empty() {
                 return Vec::new();
             }
-            return vec![(0.0, current)];
+            return vec![(0.0, group_ids_by_slot_spans(&current, &slot_spans))];
         }
 
         self.shuffle_schedule
             .iter()
             .map(|entry| {
-                let ids = entry
+                let ids: Vec<String> = entry
                     .sources
                     .iter()
                     .map(|source| match source {
@@ -343,7 +373,10 @@ impl Prot {
                         ShuffleSource::FilePath(path) => path.clone(),
                     })
                     .collect();
-                (entry.at_ms as f64 / 1000.0, ids)
+                (
+                    entry.at_ms as f64 / 1000.0,
+                    group_ids_by_slot_spans(&ids, &slot_spans),
+                )
             })
             .collect()
     }
@@ -417,6 +450,160 @@ impl Prot {
         ShuffleRuntimePlan {
             current_sources: self.shuffle_schedule[current_index].sources.clone(),
             upcoming_events: self.shuffle_schedule[(current_index + 1)..].to_vec(),
+        }
+    }
+
+    /// Expand grouped shuffle schedule entries into concrete source instances.
+    ///
+    /// The resulting plan preserves duplicates as unique instances and clips all
+    /// windows to `start_time`.
+    pub(crate) fn build_runtime_instance_plan(&self, start_time: f64) -> RuntimeInstancePlan {
+        let start_ms = seconds_to_ms(start_time);
+        let fallback_sources: Vec<ShuffleSource> = if let Some(track_ids) = &self.track_ids {
+            track_ids
+                .iter()
+                .copied()
+                .map(ShuffleSource::TrackId)
+                .collect()
+        } else if let Some(track_paths) = &self.track_paths {
+            track_paths
+                .iter()
+                .cloned()
+                .map(ShuffleSource::FilePath)
+                .collect()
+        } else {
+            Vec::new()
+        };
+
+        let mut schedule: Vec<ShuffleScheduleEntry> = if self.shuffle_schedule.is_empty() {
+            if fallback_sources.is_empty() {
+                Vec::new()
+            } else {
+                vec![ShuffleScheduleEntry {
+                    at_ms: 0,
+                    sources: fallback_sources,
+                }]
+            }
+        } else {
+            self.shuffle_schedule.clone()
+        };
+
+        if schedule.is_empty() {
+            return RuntimeInstancePlan {
+                logical_track_count: 0,
+                instances: Vec::new(),
+                event_boundaries_ms: Vec::new(),
+            };
+        }
+
+        let slot_count = schedule
+            .iter()
+            .map(|entry| entry.sources.len())
+            .max()
+            .unwrap_or(0);
+        let (slot_layout, logical_track_count) =
+            build_slot_layout(slot_count, &self.logical_track_slot_spans());
+
+        // Keep schedule entries rectangular by carrying previous values for
+        // missing slots.
+        let mut last_sources = vec![None::<ShuffleSource>; slot_count];
+        for entry in schedule.iter_mut() {
+            for slot_index in 0..slot_count {
+                if slot_index < entry.sources.len() {
+                    last_sources[slot_index] = Some(entry.sources[slot_index].clone());
+                } else if let Some(previous) = last_sources[slot_index].clone() {
+                    entry.sources.push(previous);
+                }
+            }
+        }
+
+        let event_boundaries_ms = schedule
+            .iter()
+            .filter_map(|entry| {
+                if entry.at_ms >= start_ms {
+                    Some(entry.at_ms - start_ms)
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        let mut instances = Vec::new();
+        let mut next_instance_id = 0usize;
+        let mut occurrence_counters: HashMap<(usize, usize), usize> = HashMap::new();
+
+        for slot_index in 0..slot_count {
+            let (logical_track_index, selection_index) = slot_layout
+                .get(slot_index)
+                .copied()
+                .unwrap_or((slot_index, 0));
+
+            let mut current_source: Option<ShuffleSource> = None;
+            let mut current_start = 0_u64;
+
+            for (event_index, entry) in schedule.iter().enumerate() {
+                let source = entry.sources.get(slot_index).cloned();
+                if source.is_none() {
+                    continue;
+                }
+                let source = source.unwrap();
+
+                if current_source.is_none() {
+                    current_source = Some(source);
+                    current_start = entry.at_ms;
+                    continue;
+                }
+
+                if current_source.as_ref() == Some(&source) {
+                    continue;
+                }
+
+                let segment_end = entry.at_ms;
+                if let Some(meta) = build_segment_instance(
+                    next_instance_id,
+                    logical_track_index,
+                    slot_index,
+                    selection_index,
+                    current_source.as_ref().unwrap(),
+                    current_start,
+                    Some(segment_end),
+                    start_ms,
+                    &mut occurrence_counters,
+                ) {
+                    instances.push(meta);
+                    next_instance_id += 1;
+                }
+
+                current_source = Some(source);
+                current_start = entry.at_ms;
+
+                if event_index + 1 == schedule.len() {
+                    break;
+                }
+            }
+
+            if let Some(source) = current_source.as_ref() {
+                if let Some(meta) = build_segment_instance(
+                    next_instance_id,
+                    logical_track_index,
+                    slot_index,
+                    selection_index,
+                    source,
+                    current_start,
+                    None,
+                    start_ms,
+                    &mut occurrence_counters,
+                ) {
+                    instances.push(meta);
+                    next_instance_id += 1;
+                }
+            }
+        }
+
+        RuntimeInstancePlan {
+            logical_track_count,
+            instances,
+            event_boundaries_ms,
         }
     }
 
@@ -558,6 +745,88 @@ impl Prot {
         match &self.file_paths_dictionary {
             Some(dictionary) => dictionary.to_vec(),
             None => Vec::new(),
+        }
+    }
+
+    fn logical_track_slot_spans(&self) -> Vec<usize> {
+        if let Some(file_paths) = self.file_paths.as_ref() {
+            return file_paths
+                .iter()
+                .filter_map(|track| {
+                    if track.file_paths.is_empty() {
+                        return None;
+                    }
+                    let span = track.selections_count as usize;
+                    if span == 0 {
+                        None
+                    } else {
+                        Some(span)
+                    }
+                })
+                .collect();
+        }
+
+        match self.play_settings.as_ref() {
+            Some(PlaySettingsFile::V1(file)) => file
+                .settings
+                .inner()
+                .tracks
+                .iter()
+                .filter_map(|track| {
+                    if track.ids.is_empty() {
+                        return None;
+                    }
+                    let span = track.selections_count as usize;
+                    if span == 0 {
+                        None
+                    } else {
+                        Some(span)
+                    }
+                })
+                .collect(),
+            Some(PlaySettingsFile::V2(file)) => file
+                .settings
+                .inner()
+                .tracks
+                .iter()
+                .filter_map(|track| {
+                    if track.ids.is_empty() {
+                        return None;
+                    }
+                    let span = track.selections_count as usize;
+                    if span == 0 {
+                        None
+                    } else {
+                        Some(span)
+                    }
+                })
+                .collect(),
+            Some(PlaySettingsFile::V3(file)) => file
+                .settings
+                .inner()
+                .tracks
+                .iter()
+                .filter_map(|track| {
+                    if track.ids.is_empty() {
+                        return None;
+                    }
+                    let span = track.selections_count as usize;
+                    if span == 0 {
+                        None
+                    } else {
+                        Some(span)
+                    }
+                })
+                .collect(),
+            Some(PlaySettingsFile::Legacy(file)) => file
+                .settings
+                .inner()
+                .tracks
+                .iter()
+                .filter(|track| track.starting_index.is_some() && track.length.is_some())
+                .map(|_| 1usize)
+                .collect(),
+            _ => Vec::new(),
         }
     }
 }
@@ -872,6 +1141,114 @@ fn sanitize_pan(pan: f32) -> f32 {
     }
 }
 
+fn group_ids_by_slot_spans(ids: &[String], slot_spans: &[usize]) -> Vec<Vec<String>> {
+    if ids.is_empty() {
+        return Vec::new();
+    }
+
+    // If spans are unavailable, preserve data by treating each slot as its own track.
+    if slot_spans.is_empty() {
+        return ids.iter().map(|id| vec![id.clone()]).collect();
+    }
+
+    let mut grouped = Vec::new();
+    let mut cursor = 0usize;
+    for span in slot_spans {
+        if *span == 0 || cursor >= ids.len() {
+            continue;
+        }
+        let end = (cursor + *span).min(ids.len());
+        grouped.push(ids[cursor..end].to_vec());
+        cursor = end;
+    }
+
+    // Keep any extra slots visible even if schedule/config spans diverge.
+    while cursor < ids.len() {
+        grouped.push(vec![ids[cursor].clone()]);
+        cursor += 1;
+    }
+
+    grouped
+}
+
+fn build_slot_layout(slot_count: usize, slot_spans: &[usize]) -> (Vec<(usize, usize)>, usize) {
+    if slot_count == 0 {
+        return (Vec::new(), 0);
+    }
+
+    let mut layout = Vec::with_capacity(slot_count);
+    let mut cursor = 0usize;
+
+    if slot_spans.is_empty() {
+        for slot in 0..slot_count {
+            layout.push((slot, 0));
+        }
+        return (layout, slot_count);
+    }
+
+    for (logical_track_index, span) in slot_spans.iter().copied().enumerate() {
+        let span = span.max(1);
+        for selection_index in 0..span {
+            if cursor >= slot_count {
+                break;
+            }
+            layout.push((logical_track_index, selection_index));
+            cursor += 1;
+        }
+        if cursor >= slot_count {
+            break;
+        }
+    }
+
+    let mut logical_track_count = slot_spans.len();
+    while cursor < slot_count {
+        layout.push((logical_track_count, 0));
+        logical_track_count += 1;
+        cursor += 1;
+    }
+
+    (layout, logical_track_count.max(slot_spans.len()))
+}
+
+fn build_segment_instance(
+    instance_id: usize,
+    logical_track_index: usize,
+    slot_index: usize,
+    selection_index: usize,
+    source: &ShuffleSource,
+    segment_start_ms: u64,
+    segment_end_ms: Option<u64>,
+    start_ms: u64,
+    occurrence_counters: &mut HashMap<(usize, usize), usize>,
+) -> Option<RuntimeInstanceMeta> {
+    let clipped_start = segment_start_ms.max(start_ms);
+    let clipped_end = segment_end_ms.map(|end| end.max(start_ms));
+    if let Some(end) = clipped_end {
+        if end <= clipped_start {
+            return None;
+        }
+    }
+
+    let relative_start = clipped_start.saturating_sub(start_ms);
+    let relative_end = clipped_end.map(|end| end.saturating_sub(start_ms));
+    let key = (logical_track_index, selection_index);
+    let occurrence_index = occurrence_counters.get(&key).copied().unwrap_or(0);
+    occurrence_counters.insert(key, occurrence_index + 1);
+
+    Some(RuntimeInstanceMeta {
+        instance_id,
+        logical_track_index,
+        slot_index,
+        source_key: source.clone(),
+        active_windows: vec![ActiveWindow {
+            start_ms: relative_start,
+            end_ms: relative_end,
+        }],
+        selection_index,
+        occurrence_index,
+    })
+}
+
 fn get_paths_track_for_slot_mut(
     tracks: &mut [PathsTrack],
     slot_index: usize,
@@ -1171,5 +1548,194 @@ mod tests {
         assert_eq!(prot.linked_slot_indices(1), Some(vec![0, 1]));
         assert_eq!(prot.linked_slot_indices(2), Some(vec![2]));
         assert_eq!(prot.linked_slot_indices(3), None);
+    }
+
+    #[test]
+    fn group_ids_by_slot_spans_groups_multiple_selections_per_logical_track() {
+        let ids = vec![
+            "a1".to_string(),
+            "a2".to_string(),
+            "b1".to_string(),
+            "c1".to_string(),
+            "c2".to_string(),
+            "c3".to_string(),
+        ];
+        let grouped = group_ids_by_slot_spans(&ids, &[2, 1, 3]);
+        assert_eq!(
+            grouped,
+            vec![
+                vec!["a1".to_string(), "a2".to_string()],
+                vec!["b1".to_string()],
+                vec!["c1".to_string(), "c2".to_string(), "c3".to_string()],
+            ]
+        );
+    }
+
+    #[test]
+    fn get_shuffle_schedule_groups_by_paths_track_selections_count() {
+        let prot = Prot {
+            info: test_info(),
+            file_path: None,
+            file_paths: Some(vec![
+                PathsTrack {
+                    file_paths: vec!["a.wav".to_string(), "b.wav".to_string()],
+                    level: 1.0,
+                    pan: 0.0,
+                    selections_count: 2,
+                    shuffle_points: vec![],
+                },
+                PathsTrack {
+                    file_paths: vec!["c.wav".to_string()],
+                    level: 1.0,
+                    pan: 0.0,
+                    selections_count: 1,
+                    shuffle_points: vec![],
+                },
+            ]),
+            file_paths_dictionary: Some(vec![
+                "a.wav".to_string(),
+                "b.wav".to_string(),
+                "c.wav".to_string(),
+            ]),
+            track_ids: None,
+            track_paths: None,
+            duration: 0.0,
+            shuffle_schedule: vec![ShuffleScheduleEntry {
+                at_ms: 0,
+                sources: vec![
+                    ShuffleSource::FilePath("a.wav".to_string()),
+                    ShuffleSource::FilePath("b.wav".to_string()),
+                    ShuffleSource::FilePath("c.wav".to_string()),
+                ],
+            }],
+            play_settings: None,
+            impulse_response_spec: None,
+            impulse_response_tail_db: None,
+            effects: None,
+        };
+
+        let schedule = prot.get_shuffle_schedule();
+        assert_eq!(schedule.len(), 1);
+        assert_eq!(
+            schedule[0].1,
+            vec![
+                vec!["a.wav".to_string(), "b.wav".to_string()],
+                vec!["c.wav".to_string()],
+            ]
+        );
+    }
+
+    #[test]
+    fn build_runtime_instance_plan_keeps_duplicate_instances() {
+        let prot = Prot {
+            info: test_info(),
+            file_path: Some("demo.prot".to_string()),
+            file_paths: None,
+            file_paths_dictionary: None,
+            track_ids: None,
+            track_paths: None,
+            duration: 0.0,
+            shuffle_schedule: vec![
+                ShuffleScheduleEntry {
+                    at_ms: 0,
+                    sources: vec![
+                        ShuffleSource::TrackId(1),
+                        ShuffleSource::TrackId(2),
+                        ShuffleSource::TrackId(3),
+                    ],
+                },
+                ShuffleScheduleEntry {
+                    at_ms: 14_604,
+                    sources: vec![
+                        ShuffleSource::TrackId(2),
+                        ShuffleSource::TrackId(2),
+                        ShuffleSource::TrackId(2),
+                    ],
+                },
+            ],
+            play_settings: Some(PlaySettingsFile::V1(
+                crate::container::play_settings::PlaySettingsV1File {
+                    settings: crate::container::play_settings::PlaySettingsContainer::Flat(
+                        crate::container::play_settings::PlaySettingsV1 {
+                            effects: Vec::new(),
+                            tracks: vec![
+                                SettingsTrack {
+                                    level: 1.0,
+                                    pan: 0.0,
+                                    ids: vec![1, 2],
+                                    name: "A".to_string(),
+                                    safe_name: "a".to_string(),
+                                    selections_count: 2,
+                                    shuffle_points: vec!["0:14.604".to_string()],
+                                },
+                                SettingsTrack {
+                                    level: 1.0,
+                                    pan: 0.0,
+                                    ids: vec![2, 3],
+                                    name: "B".to_string(),
+                                    safe_name: "b".to_string(),
+                                    selections_count: 1,
+                                    shuffle_points: vec!["0:14.604".to_string()],
+                                },
+                            ],
+                        },
+                    ),
+                },
+            )),
+            impulse_response_spec: None,
+            impulse_response_tail_db: None,
+            effects: None,
+        };
+
+        let plan = prot.build_runtime_instance_plan(0.0);
+        assert_eq!(plan.logical_track_count, 2);
+        assert_eq!(plan.instances.len(), 5);
+
+        let logical0 = plan
+            .instances
+            .iter()
+            .filter(|instance| instance.logical_track_index == 0)
+            .count();
+        let logical1 = plan
+            .instances
+            .iter()
+            .filter(|instance| instance.logical_track_index == 1)
+            .count();
+        assert_eq!(logical0, 3);
+        assert_eq!(logical1, 2);
+    }
+
+    #[test]
+    fn build_runtime_instance_plan_clips_windows_to_start_time() {
+        let prot = Prot {
+            info: test_info(),
+            file_path: Some("demo.prot".to_string()),
+            file_paths: None,
+            file_paths_dictionary: None,
+            track_ids: Some(vec![1]),
+            track_paths: None,
+            duration: 0.0,
+            shuffle_schedule: vec![
+                ShuffleScheduleEntry {
+                    at_ms: 0,
+                    sources: vec![ShuffleSource::TrackId(1)],
+                },
+                ShuffleScheduleEntry {
+                    at_ms: 10_000,
+                    sources: vec![ShuffleSource::TrackId(2)],
+                },
+            ],
+            play_settings: None,
+            impulse_response_spec: None,
+            impulse_response_tail_db: None,
+            effects: None,
+        };
+
+        let plan = prot.build_runtime_instance_plan(5.0);
+        assert_eq!(plan.event_boundaries_ms, vec![5_000]);
+        assert_eq!(plan.instances.len(), 2);
+        assert_eq!(plan.instances[0].active_windows[0].start_ms, 0);
+        assert_eq!(plan.instances[0].active_windows[0].end_ms, Some(5_000));
+        assert_eq!(plan.instances[1].active_windows[0].start_ms, 5_000);
     }
 }

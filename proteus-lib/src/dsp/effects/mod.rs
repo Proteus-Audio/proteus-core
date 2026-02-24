@@ -16,6 +16,7 @@ mod level;
 pub mod limiter;
 pub mod low_pass;
 pub mod multiband_eq;
+pub mod pan;
 
 #[allow(deprecated)]
 #[deprecated(note = "Use DelayReverbEffect instead.")]
@@ -36,6 +37,7 @@ pub use multiband_eq::{
     EqPointSettings, HighEdgeFilterSettings, LowEdgeFilterSettings, MultibandEqEffect,
     MultibandEqSettings,
 };
+pub use pan::{PanEffect, PanSettings};
 
 /// Shared context for preparing and running DSP effects.
 #[derive(Debug, Clone)]
@@ -73,6 +75,8 @@ pub enum AudioEffect {
     Limiter(LimiterEffect),
     #[serde(rename = "MultibandEqSettings")]
     MultibandEq(MultibandEqEffect),
+    #[serde(rename = "PanSettings")]
+    Pan(PanEffect),
 }
 
 impl AudioEffect {
@@ -99,6 +103,7 @@ impl AudioEffect {
             AudioEffect::Compressor(effect) => effect.process(samples, context, drain),
             AudioEffect::Limiter(effect) => effect.process(samples, context, drain),
             AudioEffect::MultibandEq(effect) => effect.process(samples, context, drain),
+            AudioEffect::Pan(effect) => effect.process(samples, context, drain),
         }
     }
 
@@ -117,6 +122,7 @@ impl AudioEffect {
             AudioEffect::Compressor(effect) => effect.reset_state(),
             AudioEffect::Limiter(effect) => effect.reset_state(),
             AudioEffect::MultibandEq(effect) => effect.reset_state(),
+            AudioEffect::Pan(effect) => effect.reset_state(),
         }
     }
 
@@ -137,6 +143,7 @@ impl AudioEffect {
             AudioEffect::Compressor(_) => {}
             AudioEffect::Limiter(_) => {}
             AudioEffect::MultibandEq(_) => {}
+            AudioEffect::Pan(_) => {}
         }
     }
 
@@ -224,6 +231,7 @@ mod tests {
             AudioEffect::Compressor(CompressorEffect::default()),
             AudioEffect::Limiter(LimiterEffect::default()),
             AudioEffect::MultibandEq(MultibandEqEffect::default()),
+            AudioEffect::Pan(PanEffect::default()),
         ];
 
         let json = serde_json::to_string(&effects).expect("serialize effects");
@@ -256,11 +264,12 @@ mod tests {
                 ],
                 "low_edge":{"type":"high_pass","freq_hz":60,"q":0.7},
                 "high_edge":{"type":"high_shelf","freq_hz":10000,"q":0.8,"gain_db":1.5}
-            }}
+            }},
+            {"PanSettings":{"enabled":true,"pan":-0.3}}
         ]
         "#;
 
         let decoded: Vec<AudioEffect> = serde_json::from_str(json).expect("deserialize effects");
-        assert_eq!(decoded.len(), 11);
+        assert_eq!(decoded.len(), 12);
     }
 }

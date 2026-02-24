@@ -21,6 +21,10 @@ impl Player {
     ///
     /// * `ts` - Target start position in seconds.
     pub fn play_at(&mut self, ts: f64) {
+        let trace_ms = current_ms();
+        self.play_command_ms
+            .store(trace_ms, std::sync::atomic::Ordering::Relaxed);
+        info!("play trace: play_at requested ts={:.3}", ts);
         let mut timestamp = self.ts.lock().unwrap();
         *timestamp = ts;
         drop(timestamp);
@@ -28,9 +32,21 @@ impl Player {
         self.request_effects_reset();
         self.clear_inline_effects_update();
         self.kill_current();
+        info!(
+            "play trace: play_at after kill_current +{}ms",
+            current_ms().saturating_sub(trace_ms)
+        );
         self.initialize_thread(Some(ts));
+        info!(
+            "play trace: play_at after initialize_thread +{}ms",
+            current_ms().saturating_sub(trace_ms)
+        );
 
         self.resume();
+        info!(
+            "play trace: play_at after resume() request +{}ms",
+            current_ms().saturating_sub(trace_ms)
+        );
 
         self.wait_for_audio_heard(Duration::from_secs(5));
     }
@@ -39,16 +55,32 @@ impl Player {
     ///
     /// If no playback thread is currently alive, a new runtime is created.
     pub fn play(&mut self) {
+        let trace_ms = current_ms();
+        self.play_command_ms
+            .store(trace_ms, std::sync::atomic::Ordering::Relaxed);
         info!("Playing audio");
         let thread_exists = self
             .playback_thread_exists
             .load(std::sync::atomic::Ordering::SeqCst);
+        info!(
+            "play trace: play requested thread_exists={} state={:?}",
+            thread_exists,
+            *self.state.lock().unwrap()
+        );
 
         if !thread_exists {
             self.initialize_thread(None);
+            info!(
+                "play trace: play after initialize_thread +{}ms",
+                current_ms().saturating_sub(trace_ms)
+            );
         }
 
         self.resume();
+        info!(
+            "play trace: play after resume() request +{}ms",
+            current_ms().saturating_sub(trace_ms)
+        );
 
         self.wait_for_audio_heard(Duration::from_secs(5));
     }
@@ -60,6 +92,17 @@ impl Player {
 
     /// Resume playback if paused.
     pub fn resume(&self) {
+        let trace_ms = self
+            .play_command_ms
+            .load(std::sync::atomic::Ordering::Relaxed);
+        if trace_ms > 0 {
+            info!(
+                "play trace: resume requested +{}ms",
+                current_ms().saturating_sub(trace_ms)
+            );
+        } else {
+            info!("play trace: resume requested");
+        }
         self.state
             .lock()
             .unwrap()
@@ -83,8 +126,18 @@ impl Player {
         while !self.thread_finished() {
             thread::sleep(Duration::from_millis(10));
         }
+        self.join_playback_thread();
 
         self.state.lock().unwrap().clone_from(&PlayerState::Stopped);
+    }
+
+    /// Join the current playback thread handle if one is present.
+    pub(in crate::playback::player) fn join_playback_thread(&self) {
+        if let Some(handle) = self.playback_thread_handle.lock().unwrap().take() {
+            if handle.join().is_err() {
+                warn!("playback thread panicked during join");
+            }
+        }
     }
 
     /// Stop playback and reset timing state.
@@ -238,9 +291,26 @@ impl Player {
     /// `true` once audio has been observed, `false` on timeout or early thread
     /// termination.
     pub(super) fn wait_for_audio_heard(&self, timeout: Duration) -> bool {
+        let trace_ms = self
+            .play_command_ms
+            .load(std::sync::atomic::Ordering::Relaxed);
+        if trace_ms > 0 {
+            info!(
+                "play trace: wait_for_audio_heard start timeout_ms={} +{}ms",
+                timeout.as_millis(),
+                current_ms().saturating_sub(trace_ms)
+            );
+        }
         let start = Instant::now();
         loop {
             if self.audio_heard.load(std::sync::atomic::Ordering::Relaxed) {
+                if trace_ms > 0 {
+                    info!(
+                        "play trace: audio_heard observed +{}ms (waited {}ms)",
+                        current_ms().saturating_sub(trace_ms),
+                        start.elapsed().as_millis()
+                    );
+                }
                 return true;
             }
             if self.thread_finished() {
@@ -249,6 +319,12 @@ impl Player {
             }
             if start.elapsed() >= timeout {
                 warn!("timed out waiting for audio to start");
+                if trace_ms > 0 {
+                    warn!(
+                        "play trace: wait_for_audio_heard timeout +{}ms",
+                        current_ms().saturating_sub(trace_ms)
+                    );
+                }
                 return false;
             }
             thread::sleep(Duration::from_millis(10));
@@ -288,8 +364,10 @@ impl Player {
 
     /// Get the full timestamped shuffle schedule used by playback.
     ///
-    /// Each entry is `(time_seconds, selected_ids_or_paths)`.
-    pub fn get_shuffle_schedule(&self) -> Vec<(f64, Vec<String>)> {
+    /// Each entry is `(time_seconds, grouped_selected_ids_or_paths)`, where the
+    /// inner groups map to logical tracks and contain all selections for each
+    /// track (for example when `selections_count > 1`).
+    pub fn get_shuffle_schedule(&self) -> Vec<(f64, Vec<Vec<String>>)> {
         let prot = self.prot.lock().unwrap();
         prot.get_shuffle_schedule()
     }
@@ -312,7 +390,10 @@ impl Player {
         }
 
         let reporter = Arc::new(Mutex::new(Reporter::new(
-            Arc::new(Mutex::new(self.clone())),
+            self.ts.clone(),
+            self.volume.clone(),
+            self.duration.clone(),
+            self.state.clone(),
             reporting,
             reporting_interval,
         )));
@@ -321,4 +402,13 @@ impl Player {
 
         self.reporter = Some(reporter);
     }
+}
+
+fn current_ms() -> u64 {
+    use std::time::SystemTime;
+
+    SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
 }

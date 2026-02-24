@@ -1,6 +1,6 @@
 //! Shared runtime context captured at thread spawn time.
 
-use rodio::Sink;
+use rodio::{mixer::Mixer, Sink};
 use std::sync::atomic::{AtomicBool, AtomicU64};
 use std::sync::{Arc, Mutex};
 
@@ -39,8 +39,10 @@ pub(in crate::playback::player::runtime) struct ThreadContext {
     pub(in crate::playback::player::runtime) audio_info: Info,
     pub(in crate::playback::player::runtime) next_resume_fade_ms: Arc<Mutex<Option<f32>>>,
     pub(in crate::playback::player::runtime) audio_heard: Arc<AtomicBool>,
+    pub(in crate::playback::player::runtime) play_command_ms: Arc<AtomicU64>,
     pub(in crate::playback::player::runtime) volume: Arc<Mutex<f32>>,
     pub(in crate::playback::player::runtime) sink_mutex: Arc<Mutex<Sink>>,
+    pub(in crate::playback::player::runtime) output_mixer: Mixer,
     pub(in crate::playback::player::runtime) buffer_done_thread_flag: Arc<AtomicBool>,
     pub(in crate::playback::player::runtime) last_chunk_ms: Arc<AtomicU64>,
     pub(in crate::playback::player::runtime) last_time_update_ms: Arc<AtomicU64>,

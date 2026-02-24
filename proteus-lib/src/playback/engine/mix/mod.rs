@@ -8,13 +8,17 @@
 //! - `runner`: thin public entrypoint wrapper.
 //! - `loop_core`: long-running mix loop implementation.
 
+mod buffer_mixer;
 mod debug;
+mod decoder_events;
 mod effects;
 mod output_stage;
 mod runner;
 mod source_spawner;
 mod track_mix;
+mod track_stage;
 mod types;
+mod utils;
 
 pub use runner::spawn_mix_thread;
 pub use types::MixThreadArgs;

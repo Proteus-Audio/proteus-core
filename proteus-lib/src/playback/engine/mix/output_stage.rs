@@ -1,6 +1,7 @@
 //! Output-stage DSP helpers for the mix runtime.
 
 use dasp_ring_buffer::Bounded;
+use log::info;
 use rodio::buffer::SamplesBuffer;
 use std::sync::{mpsc, Arc, Mutex};
 #[cfg(feature = "debug")]
@@ -413,14 +414,21 @@ pub(super) fn produce_output_samples(args: OutputStageArgs<'_>) -> Vec<f32> {
 }
 
 /// Send produced samples over the mix thread output channel.
+pub(super) enum SendStatus {
+    Sent,
+    Empty,
+    Disconnected,
+}
+
+/// Send produced samples over the mix thread output channel.
 pub(super) fn send_samples(
     sender: &mpsc::SyncSender<(SamplesBuffer, f64)>,
     input_channels: u16,
     sample_rate: u32,
     samples: Vec<f32>,
-) -> bool {
+) -> SendStatus {
     if samples.is_empty() {
-        return false;
+        return SendStatus::Empty;
     }
 
     let length_in_seconds = samples.len() as f64 / sample_rate as f64 / input_channels as f64;
@@ -428,6 +436,8 @@ pub(super) fn send_samples(
 
     if let Err(e) = sender.send((samples_buffer, length_in_seconds)) {
         log::error!("Failed to send samples: {}", e);
+        return SendStatus::Disconnected;
     }
-    true
+    // info!("Samples sent successfully of length {}", length_in_seconds);
+    SendStatus::Sent
 }

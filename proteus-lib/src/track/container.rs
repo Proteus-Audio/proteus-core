@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 use std::thread;
+use std::thread::JoinHandle;
 use symphonia::core::codecs::{Decoder, DecoderOptions};
 use symphonia::core::errors::Error;
 use symphonia::core::formats::{SeekMode, SeekTo};
@@ -29,10 +30,7 @@ pub struct ContainerTrackArgs {
 }
 
 /// Spawn a decoder thread that buffers multiple container tracks.
-pub fn buffer_container_tracks(
-    args: ContainerTrackArgs,
-    abort: Arc<AtomicBool>,
-) -> Arc<Mutex<bool>> {
+pub fn buffer_container_tracks(args: ContainerTrackArgs, abort: Arc<AtomicBool>) -> JoinHandle<()> {
     let ContainerTrackArgs {
         file_path,
         track_entries,
@@ -107,8 +105,6 @@ pub fn buffer_container_tracks(
             valid_entries,
         )
     };
-
-    let playing: Arc<Mutex<bool>> = Arc::new(Mutex::new(true));
 
     thread::spawn(move || {
         if valid_entries.is_empty() {
@@ -265,6 +261,7 @@ pub fn buffer_container_tracks(
                         &mut buffer_map.clone(),
                         primary_track_key,
                         stereo_samples,
+                        &abort,
                         buffer_notify.as_ref(),
                     );
                 }
@@ -287,7 +284,5 @@ pub fn buffer_container_tracks(
                 }
             }
         }
-    });
-
-    playing
+    })
 }
