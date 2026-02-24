@@ -19,6 +19,7 @@ use super::super::super::buffer_mixer::{DecodeBackpressure, SourceKey};
 use super::super::super::decoder_events::DecodedPacket;
 use super::{interleaved_samples, packet_ts_seconds};
 
+/// Spawn a decode worker for one standalone audio file source.
 pub(crate) fn spawn_file_decode_worker(
     file_path: String,
     start_time: f64,

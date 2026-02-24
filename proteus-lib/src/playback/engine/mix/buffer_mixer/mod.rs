@@ -37,6 +37,7 @@ pub(crate) enum SourceKey {
 }
 
 impl From<&ShuffleSource> for SourceKey {
+    /// Convert a runtime shuffle source into a decode-worker source key.
     fn from(value: &ShuffleSource) -> Self {
         match value {
             ShuffleSource::TrackId(track_id) => Self::TrackId(*track_id),
@@ -80,6 +81,7 @@ struct BufferInstance {
 }
 
 impl BufferInstance {
+    /// Create an empty per-instance buffer and counters for one runtime instance.
     fn new(meta: RuntimeInstanceMeta, capacity_samples: usize) -> Self {
         Self {
             meta,
@@ -722,6 +724,7 @@ mod tests {
 
     use super::{BufferMixer, FillState, SourceKey};
 
+    /// Build a small two-track runtime plan used by buffer mixer unit tests.
     fn simple_plan() -> RuntimeInstancePlan {
         RuntimeInstancePlan {
             logical_track_count: 2,
@@ -756,6 +759,7 @@ mod tests {
     }
 
     #[test]
+    /// Verifies packet routing writes samples only to matching source instances.
     fn route_packet_targets_and_zero_fills_instances() {
         let mut mixer = BufferMixer::new(simple_plan(), 48_000, 2, 8, HashMap::new(), 4);
 
@@ -766,6 +770,7 @@ mod tests {
     }
 
     #[test]
+    /// Verifies mix readiness and sample consumption stay in lockstep.
     fn readiness_and_take_samples_are_synchronized() {
         let mut mixer = BufferMixer::new(simple_plan(), 48_000, 2, 16, HashMap::new(), 4);
 
@@ -782,6 +787,7 @@ mod tests {
     }
 
     #[test]
+    /// Verifies finish signals propagate to per-track and global finished state.
     fn signal_finish_propagates_track_and_mix_finished() {
         let mut mixer = BufferMixer::new(simple_plan(), 48_000, 2, 8, HashMap::new(), 4);
         mixer.signal_finish(&SourceKey::TrackId(1));
@@ -794,6 +800,7 @@ mod tests {
     }
 
     #[test]
+    /// Verifies aggregate fill-state reporting reflects per-instance fullness.
     fn fill_state_aggregates_as_expected() {
         let mut track_mix = HashMap::new();
         track_mix.insert(0usize, (1.0_f32, 0.0_f32));
@@ -808,6 +815,7 @@ mod tests {
     }
 
     #[test]
+    /// Verifies packets before a window start are represented as aligned zero-fill.
     fn route_packet_zero_fills_when_packet_is_before_window_start() {
         let plan = RuntimeInstancePlan {
             logical_track_count: 1,

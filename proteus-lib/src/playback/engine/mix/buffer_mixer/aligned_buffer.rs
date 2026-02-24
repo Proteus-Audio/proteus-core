@@ -23,14 +23,17 @@ pub(super) struct AlignedSampleBuffer {
 }
 
 impl AlignedSampleBuffer {
+    /// Create an empty aligned buffer for an instance.
     pub(super) fn with_capacity(_capacity_samples: usize) -> Self {
         Self::default()
     }
 
+    /// Return the total queued sample count across all segments.
     pub(super) fn len(&self) -> usize {
         self.len_samples
     }
 
+    /// Pop one sample from the head of the queue, expanding zero-runs on demand.
     pub(super) fn pop_front(&mut self) -> Option<f32> {
         loop {
             let front = self.segments.front_mut()?;
@@ -64,6 +67,7 @@ impl AlignedSampleBuffer {
         }
     }
 
+    /// Append a run of virtual zeros, coalescing adjacent zero segments.
     pub(super) fn push_zeros(&mut self, count: usize) {
         if count == 0 {
             return;
@@ -77,6 +81,7 @@ impl AlignedSampleBuffer {
         self.len_samples = self.len_samples.saturating_add(count);
     }
 
+    /// Append owned copies of real samples from a slice.
     pub(super) fn push_samples_from_slice(&mut self, slice: &[f32]) {
         if slice.is_empty() {
             return;
@@ -88,6 +93,7 @@ impl AlignedSampleBuffer {
         self.len_samples = self.len_samples.saturating_add(slice.len());
     }
 
+    /// Append an owned sample vector as a new segment.
     pub(super) fn push_owned_samples(&mut self, mut data: Vec<f32>) {
         if data.is_empty() {
             return;

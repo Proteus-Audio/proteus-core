@@ -19,12 +19,14 @@ pub(super) struct DecodeWorkerJoinGuard {
 }
 
 impl DecodeWorkerJoinGuard {
+    /// Register a decode worker to be joined during teardown.
     pub(super) fn push(&mut self, handle: JoinHandle<()>) {
         self.workers.push(handle);
     }
 }
 
 impl Drop for DecodeWorkerJoinGuard {
+    /// Join all registered decode workers, logging but tolerating panics.
     fn drop(&mut self) {
         for worker in self.workers.drain(..) {
             if worker.join().is_err() {

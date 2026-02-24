@@ -12,6 +12,7 @@ pub(super) struct PushResult {
     pub(super) wrote_any: bool,
 }
 
+/// Push an owned sample vector into an instance buffer, truncating to capacity.
 pub(super) fn push_owned_slice(
     buffer: &mut AlignedSampleBuffer,
     capacity_samples: usize,
@@ -35,6 +36,7 @@ pub(super) fn push_owned_slice(
     result
 }
 
+/// Push borrowed samples into an instance buffer, truncating to capacity.
 pub(super) fn push_slice(
     buffer: &mut AlignedSampleBuffer,
     capacity_samples: usize,
@@ -54,6 +56,7 @@ pub(super) fn push_slice(
     result
 }
 
+/// Push virtual zero samples into an instance buffer, truncating to capacity.
 pub(super) fn push_zeros(
     buffer: &mut AlignedSampleBuffer,
     capacity_samples: usize,
@@ -75,6 +78,7 @@ pub(super) fn push_zeros(
     result
 }
 
+/// Collapse multiple per-instance "full" flags into one aggregate fill state.
 pub(super) fn aggregate_fill_state<I>(states: I) -> FillState
 where
     I: IntoIterator<Item = bool>,
@@ -98,6 +102,7 @@ where
     }
 }
 
+/// Compute interleaved sample spans where a decoded packet overlaps active windows.
 pub(super) fn packet_overlap_samples(
     packet_ts: f64,
     frame_count: usize,
@@ -134,6 +139,7 @@ pub(super) fn packet_overlap_samples(
     spans
 }
 
+/// Return whether an instance should participate in current readiness/alignment checks.
 pub(super) fn instance_needs_data(
     _instance: &BufferInstance,
     _consumed_samples: usize,
@@ -145,6 +151,7 @@ pub(super) fn instance_needs_data(
     // all instance buffers advance together via real audio or zero-fill.
 }
 
+/// Return true when playback has moved past an instance window and no buffered data remains.
 pub(super) fn instance_fully_past_window(
     instance: &BufferInstance,
     consumed_samples: usize,
@@ -157,6 +164,7 @@ pub(super) fn instance_fully_past_window(
     consumed_samples >= end_sample && instance.buffer.len() == 0
 }
 
+/// Return true when a packet timestamp is at or beyond the instance's final window end.
 pub(super) fn instance_past_window_ts(instance: &BufferInstance, ts: &f64) -> bool {
     let end: Option<f64> = instance
         .meta
@@ -171,6 +179,7 @@ pub(super) fn instance_past_window_ts(instance: &BufferInstance, ts: &f64) -> bo
 }
 
 #[cfg(feature = "buffer-map")]
+/// Emit a buffer-map header line for a logical track.
 pub(super) fn log_buffer_header(
     logical_track_index: usize,
     sample_rate: u32,
@@ -182,12 +191,14 @@ pub(super) fn log_buffer_header(
 }
 
 #[cfg(feature = "buffer-map")]
+/// Emit a buffer-map occupancy line for one instance.
 pub(super) fn log_buffer(instance: &BufferInstance, map: Vec<&str>) {
     let instance_id = instance.meta.instance_id;
     log(&format!("[{}] <- i{}\n", map.join(""), instance_id));
 }
 
 #[cfg(not(feature = "buffer-map"))]
+/// No-op header logger when buffer-map diagnostics are disabled.
 pub(super) fn log_buffer_header(
     _logical_track_index: usize,
     _sample_rate: u32,
@@ -197,8 +208,10 @@ pub(super) fn log_buffer_header(
 }
 
 #[cfg(not(feature = "buffer-map"))]
+/// No-op row logger when buffer-map diagnostics are disabled.
 pub(super) fn log_buffer(_instance: &BufferInstance, _map: Vec<&str>) {}
 
+/// Convert the final active-window end of an instance into interleaved sample offset.
 fn window_end_samples(
     instance: &BufferInstance,
     sample_rate: u32,
@@ -212,11 +225,13 @@ fn window_end_samples(
     end_ms.map(|ms| ms_to_samples(ms, sample_rate, channels))
 }
 
+/// Convert interleaved sample count to milliseconds for logging and bookkeeping.
 pub(super) fn samples_to_ms(samples: usize, sample_rate: u32, channels: usize) -> u64 {
     let frames = samples / channels.max(1);
     ((frames as f64 / sample_rate.max(1) as f64) * 1000.0).round() as u64
 }
 
+/// Convert milliseconds to an interleaved sample count for the output format.
 fn ms_to_samples(ms: u64, sample_rate: u32, channels: usize) -> usize {
     let frames = ((ms as f64 / 1000.0) * sample_rate as f64).round() as usize;
     frames.saturating_mul(channels)

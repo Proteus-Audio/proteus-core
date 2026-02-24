@@ -31,6 +31,8 @@ pub(crate) struct DecodeBackpressure {
 }
 
 impl DecodeBackpressure {
+    /// Build backpressure state from the mixer's per-instance buffers.
+    /// Build backpressure state from the mixer's per-instance buffers.
     pub(super) fn from_instances(instances: &[BufferInstance]) -> Self {
         let mut state = DecodeBackpressureState::default();
         state.instances.reserve(instances.len());
@@ -54,6 +56,8 @@ impl DecodeBackpressure {
         }
     }
 
+    /// Block a decode worker until every routed instance for `source` has room.
+    /// Block until the given source can atomically reserve room across all routed instances.
     pub(crate) fn wait_for_source_room(
         &self,
         source: &SourceKey,
@@ -116,6 +120,8 @@ impl DecodeBackpressure {
         }
     }
 
+    /// Account for a routed write attempt and wake any waiting decode workers.
+    /// Reconcile reserved room with actual routed writes and notify waiting workers.
     pub(super) fn on_samples_pushed(
         &self,
         instance_index: usize,
@@ -150,6 +156,8 @@ impl DecodeBackpressure {
         }
     }
 
+    /// Account for samples consumed by the mixer and wake waiting decode workers.
+    /// Record samples consumed from an instance buffer and notify waiting workers.
     pub(super) fn on_samples_popped(&self, instance_index: usize, popped_samples: usize) {
         if popped_samples == 0 {
             return;
@@ -170,6 +178,8 @@ impl DecodeBackpressure {
         self.cv.notify_all();
     }
 
+    /// Mark an instance as finished so it stops participating in backpressure checks.
+    /// Mark an instance finished so it no longer blocks backpressure checks.
     pub(super) fn on_finished(&self, instance_index: usize) {
         let mut guard = self.state.lock().unwrap();
         if let Some(instance) = guard.instances.get_mut(instance_index) {
@@ -188,6 +198,8 @@ impl DecodeBackpressure {
         }
     }
 
+    /// Release all waiting decode workers during teardown.
+    /// Wake all waiters and force future room checks to fail.
     pub(crate) fn shutdown(&self) {
         let mut guard = self.state.lock().unwrap();
         guard.shutdown = true;
@@ -195,16 +207,22 @@ impl DecodeBackpressure {
         self.cv.notify_all();
     }
 
+    /// Return true if any decode worker is currently waiting on room.
+    /// Return true when any decode worker is blocked waiting for room.
     pub(crate) fn has_waiters(&self) -> bool {
         self.state.lock().unwrap().waiting_threads > 0
     }
 
+    /// Enable startup fairness so lagging sources are prioritized until the start gate passes.
+    /// Enable startup fairness mode with a per-instance target occupancy.
     pub(crate) fn enable_startup_priority(&self, target_samples: usize) {
         let mut guard = self.state.lock().unwrap();
         guard.startup_priority_target_samples = Some(target_samples.max(1));
         self.cv.notify_all();
     }
 
+    /// Disable startup fairness and resume steady-state backpressure behavior.
+    /// Disable startup fairness mode and resume steady-state buffering behavior.
     pub(crate) fn disable_startup_priority(&self) {
         let mut guard = self.state.lock().unwrap();
         guard.startup_priority_target_samples = None;
@@ -218,6 +236,8 @@ struct SourceRoomStatus {
     summary: String,
 }
 
+/// Evaluate whether a source can reserve room for its next decoded packet.
+/// Compute whether a source can reserve room for its next packet span.
 fn source_room_status(
     state: &DecodeBackpressureState,
     source: &SourceKey,
@@ -311,6 +331,8 @@ fn source_room_status(
     }
 }
 
+/// Reserve space for a source across all routed instances before packet delivery.
+/// Reserve capacity for a source packet across all unfinished routed instances.
 fn reserve_source_room(
     state: &mut DecodeBackpressureState,
     source: &SourceKey,
