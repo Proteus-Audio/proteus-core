@@ -183,6 +183,10 @@ pub fn spawn_mix_thread(
                 }
             }
         }
+        let startup_gate_target_samples = start_samples.max(min_mix_samples);
+        if !file_paths.is_empty() && startup_gate_target_samples > 0 {
+            decode_backpressure.enable_startup_priority(startup_gate_target_samples);
+        }
 
         if !track_ids.is_empty() {
             if let Some(path) = container_path {
@@ -369,6 +373,7 @@ pub fn spawn_mix_thread(
             if !started {
                 if buffer_mixer.mix_ready_with_min_samples(start_samples.max(min_mix_samples)) {
                     started = true;
+                    decode_backpressure.disable_startup_priority();
                     if !logged_start_gate {
                         logged_start_gate = true;
                         info!(

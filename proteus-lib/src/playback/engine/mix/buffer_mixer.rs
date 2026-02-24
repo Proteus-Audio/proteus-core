@@ -80,6 +80,7 @@ struct DecodeBackpressureInstance {
 struct DecodeBackpressureState {
     shutdown: bool,
     waiting_threads: usize,
+    startup_priority_target_samples: Option<usize>,
     instances: Vec<DecodeBackpressureInstance>,
     source_to_instances: HashMap<SourceKey, Vec<usize>>,
 }
@@ -258,6 +259,18 @@ impl DecodeBackpressure {
     pub(crate) fn has_waiters(&self) -> bool {
         self.state.lock().unwrap().waiting_threads > 0
     }
+
+    pub(crate) fn enable_startup_priority(&self, target_samples: usize) {
+        let mut guard = self.state.lock().unwrap();
+        guard.startup_priority_target_samples = Some(target_samples.max(1));
+        self.cv.notify_all();
+    }
+
+    pub(crate) fn disable_startup_priority(&self) {
+        let mut guard = self.state.lock().unwrap();
+        guard.startup_priority_target_samples = None;
+        self.cv.notify_all();
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -280,6 +293,8 @@ fn source_room_status(
 
     let mut saw_unfinished = false;
     let mut all_have_target_room = true;
+    let startup_target = state.startup_priority_target_samples;
+    let mut source_has_startup_deficit = false;
     let mut parts = Vec::new();
 
     for instance_index in instance_indices {
@@ -297,6 +312,12 @@ fn source_room_status(
             .saturating_add(instance.reserved_samples)
             .min(instance.capacity_samples);
         let free = instance.capacity_samples.saturating_sub(occupied);
+        if let Some(startup_target) = startup_target {
+            let startup_target = startup_target.min(instance.capacity_samples.max(1));
+            if occupied < startup_target {
+                source_has_startup_deficit = true;
+            }
+        }
 
         // A packet may be larger than the per-instance ring capacity, so "full packet room"
         // is impossible in that case. Clamp the target to preserve liveness.
@@ -320,15 +341,32 @@ fn source_room_status(
         };
     }
 
+    let global_startup_deficit_exists = startup_target.is_some_and(|startup_target| {
+        state.instances.iter().any(|instance| {
+            if instance.finished {
+                return false;
+            }
+            let occupied = instance
+                .buffered_samples
+                .saturating_add(instance.reserved_samples)
+                .min(instance.capacity_samples);
+            let target = startup_target.min(instance.capacity_samples.max(1));
+            occupied < target
+        })
+    });
+
     // Routing writes a full packet span (real samples or underlay) into every unfinished instance
     // for the source. Allowing partial room here silently drops packet tails and compresses time.
-    let allowed = all_have_target_room;
+    let startup_fairness_allows = !global_startup_deficit_exists || source_has_startup_deficit;
+    let allowed = all_have_target_room && startup_fairness_allows;
     SourceRoomStatus {
         allowed,
         summary: format!(
-            "allowed={} all_target={} [{}]",
+            "allowed={} all_target={} startup_deficit_global={} startup_deficit_source={} [{}]",
             allowed,
             all_have_target_room,
+            global_startup_deficit_exists,
+            source_has_startup_deficit,
             parts.join(", ")
         ),
     }
