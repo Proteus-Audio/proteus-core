@@ -1,12 +1,14 @@
 //! Algorithmic reverb with smooth diffusion.
 //!
-//! This reverb follows a classic Schroeder-style layout:
+//! This reverb uses a Schroeder-inspired layout with extra diffusion stages:
 //! 1) A pre-delay to separate the direct sound from the reverb onset.
-//! 2) A set of parallel lowpass feedback comb filters to build decay.
-//! 3) A pair of series allpass filters to smooth the diffusion.
+//! 2) A short series of input allpass diffusers to spread transients.
+//! 3) A bank of parallel lowpass feedback comb filters to build decay.
+//! 4) A short set of output allpass diffusers plus tone shaping for a softer tail.
 //!
-//! The comb filters create the overall decay envelope while the allpass
-//! stages smear transients so the tail sounds dense instead of grainy.
+//! Each channel keeps an independent reverb lane (with small decorrelated
+//! delay offsets) to avoid cross-channel ringing from processing interleaved
+//! samples through one shared delay network.
 
 use log::info;
 use serde::{Deserialize, Serialize};
@@ -22,8 +24,9 @@ const MAX_DECAY: f32 = 0.98;
 const MAX_DAMPING: f32 = 0.99;
 const MAX_DIFFUSION: f32 = 0.9;
 
-const COMB_TUNING_MULTIPLIERS: [f32; 4] = [1.0, 1.33, 1.58, 1.91];
-const ALLPASS_TUNING_MULTIPLIERS: [f32; 2] = [0.28, 0.52];
+const COMB_TUNING_MULTIPLIERS: [f32; 8] = [1.0, 1.09, 1.2, 1.33, 1.47, 1.63, 1.82, 2.03];
+const INPUT_ALLPASS_TUNING_MULTIPLIERS: [f32; 3] = [0.07, 0.11, 0.17];
+const OUTPUT_ALLPASS_TUNING_MULTIPLIERS: [f32; 3] = [0.28, 0.41, 0.57];
 
 /// Serialized configuration for the diffusion reverb.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -203,24 +206,17 @@ impl DiffusionReverbEffect {
     }
 
     fn ensure_state(&mut self, context: &EffectContext) {
-        let pre_delay_samples = delay_samples(
-            context.sample_rate,
-            context.channels,
-            self.settings.pre_delay_ms,
-        );
-        let room_size_samples = delay_samples(
-            context.sample_rate,
-            context.channels,
-            self.settings.room_size_ms,
-        );
+        let pre_delay_samples = delay_samples(context.sample_rate, self.settings.pre_delay_ms);
+        let room_size_samples = delay_samples(context.sample_rate, self.settings.room_size_ms);
         let tuning = Tuning::new(pre_delay_samples, room_size_samples);
+        let channels = context.channels.max(1);
         let needs_reset = self
             .state
             .as_ref()
-            .map(|state| state.tuning != tuning)
+            .map(|state| state.tuning != tuning || state.channels != channels)
             .unwrap_or(true);
         if needs_reset {
-            self.state = Some(DiffusionReverbState::new(tuning));
+            self.state = Some(DiffusionReverbState::new(tuning, channels));
         }
     }
 }
@@ -228,8 +224,9 @@ impl DiffusionReverbEffect {
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct Tuning {
     pre_delay_samples: usize,
-    comb_samples: [usize; 4],
-    allpass_samples: [usize; 2],
+    comb_samples: [usize; 8],
+    input_allpass_samples: [usize; 3],
+    output_allpass_samples: [usize; 3],
     max_delay: usize,
 }
 
@@ -237,12 +234,15 @@ impl Tuning {
     fn new(pre_delay_samples: usize, room_size_samples: usize) -> Self {
         let comb_samples = COMB_TUNING_MULTIPLIERS
             .map(|multiplier| (room_size_samples as f32 * multiplier).round() as usize);
-        let allpass_samples = ALLPASS_TUNING_MULTIPLIERS
+        let input_allpass_samples = INPUT_ALLPASS_TUNING_MULTIPLIERS
+            .map(|multiplier| (room_size_samples as f32 * multiplier).round() as usize);
+        let output_allpass_samples = OUTPUT_ALLPASS_TUNING_MULTIPLIERS
             .map(|multiplier| (room_size_samples as f32 * multiplier).round() as usize);
         let max_delay = comb_samples
             .iter()
             .copied()
-            .chain(allpass_samples.iter().copied())
+            .chain(input_allpass_samples.iter().copied())
+            .chain(output_allpass_samples.iter().copied())
             .chain([pre_delay_samples])
             .max()
             .unwrap_or(1)
@@ -250,46 +250,80 @@ impl Tuning {
         Self {
             pre_delay_samples: pre_delay_samples.max(1),
             comb_samples: comb_samples.map(|value| value.max(1)),
-            allpass_samples: allpass_samples.map(|value| value.max(1)),
+            input_allpass_samples: input_allpass_samples.map(|value| value.max(1)),
+            output_allpass_samples: output_allpass_samples.map(|value| value.max(1)),
             max_delay,
         }
+    }
+
+    fn decorrelated(self, channel_index: usize) -> Self {
+        if channel_index == 0 {
+            return self;
+        }
+        let channel_step = channel_index as usize;
+        let mut tuned = self;
+        tuned.pre_delay_samples = tuned.pre_delay_samples.saturating_add(channel_step * 3);
+        tuned.comb_samples = tuned
+            .comb_samples
+            .iter()
+            .enumerate()
+            .map(|(i, &len)| len.saturating_add(channel_step * (5 + i * 2)))
+            .collect::<Vec<_>>()
+            .try_into()
+            .unwrap_or(tuned.comb_samples);
+        tuned.input_allpass_samples = tuned
+            .input_allpass_samples
+            .iter()
+            .enumerate()
+            .map(|(i, &len)| len.saturating_add(channel_step * (2 + i)))
+            .collect::<Vec<_>>()
+            .try_into()
+            .unwrap_or(tuned.input_allpass_samples);
+        tuned.output_allpass_samples = tuned
+            .output_allpass_samples
+            .iter()
+            .enumerate()
+            .map(|(i, &len)| len.saturating_add(channel_step * (3 + i)))
+            .collect::<Vec<_>>()
+            .try_into()
+            .unwrap_or(tuned.output_allpass_samples);
+        tuned.max_delay = tuned
+            .comb_samples
+            .iter()
+            .copied()
+            .chain(tuned.input_allpass_samples.iter().copied())
+            .chain(tuned.output_allpass_samples.iter().copied())
+            .chain([tuned.pre_delay_samples])
+            .max()
+            .unwrap_or(1)
+            .max(1);
+        tuned
     }
 }
 
 #[derive(Clone)]
 struct DiffusionReverbState {
     tuning: Tuning,
-    pre_delay: DelayLine,
-    combs: [CombFilter; 4],
-    allpass: [AllpassFilter; 2],
+    channels: usize,
+    lanes: Vec<ReverbLane>,
 }
 
 impl DiffusionReverbState {
-    fn new(tuning: Tuning) -> Self {
+    fn new(tuning: Tuning, channels: usize) -> Self {
         info!("Using Diffusion Reverb!");
+        let lanes = (0..channels)
+            .map(|channel| ReverbLane::new(tuning.decorrelated(channel)))
+            .collect();
         Self {
             tuning,
-            pre_delay: DelayLine::new(tuning.pre_delay_samples),
-            combs: [
-                CombFilter::new(tuning.comb_samples[0]),
-                CombFilter::new(tuning.comb_samples[1]),
-                CombFilter::new(tuning.comb_samples[2]),
-                CombFilter::new(tuning.comb_samples[3]),
-            ],
-            allpass: [
-                AllpassFilter::new(tuning.allpass_samples[0]),
-                AllpassFilter::new(tuning.allpass_samples[1]),
-            ],
+            channels,
+            lanes,
         }
     }
 
     fn reset(&mut self) {
-        self.pre_delay.reset();
-        for comb in &mut self.combs {
-            comb.reset();
-        }
-        for allpass in &mut self.allpass {
-            allpass.reset();
+        for lane in &mut self.lanes {
+            lane.reset();
         }
     }
 
@@ -302,37 +336,123 @@ impl DiffusionReverbState {
         diffusion: f32,
         out: &mut Vec<f32>,
     ) {
-        for &sample in samples {
-            let delayed = self.pre_delay.process(sample);
-            let mut comb_sum = 0.0;
-            for comb in &mut self.combs {
-                comb_sum += comb.process(delayed, decay, damping);
+        let channels = self.channels.max(1);
+        let input_diffusion = (0.25 + diffusion * 0.35).clamp(0.1, 0.7);
+        let output_diffusion = (0.2 + diffusion * 0.45).clamp(0.1, 0.8);
+
+        for frame in samples.chunks_exact(channels) {
+            for (channel, &sample) in frame.iter().enumerate() {
+                let wet = self.lanes[channel].process_sample(
+                    sample,
+                    decay,
+                    damping,
+                    input_diffusion,
+                    output_diffusion,
+                );
+                out.push(sample * (1.0 - mix) + wet * mix);
             }
-            let mut wet = comb_sum * 0.25;
-            for allpass in &mut self.allpass {
-                wet = allpass.process(wet, diffusion);
-            }
-            let output = sample * (1.0 - mix) + wet * mix;
-            out.push(output);
+        }
+
+        let remainder = samples.len() % channels;
+        if remainder != 0 {
+            let start = samples.len() - remainder;
+            out.extend_from_slice(&samples[start..]);
         }
     }
 
     fn drain_tail(&mut self, decay: f32, damping: f32, diffusion: f32) -> Vec<f32> {
-        let tail_samples = self.tuning.max_delay.saturating_mul(4).max(1);
-        let mut out = Vec::with_capacity(tail_samples);
-        for _ in 0..tail_samples {
-            let delayed = self.pre_delay.process(0.0);
-            let mut comb_sum = 0.0;
-            for comb in &mut self.combs {
-                comb_sum += comb.process(delayed, decay, damping);
+        let input_diffusion = (0.25 + diffusion * 0.35).clamp(0.1, 0.7);
+        let output_diffusion = (0.2 + diffusion * 0.45).clamp(0.1, 0.8);
+        let tail_frames = self.tuning.max_delay.saturating_mul(8).max(1);
+        let mut out = Vec::with_capacity(tail_frames.saturating_mul(self.channels));
+        for _ in 0..tail_frames {
+            for lane in &mut self.lanes {
+                let wet =
+                    lane.process_sample(0.0, decay, damping, input_diffusion, output_diffusion);
+                out.push(wet);
             }
-            let mut wet = comb_sum * 0.25;
-            for allpass in &mut self.allpass {
-                wet = allpass.process(wet, diffusion);
-            }
-            out.push(wet);
         }
         out
+    }
+}
+
+#[derive(Clone)]
+struct ReverbLane {
+    pre_delay: DelayLine,
+    input_allpass: [AllpassFilter; 3],
+    combs: [CombFilter; 8],
+    output_allpass: [AllpassFilter; 3],
+    wet_tone: OnePoleLowpass,
+}
+
+impl ReverbLane {
+    fn new(tuning: Tuning) -> Self {
+        Self {
+            pre_delay: DelayLine::new(tuning.pre_delay_samples),
+            input_allpass: [
+                AllpassFilter::new(tuning.input_allpass_samples[0]),
+                AllpassFilter::new(tuning.input_allpass_samples[1]),
+                AllpassFilter::new(tuning.input_allpass_samples[2]),
+            ],
+            combs: [
+                CombFilter::new(tuning.comb_samples[0]),
+                CombFilter::new(tuning.comb_samples[1]),
+                CombFilter::new(tuning.comb_samples[2]),
+                CombFilter::new(tuning.comb_samples[3]),
+                CombFilter::new(tuning.comb_samples[4]),
+                CombFilter::new(tuning.comb_samples[5]),
+                CombFilter::new(tuning.comb_samples[6]),
+                CombFilter::new(tuning.comb_samples[7]),
+            ],
+            output_allpass: [
+                AllpassFilter::new(tuning.output_allpass_samples[0]),
+                AllpassFilter::new(tuning.output_allpass_samples[1]),
+                AllpassFilter::new(tuning.output_allpass_samples[2]),
+            ],
+            wet_tone: OnePoleLowpass::default(),
+        }
+    }
+
+    fn reset(&mut self) {
+        self.pre_delay.reset();
+        for allpass in &mut self.input_allpass {
+            allpass.reset();
+        }
+        for comb in &mut self.combs {
+            comb.reset();
+        }
+        for allpass in &mut self.output_allpass {
+            allpass.reset();
+        }
+        self.wet_tone.reset();
+    }
+
+    fn process_sample(
+        &mut self,
+        input: f32,
+        decay: f32,
+        damping: f32,
+        input_diffusion: f32,
+        output_diffusion: f32,
+    ) -> f32 {
+        let mut x = self.pre_delay.process(input);
+        for allpass in &mut self.input_allpass {
+            x = allpass.process(x, input_diffusion);
+        }
+
+        let mut comb_sum = 0.0;
+        for comb in &mut self.combs {
+            comb_sum += comb.process(x, decay, damping);
+        }
+
+        let mut wet = comb_sum / self.combs.len() as f32;
+        for allpass in &mut self.output_allpass {
+            wet = allpass.process(wet, output_diffusion);
+        }
+
+        // Soften high-frequency ringing in the late tail.
+        let tone_smoothing = (0.55 + damping * 0.35).clamp(0.2, 0.95);
+        self.wet_tone.process(wet, tone_smoothing)
     }
 }
 
@@ -432,11 +552,27 @@ impl AllpassFilter {
     }
 }
 
-fn delay_samples(sample_rate: u32, channels: usize, duration_ms: u64) -> usize {
+#[derive(Clone, Default)]
+struct OnePoleLowpass {
+    state: f32,
+}
+
+impl OnePoleLowpass {
+    fn reset(&mut self) {
+        self.state = 0.0;
+    }
+
+    fn process(&mut self, input: f32, smoothing: f32) -> f32 {
+        self.state = input * (1.0 - smoothing) + self.state * smoothing;
+        self.state
+    }
+}
+
+fn delay_samples(sample_rate: u32, duration_ms: u64) -> usize {
     if duration_ms == 0 {
         return 0;
     }
     let ns = duration_ms.saturating_mul(1_000_000);
-    let samples = ns.saturating_mul(sample_rate as u64) / 1_000_000_000 * channels as u64;
+    let samples = ns.saturating_mul(sample_rate as u64) / 1_000_000_000;
     samples as usize
 }
