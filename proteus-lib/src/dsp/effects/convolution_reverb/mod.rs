@@ -1,6 +1,8 @@
 //! Convolution reverb effect wrapper for the DSP chain.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use log::{info, warn};
 use serde::{Deserialize, Serialize};
@@ -21,6 +23,9 @@ pub(crate) const REVERB_BATCH_BLOCKS: usize = 2;
 const DRAIN_MAX_BLOCKS: usize = 128;
 const DRAIN_SILENCE_EPSILON: f32 = 1.0e-6;
 const DRAIN_SILENT_BLOCKS_TO_STOP: usize = 2;
+
+type ImpulseResponseCacheMap = HashMap<ImpulseResponseCacheKey, Arc<impulse_response::ImpulseResponse>>;
+static IMPULSE_RESPONSE_CACHE: OnceLock<Mutex<ImpulseResponseCacheMap>> = OnceLock::new();
 
 /// Preferred processing batch size in interleaved samples for the reverb.
 pub fn preferred_batch_samples(channels: usize) -> usize {
@@ -210,6 +215,23 @@ struct ResolvedConfig {
     tail_db: f32,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+enum ImpulseResponseCacheSource {
+    Attachment {
+        container_path: String,
+        attachment_name: String,
+    },
+    FilePath {
+        path: String,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct ImpulseResponseCacheKey {
+    source: ImpulseResponseCacheSource,
+    tail_db_bits: u32,
+}
+
 #[derive(Clone)]
 struct ConvolutionReverbState {
     reverb: reverb::Reverb,
@@ -364,14 +386,37 @@ fn build_reverb_with_impulse_response(
         ImpulseResponseSpec::Attachment(name) => container_path
             .ok_or_else(|| "missing container path for attachment".to_string())
             .and_then(|path| {
-                load_impulse_response_from_prot_attachment_with_tail(path, &name, Some(tail_db))
-                    .map_err(|err| err.to_string())
+                load_cached_impulse_response(
+                    ImpulseResponseCacheKey {
+                        source: ImpulseResponseCacheSource::Attachment {
+                            container_path: path.to_string(),
+                            attachment_name: name.clone(),
+                        },
+                        tail_db_bits: tail_db.to_bits(),
+                    },
+                    || {
+                        load_impulse_response_from_prot_attachment_with_tail(
+                            path,
+                            &name,
+                            Some(tail_db),
+                        )
+                        .map_err(|err| err.to_string())
+                    },
+                )
             }),
         ImpulseResponseSpec::FilePath(path) => {
             let resolved_path = resolve_impulse_response_path(container_path, &path);
             if resolved_path.exists() {
-                load_impulse_response_from_file_with_tail(&resolved_path, Some(tail_db))
-                    .map_err(|err| err.to_string())
+                let cache_key = ImpulseResponseCacheKey {
+                    source: ImpulseResponseCacheSource::FilePath {
+                        path: resolved_path.to_string_lossy().into_owned(),
+                    },
+                    tail_db_bits: tail_db.to_bits(),
+                };
+                load_cached_impulse_response(cache_key, || {
+                    load_impulse_response_from_file_with_tail(&resolved_path, Some(tail_db))
+                        .map_err(|err| err.to_string())
+                })
             } else {
                 match container_path {
                     Some(container_path) => {
@@ -380,12 +425,23 @@ fn build_reverb_with_impulse_response(
                             .and_then(|name| name.to_str())
                             .map(|name| name.to_string());
                         if let Some(fallback_name) = fallback_name {
-                            load_impulse_response_from_prot_attachment_with_tail(
-                                container_path,
-                                &fallback_name,
-                                Some(tail_db),
+                            load_cached_impulse_response(
+                                ImpulseResponseCacheKey {
+                                    source: ImpulseResponseCacheSource::Attachment {
+                                        container_path: container_path.to_string(),
+                                        attachment_name: fallback_name.clone(),
+                                    },
+                                    tail_db_bits: tail_db.to_bits(),
+                                },
+                                || {
+                                    load_impulse_response_from_prot_attachment_with_tail(
+                                        container_path,
+                                        &fallback_name,
+                                        Some(tail_db),
+                                    )
+                                    .map_err(|err| err.to_string())
+                                },
                             )
-                            .map_err(|err| err.to_string())
                         } else {
                             Err(format!(
                                 "impulse response path not found: {}",
@@ -416,6 +472,27 @@ fn build_reverb_with_impulse_response(
             None
         }
     }
+}
+
+fn load_cached_impulse_response<F>(
+    cache_key: ImpulseResponseCacheKey,
+    loader: F,
+) -> Result<Arc<impulse_response::ImpulseResponse>, String>
+where
+    F: FnOnce() -> Result<impulse_response::ImpulseResponse, String>,
+{
+    let cache = IMPULSE_RESPONSE_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Some(cached) = cache.lock().unwrap().get(&cache_key).cloned() {
+        return Ok(cached);
+    }
+
+    let loaded = Arc::new(loader()?);
+    let mut cache_guard = cache.lock().unwrap();
+    let cached = cache_guard
+        .entry(cache_key)
+        .or_insert_with(|| loaded.clone())
+        .clone();
+    Ok(cached)
 }
 
 fn resolve_impulse_response_path(container_path: Option<&str>, path: &str) -> PathBuf {
