@@ -230,12 +230,10 @@ pub fn spawn_mix_thread(
 
         let warmup_samples = min_mix_samples;
         if warmup_samples > 0 {
-            let mut processed = vec![0.0_f32; warmup_samples];
             let mut effects_guard = effects.lock().unwrap();
             for effect in effects_guard.iter_mut() {
-                processed = effect.process(&processed, &effect_context, false);
+                effect.warm_up(&effect_context);
             }
-            let _ = processed;
         }
         info!(
             "mix startup trace: effect warmup complete in {}ms (warmup_samples={})",
