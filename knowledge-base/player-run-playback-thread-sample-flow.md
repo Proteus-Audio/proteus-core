@@ -6,25 +6,31 @@ This note follows one block of audio samples through `proteus-lib/src/playback/p
 
 1. `Player::initialize_thread` spawns worker thread.
 - File/function: `proteus-lib/src/playback/player/runtime/thread.rs::initialize_thread`
-2. Worker starts `run_playback_thread`, creates `PlayerEngine`, opens output stream, creates sink.
+2. `initialize_thread` opens or reuses the persistent output stream, clones its mixer, and the worker starts `run_playback_thread` to create `PlayerEngine` and sink.
 - File/function: `proteus-lib/src/playback/player/runtime/worker/runner.rs::run_playback_thread`
 3. `PlayerEngine::start_receiver` spawns mix thread and returns `Receiver<(SamplesBuffer, f64)>`.
 - File/function: `proteus-lib/src/playback/engine/mod.rs::start_receiver`
 4. Mix thread spawns source decoders, mixes track buffers, runs DSP chain, emits chunk.
-- File/function: `proteus-lib/src/playback/engine/mix/runner.rs::spawn_mix_thread`
+- File/function: `proteus-lib/src/playback/engine/mix/runner/mod.rs::spawn_mix_thread`
 5. Worker receives chunk, updates meter/timing, appends to `rodio::Sink`.
 - File/function: `proteus-lib/src/playback/player/runtime/worker/runner.rs::update_sink`
 6. `rodio` plays sink queue through the stream mixer/device.
 - File/functions: `proteus-lib/src/playback/player/runtime/worker/runner.rs::initialize_sink`, `rodio::Sink::append`
 
-## Stage 0: Thread bootstrap and output device setup
+## Stage 0: Thread bootstrap and output path setup
+
+Inside `Player::initialize_thread` (before worker spawn):
+
+- Opens default output device with retry logic only when no persistent stream exists yet.
+  - File/function: `proteus-lib/src/playback/player/runtime/worker/runner.rs::open_output_stream_with_retry`
+- Otherwise reuses the existing `OutputStream`.
+- Clones `stream.mixer()` and passes the mixer into `ThreadContext`.
+  - File: `proteus-lib/src/playback/player/runtime/worker/context.rs`
 
 Inside `run_playback_thread`:
 
 - Creates `PlayerEngine` with shared state (prot, effects, metrics, reset flags, buffer settings).
-- Opens default output device with retry logic.
-  - File/function: `proteus-lib/src/playback/player/runtime/worker/runner.rs::open_output_stream_with_retry`
-- Gets `stream.mixer()` and creates a new sink connected to it.
+- Creates a fresh sink connected to the provided/reused mixer.
   - File/function: `proteus-lib/src/playback/player/runtime/worker/runner.rs::initialize_sink`
 - Starts sink paused at muted volume (`0.0`) so startup/resume fade logic controls first audible ramp.
 - Copies duration from engine and sets current playback timestamp (`time_passed`) to start timestamp.
@@ -33,7 +39,8 @@ Inside `run_playback_thread`:
   - File/function: `append_startup_silence`
 
 Important ownership detail:
-- `stream` is kept alive for the whole `run_playback_thread` scope, so sink output remains routed to the active output device while the loop runs.
+- The `OutputStream` is owned by `Player` (not the worker) and kept alive across playback-thread runs.
+- The worker receives only a cloned `rodio::mixer::Mixer`, which is used to create a fresh `Sink` per run.
 
 ## Stage 1: Sample read/decode from files
 
@@ -45,7 +52,7 @@ The worker calls:
 Inside `spawn_mix_thread`:
 
 - Builds runtime shuffle plan from `Prot`.
-  - File/function: `proteus-lib/src/playback/engine/mix/runner.rs::spawn_mix_thread`
+  - File/function: `proteus-lib/src/playback/engine/mix/runner/mod.rs::spawn_mix_thread`
 - Spawns decode producers in one of two ways:
 1. Container fast-path (`.prot/.mka`, no upcoming shuffle events):
 - `buffer_container_tracks(...)`

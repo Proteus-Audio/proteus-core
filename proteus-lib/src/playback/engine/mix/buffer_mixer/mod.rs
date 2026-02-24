@@ -1,20 +1,31 @@
 //! Schedule-driven source router and logical-track mixer.
 
-use log::{debug, error, info, warn};
-use std::collections::{HashMap, HashSet, VecDeque};
-use std::sync::{Arc, Condvar, Mutex};
+mod aligned_buffer;
+mod backpressure;
+mod helpers;
+
+use log::{debug, info, warn};
+use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 use crate::dsp::utils::fade_interleaved_per_frame;
 #[cfg(feature = "buffer-map")]
-use crate::logging::{clear_logfile, log_on_line};
+use crate::logging::clear_logfile;
 use crate::playback::engine::mix::utils::TransitionDirection;
 use crate::{
     container::prot::{RuntimeInstanceMeta, RuntimeInstancePlan, ShuffleSource},
-    logging::log,
     playback::engine::mix::utils::{map_cover, Cover},
 };
 
 use super::track_stage::{apply_track_gain_pan, combine_tracks_equal_weight};
+use aligned_buffer::AlignedSampleBuffer;
+pub(crate) use backpressure::DecodeBackpressure;
+use helpers::{
+    aggregate_fill_state, instance_fully_past_window, instance_needs_data, instance_past_window_ts,
+    packet_overlap_samples, push_owned_slice, push_slice, push_zeros, samples_to_ms,
+};
+#[cfg(feature = "buffer-map")]
+use helpers::{log_buffer, log_buffer_header};
 
 /// Source identifier used by decode workers.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -26,6 +37,7 @@ pub(crate) enum SourceKey {
 }
 
 impl From<&ShuffleSource> for SourceKey {
+    /// Convert a runtime shuffle source into a decode-worker source key.
     fn from(value: &ShuffleSource) -> Self {
         match value {
             ShuffleSource::TrackId(track_id) => Self::TrackId(*track_id),
@@ -59,7 +71,7 @@ pub(crate) struct RouteDecision {
 #[derive(Debug)]
 struct BufferInstance {
     meta: RuntimeInstanceMeta,
-    buffer: VecDeque<f32>,
+    buffer: AlignedSampleBuffer,
     buffer_capacity_samples: usize,
     full: bool,
     finished: bool,
@@ -68,300 +80,12 @@ struct BufferInstance {
     eof_reached_ms: Option<u64>,
 }
 
-#[derive(Debug, Clone)]
-struct DecodeBackpressureInstance {
-    capacity_samples: usize,
-    buffered_samples: usize,
-    reserved_samples: usize,
-    finished: bool,
-}
-
-#[derive(Debug, Default)]
-struct DecodeBackpressureState {
-    shutdown: bool,
-    waiting_threads: usize,
-    instances: Vec<DecodeBackpressureInstance>,
-    source_to_instances: HashMap<SourceKey, Vec<usize>>,
-}
-
-#[derive(Debug, Default)]
-pub(crate) struct DecodeBackpressure {
-    state: Mutex<DecodeBackpressureState>,
-    cv: Condvar,
-}
-
-impl DecodeBackpressure {
-    fn from_instances(instances: &[BufferInstance]) -> Self {
-        let mut state = DecodeBackpressureState::default();
-        state.instances.reserve(instances.len());
-        for (index, instance) in instances.iter().enumerate() {
-            let source = SourceKey::from(&instance.meta.source_key);
-            state
-                .source_to_instances
-                .entry(source.clone())
-                .or_default()
-                .push(index);
-            state.instances.push(DecodeBackpressureInstance {
-                capacity_samples: instance.buffer_capacity_samples,
-                buffered_samples: instance.buffer.len(),
-                reserved_samples: 0,
-                finished: instance.finished,
-            });
-        }
-        Self {
-            state: Mutex::new(state),
-            cv: Condvar::new(),
-        }
-    }
-
-    pub(crate) fn wait_for_source_room(
-        &self,
-        source: &SourceKey,
-        required_samples: usize,
-        abort: &std::sync::atomic::AtomicBool,
-    ) -> bool {
-        if required_samples == 0 {
-            return true;
-        }
-
-        let mut guard = self.state.lock().unwrap();
-        let mut wait_count = 0usize;
-        loop {
-            if guard.shutdown || abort.load(std::sync::atomic::Ordering::Relaxed) {
-                debug!(
-                    "decode_backpressure wait abort/shutdown: source={:?} required_samples={} shutdown={} abort={}",
-                    source,
-                    required_samples,
-                    guard.shutdown,
-                    abort.load(std::sync::atomic::Ordering::Relaxed)
-                );
-                return false;
-            }
-            let status = source_room_status(&guard, source, required_samples);
-            if status.allowed {
-                reserve_source_room(&mut guard, source, required_samples);
-                if wait_count > 0 {
-                    debug!(
-                        "decode_backpressure wait satisfied: source={:?} required_samples={} waits={} details={}",
-                        source,
-                        required_samples,
-                        wait_count,
-                        status.summary
-                    );
-                }
-                return true;
-            }
-            if wait_count == 0 {
-                debug!(
-                    "decode_backpressure wait start: source={:?} required_samples={} details={}",
-                    source, required_samples, status.summary
-                );
-            } else {
-                debug!(
-                    "decode_backpressure wait continue: source={:?} required_samples={} waits={} details={}",
-                    source,
-                    required_samples,
-                    wait_count,
-                    status.summary
-                );
-            }
-            wait_count = wait_count.saturating_add(1);
-            guard.waiting_threads = guard.waiting_threads.saturating_add(1);
-            guard = self.cv.wait(guard).unwrap();
-            guard.waiting_threads = guard.waiting_threads.saturating_sub(1);
-            debug!(
-                "decode_backpressure wait wake: source={:?} required_samples={} waits={}",
-                source, required_samples, wait_count
-            );
-        }
-    }
-
-    fn on_samples_pushed(
-        &self,
-        instance_index: usize,
-        attempted_samples: usize,
-        pushed_samples: usize,
-        is_full: bool,
-    ) {
-        if attempted_samples == 0 && pushed_samples == 0 && !is_full {
-            return;
-        }
-        let mut guard = self.state.lock().unwrap();
-        if let Some(instance) = guard.instances.get_mut(instance_index) {
-            instance.reserved_samples = instance.reserved_samples.saturating_sub(attempted_samples);
-            instance.buffered_samples = instance
-                .buffered_samples
-                .saturating_add(pushed_samples)
-                .min(instance.capacity_samples.max(1));
-            debug!(
-                "decode_backpressure push: instance_index={} attempted_samples={} pushed_samples={} reserved={} buffered={} capacity={} finished={} full_flag={}",
-                instance_index,
-                attempted_samples,
-                pushed_samples,
-                instance.reserved_samples,
-                instance.buffered_samples,
-                instance.capacity_samples,
-                instance.finished,
-                is_full
-            );
-        }
-        if attempted_samples > 0 || pushed_samples > 0 || !is_full {
-            self.cv.notify_all();
-        }
-    }
-
-    fn on_samples_popped(&self, instance_index: usize, popped_samples: usize) {
-        if popped_samples == 0 {
-            return;
-        }
-        let mut guard = self.state.lock().unwrap();
-        if let Some(instance) = guard.instances.get_mut(instance_index) {
-            instance.buffered_samples = instance.buffered_samples.saturating_sub(popped_samples);
-            debug!(
-                "decode_backpressure pop: instance_index={} popped_samples={} reserved={} buffered={} capacity={} finished={}",
-                instance_index,
-                popped_samples,
-                instance.reserved_samples,
-                instance.buffered_samples,
-                instance.capacity_samples,
-                instance.finished
-            );
-        }
-        self.cv.notify_all();
-    }
-
-    fn on_finished(&self, instance_index: usize) {
-        let mut guard = self.state.lock().unwrap();
-        if let Some(instance) = guard.instances.get_mut(instance_index) {
-            if !instance.finished {
-                instance.finished = true;
-                instance.reserved_samples = 0;
-                debug!(
-                    "decode_backpressure finished: instance_index={} reserved={} buffered={} capacity={}",
-                    instance_index,
-                    instance.reserved_samples,
-                    instance.buffered_samples,
-                    instance.capacity_samples
-                );
-                self.cv.notify_all();
-            }
-        }
-    }
-
-    pub(crate) fn shutdown(&self) {
-        let mut guard = self.state.lock().unwrap();
-        guard.shutdown = true;
-        debug!("decode_backpressure shutdown");
-        self.cv.notify_all();
-    }
-
-    pub(crate) fn has_waiters(&self) -> bool {
-        self.state.lock().unwrap().waiting_threads > 0
-    }
-}
-
-#[derive(Debug, Clone)]
-struct SourceRoomStatus {
-    allowed: bool,
-    summary: String,
-}
-
-fn source_room_status(
-    state: &DecodeBackpressureState,
-    source: &SourceKey,
-    required_samples: usize,
-) -> SourceRoomStatus {
-    let Some(instance_indices) = state.source_to_instances.get(source) else {
-        return SourceRoomStatus {
-            allowed: true,
-            summary: "no_instances".to_string(),
-        };
-    };
-
-    let mut saw_unfinished = false;
-    let mut all_have_target_room = true;
-    let mut parts = Vec::new();
-
-    for instance_index in instance_indices {
-        let Some(instance) = state.instances.get(*instance_index) else {
-            continue;
-        };
-        if instance.finished {
-            parts.push(format!("i{}:finished", instance_index));
-            continue;
-        }
-        saw_unfinished = true;
-
-        let occupied = instance
-            .buffered_samples
-            .saturating_add(instance.reserved_samples)
-            .min(instance.capacity_samples);
-        let free = instance.capacity_samples.saturating_sub(occupied);
-
-        // A packet may be larger than the per-instance ring capacity, so "full packet room"
-        // is impossible in that case. Clamp the target to preserve liveness.
-        let target_room = required_samples.min(instance.capacity_samples.max(1));
-        all_have_target_room &= free >= target_room;
-        parts.push(format!(
-            "i{}:buf={} res={} /{} free={} target={}",
-            instance_index,
-            instance.buffered_samples,
-            instance.reserved_samples,
-            instance.capacity_samples,
-            free,
-            target_room
-        ));
-    }
-
-    if !saw_unfinished {
-        return SourceRoomStatus {
-            allowed: true,
-            summary: format!("all_finished [{}]", parts.join(", ")),
-        };
-    }
-
-    // Routing writes a full packet span (real samples or underlay) into every unfinished instance
-    // for the source. Allowing partial room here silently drops packet tails and compresses time.
-    let allowed = all_have_target_room;
-    SourceRoomStatus {
-        allowed,
-        summary: format!(
-            "allowed={} all_target={} [{}]",
-            allowed,
-            all_have_target_room,
-            parts.join(", ")
-        ),
-    }
-}
-
-fn reserve_source_room(
-    state: &mut DecodeBackpressureState,
-    source: &SourceKey,
-    required_samples: usize,
-) {
-    let Some(instance_indices) = state.source_to_instances.get(source).cloned() else {
-        return;
-    };
-    for instance_index in instance_indices {
-        let Some(instance) = state.instances.get_mut(instance_index) else {
-            continue;
-        };
-        if instance.finished {
-            continue;
-        }
-        let reserve = required_samples.min(instance.capacity_samples.max(1));
-        instance.reserved_samples = instance
-            .reserved_samples
-            .saturating_add(reserve)
-            .min(instance.capacity_samples.max(1));
-    }
-}
-
 impl BufferInstance {
+    /// Create an empty per-instance buffer and counters for one runtime instance.
     fn new(meta: RuntimeInstanceMeta, capacity_samples: usize) -> Self {
         Self {
             meta,
-            buffer: VecDeque::with_capacity(capacity_samples.max(1)),
+            buffer: AlignedSampleBuffer::with_capacity(capacity_samples.max(1)),
             buffer_capacity_samples: capacity_samples.max(1),
             full: false,
             finished: false,
@@ -990,225 +714,6 @@ impl BufferMixer {
     }
 }
 
-#[derive(Debug, Clone, Copy, Default)]
-struct PushResult {
-    written_samples: usize,
-    wrote_any: bool,
-}
-
-fn push_owned_slice(
-    buffer: &mut VecDeque<f32>,
-    capacity_samples: usize,
-    slice: Vec<f32>,
-    full_flag: &mut bool,
-) -> PushResult {
-    let mut result = PushResult::default();
-    let mut overflow = false;
-    for sample in slice.iter() {
-        if buffer.len() >= capacity_samples.max(1) {
-            overflow = true;
-            break;
-        }
-        buffer.push_back(*sample);
-        result.wrote_any = true;
-        result.written_samples += 1;
-    }
-    *full_flag = overflow;
-    result
-}
-
-fn push_slice(
-    buffer: &mut VecDeque<f32>,
-    capacity_samples: usize,
-    slice: &[f32],
-    full_flag: &mut bool,
-) -> PushResult {
-    let mut result = PushResult::default();
-    let mut overflow = false;
-    for sample in slice.iter().copied() {
-        if buffer.len() >= capacity_samples.max(1) {
-            overflow = true;
-            break;
-        }
-        buffer.push_back(sample);
-        result.wrote_any = true;
-        result.written_samples += 1;
-    }
-    *full_flag = overflow;
-    result
-}
-
-fn push_zeros(
-    buffer: &mut VecDeque<f32>,
-    capacity_samples: usize,
-    zero_count: usize,
-    full_flag: &mut bool,
-) -> PushResult {
-    let mut result = PushResult::default();
-    let capacity = capacity_samples.max(1);
-    let available = capacity.saturating_sub(buffer.len());
-    let to_write = zero_count.min(available);
-
-    if to_write > 0 {
-        buffer.resize(buffer.len() + to_write, 0.0);
-        result.written_samples = to_write;
-        result.wrote_any = true;
-    }
-
-    *full_flag = to_write < zero_count;
-    result
-}
-
-fn aggregate_fill_state<I>(states: I) -> FillState
-where
-    I: IntoIterator<Item = bool>,
-{
-    let mut saw = false;
-    let mut all_full = true;
-    let mut any_full = false;
-
-    for full in states {
-        saw = true;
-        all_full &= full;
-        any_full |= full;
-    }
-
-    if !saw || !any_full {
-        FillState::NotFull
-    } else if all_full {
-        FillState::Full
-    } else {
-        FillState::Partial
-    }
-}
-
-fn packet_overlap_samples(
-    packet_ts: f64,
-    frame_count: usize,
-    sample_rate: u32,
-    channels: usize,
-    windows: &[crate::container::prot::ActiveWindow],
-) -> Vec<(usize, usize)> {
-    let packet_start = packet_ts.max(0.0);
-    let packet_end = packet_start + (frame_count as f64 / sample_rate as f64);
-    let mut spans = Vec::new();
-    for window in windows {
-        let window_start = window.start_ms as f64 / 1000.0;
-        let window_end = window
-            .end_ms
-            .map(|end| end as f64 / 1000.0)
-            .unwrap_or(f64::INFINITY);
-
-        let overlap_start = packet_start.max(window_start);
-        let overlap_end = packet_end.min(window_end);
-        if overlap_start >= overlap_end {
-            continue;
-        }
-
-        let start_frame = (((overlap_start - packet_start) * sample_rate as f64).floor() as usize)
-            .min(frame_count);
-        let end_frame =
-            (((overlap_end - packet_start) * sample_rate as f64).ceil() as usize).min(frame_count);
-        if end_frame <= start_frame {
-            continue;
-        }
-
-        spans.push((start_frame * channels, end_frame * channels));
-    }
-    spans
-}
-
-fn instance_needs_data(
-    instance: &BufferInstance,
-    consumed_samples: usize,
-    sample_rate: u32,
-    channels: usize,
-) -> bool {
-    true
-    // let start_sample = window_start_samples(instance, sample_rate, channels);
-    // let end_sample = window_end_samples(instance, sample_rate, channels);
-    // consumed_samples >= start_sample && end_sample.map(|end| consumed_samples < end).unwrap_or(true)
-}
-
-fn instance_fully_past_window(
-    instance: &BufferInstance,
-    consumed_samples: usize,
-    sample_rate: u32,
-    channels: usize,
-) -> bool {
-    let Some(end_sample) = window_end_samples(instance, sample_rate, channels) else {
-        return false;
-    };
-    consumed_samples >= end_sample && instance.buffer.len() == 0
-}
-
-fn instance_past_window_ts(instance: &BufferInstance, ts: &f64) -> bool {
-    let end: Option<f64> = instance
-        .meta
-        .active_windows
-        .last()
-        .and_then(|window| window.end_ms.map(|end| end as f64 / 1000.0));
-    let Some(end_ts) = end else {
-        return false;
-    };
-
-    *ts >= end_ts
-}
-
-fn window_start_samples(instance: &BufferInstance, sample_rate: u32, channels: usize) -> usize {
-    let start_ms = instance
-        .meta
-        .active_windows
-        .first()
-        .map(|window| window.start_ms)
-        .unwrap_or(0);
-    ms_to_samples(start_ms, sample_rate, channels)
-}
-
-fn log_buffer_header(
-    logical_track_index: usize,
-    sample_rate: u32,
-    channels: usize,
-    consumed_samples: usize,
-) {
-    let consumed_ms = samples_to_ms(consumed_samples, sample_rate, channels);
-
-    log(&format!("T{:?}\n{}\n", logical_track_index, consumed_ms));
-}
-
-fn log_buffer(instance: &BufferInstance, map: Vec<&str>) {
-    let instance_id = instance.meta.instance_id;
-    log(&format!("[{}] <- i{}\n", map.join(""), instance_id));
-
-    // let result = log_on_line(&format!("[{}]", map.join("")), instance_id + 2);
-    // if let Err(e) = result {
-    //     error!("Failed to log_on_line: {}", e);
-    // }
-}
-
-fn window_end_samples(
-    instance: &BufferInstance,
-    sample_rate: u32,
-    channels: usize,
-) -> Option<usize> {
-    let end_ms = instance
-        .meta
-        .active_windows
-        .last()
-        .and_then(|window| window.end_ms);
-    end_ms.map(|ms| ms_to_samples(ms, sample_rate, channels))
-}
-
-fn ms_to_samples(ms: u64, sample_rate: u32, channels: usize) -> usize {
-    let frames = ((ms as f64 / 1000.0) * sample_rate as f64).round() as usize;
-    frames.saturating_mul(channels)
-}
-
-fn samples_to_ms(samples: usize, sample_rate: u32, channels: usize) -> u64 {
-    let frames = samples / channels.max(1);
-    ((frames as f64 / sample_rate.max(1) as f64) * 1000.0).round() as u64
-}
-
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
@@ -1219,6 +724,7 @@ mod tests {
 
     use super::{BufferMixer, FillState, SourceKey};
 
+    /// Build a small two-track runtime plan used by buffer mixer unit tests.
     fn simple_plan() -> RuntimeInstancePlan {
         RuntimeInstancePlan {
             logical_track_count: 2,
@@ -1253,6 +759,7 @@ mod tests {
     }
 
     #[test]
+    /// Verifies packet routing writes samples only to matching source instances.
     fn route_packet_targets_and_zero_fills_instances() {
         let mut mixer = BufferMixer::new(simple_plan(), 48_000, 2, 8, HashMap::new(), 4);
 
@@ -1263,6 +770,7 @@ mod tests {
     }
 
     #[test]
+    /// Verifies mix readiness and sample consumption stay in lockstep.
     fn readiness_and_take_samples_are_synchronized() {
         let mut mixer = BufferMixer::new(simple_plan(), 48_000, 2, 16, HashMap::new(), 4);
 
@@ -1279,6 +787,7 @@ mod tests {
     }
 
     #[test]
+    /// Verifies finish signals propagate to per-track and global finished state.
     fn signal_finish_propagates_track_and_mix_finished() {
         let mut mixer = BufferMixer::new(simple_plan(), 48_000, 2, 8, HashMap::new(), 4);
         mixer.signal_finish(&SourceKey::TrackId(1));
@@ -1291,6 +800,7 @@ mod tests {
     }
 
     #[test]
+    /// Verifies aggregate fill-state reporting reflects per-instance fullness.
     fn fill_state_aggregates_as_expected() {
         let mut track_mix = HashMap::new();
         track_mix.insert(0usize, (1.0_f32, 0.0_f32));
@@ -1305,6 +815,7 @@ mod tests {
     }
 
     #[test]
+    /// Verifies packets before a window start are represented as aligned zero-fill.
     fn route_packet_zero_fills_when_packet_is_before_window_start() {
         let plan = RuntimeInstancePlan {
             logical_track_count: 1,

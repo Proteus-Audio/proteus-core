@@ -11,6 +11,7 @@ pub enum Cover {
     Transition((TransitionDirection, (usize, usize))),
 }
 
+/// Normalize half-open ranges by dropping empties, sorting, and merging overlaps/touches.
 fn normalize_ranges(mut ranges: Vec<(usize, usize)>) -> Vec<(usize, usize)> {
     ranges.retain(|&(s, e)| s < e);
     if ranges.is_empty() {
@@ -32,6 +33,7 @@ fn normalize_ranges(mut ranges: Vec<(usize, usize)>) -> Vec<(usize, usize)> {
     out
 }
 
+/// Append a cover segment and coalesce adjacent segments of the same simple kind.
 fn push_cover(out: &mut Vec<Cover>, c: Cover) {
     let (s, e) = match c {
         Cover::Overlap((s, e)) => (s, e),

@@ -5,7 +5,7 @@ This note explains how `shuffle_points` are parsed, scheduled, and applied durin
 ## Where it is implemented
 
 - Schedule build: `proteus-lib/src/container/prot.rs`
-- Runtime event application: `proteus-lib/src/playback/engine/mix/runner.rs`
+- Runtime event application: `proteus-lib/src/playback/engine/mix/runner/mod.rs`
 - Boundary-safe chunking + crossfade mix: `proteus-lib/src/playback/engine/mix/track_mix.rs`
 - New source spawn at event time: `proteus-lib/src/playback/engine/mix/source_spawner.rs`
 
@@ -87,7 +87,7 @@ So one mixed chunk cannot span both pre-event and post-event source states.
 
 Crossfade is short and one-sided:
 
-- constant: `SHUFFLE_CROSSFADE_MS = 5.0` in `runner.rs`,
+- constant: `SHUFFLE_CROSSFADE_MS = 5.0` in `mix/runner/mod.rs`,
 - outgoing source is kept under its old key and faded down linearly,
 - incoming source starts immediately at full level (no explicit fade-in ramp).
 
@@ -159,7 +159,7 @@ There is a guarded fallback for stalled schedules:
 
 If all active/fading buffers are empty, premix/effect tail are empty, decode workers are finished, and there are still pending shuffle events that can no longer be reached, mix drain can force EOS to avoid hanging playback.
 
-See `force_eos_from_stalled_schedule` in `runner.rs`.
+See `force_eos_from_stalled_schedule` in `mix/runner/mod.rs`.
 
 ## Practical summary
 

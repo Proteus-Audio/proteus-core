@@ -1,52 +1,28 @@
 //! Core mix-thread runtime loop implementation.
 
+mod decode;
+
 use rodio::buffer::SamplesBuffer;
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::Ordering;
 use std::sync::mpsc;
-use std::sync::Arc;
 use std::thread;
 use std::thread::JoinHandle;
 use std::time::Duration;
 use std::time::Instant;
 
-use log::{debug, error, info, warn};
-use symphonia::core::audio::AudioBufferRef;
-use symphonia::core::codecs::{Decoder, DecoderOptions, CODEC_TYPE_NULL};
-use symphonia::core::errors::Error;
-use symphonia::core::formats::{SeekMode, SeekTo};
-use symphonia::core::units::{Time, TimeBase};
+use log::{debug, info, warn};
 
 use crate::dsp::effects::{convolution_reverb, AudioEffect, EffectContext};
+#[cfg(feature = "debug")]
 use crate::logging::pivot_buffer_trace::pivot_buffer;
-use crate::tools::tools::open_file;
 
-use super::buffer_mixer::{BufferMixer, DecodeBackpressure, SourceKey};
+use super::buffer_mixer::{BufferMixer, SourceKey};
 use super::decoder_events::DecodedPacket;
 use super::effects::run_effect_chain;
 use super::types::ActiveInlineTransition;
 use super::MixThreadArgs;
-
-#[derive(Default)]
-struct DecodeWorkerJoinGuard {
-    workers: Vec<JoinHandle<()>>,
-}
-
-impl DecodeWorkerJoinGuard {
-    fn push(&mut self, handle: JoinHandle<()>) {
-        self.workers.push(handle);
-    }
-}
-
-impl Drop for DecodeWorkerJoinGuard {
-    fn drop(&mut self) {
-        for worker in self.workers.drain(..) {
-            if worker.join().is_err() {
-                warn!("decode worker panicked during join");
-            }
-        }
-    }
-}
+use decode::{spawn_container_decode_worker, spawn_file_decode_worker, DecodeWorkerJoinGuard};
 
 /// Spawn the mixing thread and return a receiver of mixed audio buffers.
 pub fn spawn_mix_thread(
@@ -182,6 +158,10 @@ pub fn spawn_mix_thread(
                     file_paths.insert(path);
                 }
             }
+        }
+        let startup_gate_target_samples = start_samples.max(min_mix_samples);
+        if !file_paths.is_empty() && startup_gate_target_samples > 0 {
+            decode_backpressure.enable_startup_priority(startup_gate_target_samples);
         }
 
         if !track_ids.is_empty() {
@@ -369,6 +349,7 @@ pub fn spawn_mix_thread(
             if !started {
                 if buffer_mixer.mix_ready_with_min_samples(start_samples.max(min_mix_samples)) {
                     started = true;
+                    decode_backpressure.disable_startup_priority();
                     if !logged_start_gate {
                         logged_start_gate = true;
                         info!(
@@ -639,343 +620,4 @@ pub fn spawn_mix_thread(
     });
 
     (receiver, handle)
-}
-
-fn spawn_file_decode_worker(
-    file_path: String,
-    start_time: f64,
-    channels: u8,
-    sender: mpsc::SyncSender<Option<DecodedPacket>>,
-    abort: Arc<std::sync::atomic::AtomicBool>,
-    decode_backpressure: Arc<DecodeBackpressure>,
-) -> JoinHandle<()> {
-    thread::spawn(move || {
-        let startup_trace = Instant::now();
-        let mut logged_first_ready = false;
-        let mut logged_first_send = false;
-        let (mut decoder, mut format) = open_file(&file_path);
-        let Some(track) = format
-            .tracks()
-            .iter()
-            .find(|track| track.codec_params.codec != CODEC_TYPE_NULL)
-            .cloned()
-        else {
-            let _ = sender.send(Some(DecodedPacket {
-                source_key: SourceKey::FilePath(file_path),
-                packet_ts: 0.0,
-                samples: Vec::new(),
-                eos_flag: true,
-            }));
-            return;
-        };
-
-        let seconds = start_time.floor() as u64;
-        let frac_of_second = start_time.fract();
-        let time = Time::new(seconds, frac_of_second);
-        let _ = format.seek(
-            SeekMode::Coarse,
-            SeekTo::Time {
-                time,
-                track_id: Some(track.id),
-            },
-        );
-
-        let time_base = track.codec_params.time_base;
-        let sample_rate = track.codec_params.sample_rate;
-        let source_key = SourceKey::FilePath(file_path.clone());
-
-        loop {
-            if abort.load(Ordering::Relaxed) {
-                break;
-            }
-
-            let packet = match format.next_packet() {
-                Ok(packet) => packet,
-                Err(_) => break,
-            };
-            if packet.track_id() != track.id {
-                continue;
-            }
-
-            let packet_ts = packet_ts_seconds(packet.ts(), time_base, sample_rate, start_time);
-            match decoder.decode(&packet) {
-                Ok(decoded) => {
-                    let samples = interleaved_samples(decoded, channels);
-                    if samples.is_empty() {
-                        continue;
-                    }
-                    debug!(
-                        "file decode packet ready: source={:?} ts={:.6} samples={}",
-                        source_key,
-                        packet_ts,
-                        samples.len()
-                    );
-                    if !logged_first_ready {
-                        logged_first_ready = true;
-                        info!(
-                            "mix startup trace: file worker first decoded packet ready in {}ms (source={:?} ts={:.6} samples={})",
-                            startup_trace.elapsed().as_millis(),
-                            source_key,
-                            packet_ts,
-                            samples.len()
-                        );
-                    }
-                    if !decode_backpressure.wait_for_source_room(
-                        &source_key,
-                        samples.len(),
-                        abort.as_ref(),
-                    ) {
-                        debug!(
-                            "file decode wait interrupted: source={:?} ts={:.6} samples={}",
-                            source_key,
-                            packet_ts,
-                            samples.len()
-                        );
-                        break;
-                    }
-                    debug!(
-                        "file decode packet send: source={:?} ts={:.6} samples={}",
-                        source_key,
-                        packet_ts,
-                        samples.len()
-                    );
-                    if sender
-                        .send(Some(DecodedPacket {
-                            source_key: source_key.clone(),
-                            packet_ts,
-                            samples,
-                            eos_flag: false,
-                        }))
-                        .is_err()
-                    {
-                        break;
-                    } else if !logged_first_send {
-                        logged_first_send = true;
-                        info!(
-                            "mix startup trace: file worker first packet sent in {}ms (source={:?})",
-                            startup_trace.elapsed().as_millis(),
-                            source_key
-                        );
-                    }
-                }
-                Err(Error::DecodeError(_)) => {}
-                Err(_) => break,
-            }
-        }
-
-        let _ = sender.send(Some(DecodedPacket {
-            source_key,
-            packet_ts: 0.0,
-            samples: Vec::new(),
-            eos_flag: true,
-        }));
-    })
-}
-
-fn spawn_container_decode_worker(
-    file_path: String,
-    track_ids: Vec<u32>,
-    start_time: f64,
-    channels: u8,
-    sender: mpsc::SyncSender<Option<DecodedPacket>>,
-    abort: Arc<std::sync::atomic::AtomicBool>,
-    decode_backpressure: Arc<DecodeBackpressure>,
-) -> JoinHandle<()> {
-    thread::spawn(move || {
-        let startup_trace = Instant::now();
-        let mut logged_first_ready = false;
-        let mut logged_first_send = false;
-        let mut format = crate::tools::tools::get_reader(&file_path);
-        let mut decoders: HashMap<u32, Box<dyn Decoder>> = HashMap::new();
-        let mut time_bases: HashMap<u32, Option<TimeBase>> = HashMap::new();
-        let mut sample_rates: HashMap<u32, Option<u32>> = HashMap::new();
-        let wanted: HashSet<u32> = track_ids.iter().copied().collect();
-
-        for track_id in wanted.iter().copied() {
-            let Some(track) = format.tracks().iter().find(|track| track.id == track_id) else {
-                continue;
-            };
-            let dec_opts: DecoderOptions = Default::default();
-            if let Ok(decoder) =
-                symphonia::default::get_codecs().make(&track.codec_params, &dec_opts)
-            {
-                decoders.insert(track_id, decoder);
-                time_bases.insert(track_id, track.codec_params.time_base);
-                sample_rates.insert(track_id, track.codec_params.sample_rate);
-            }
-        }
-
-        if decoders.is_empty() {
-            for track_id in wanted {
-                let _ = sender.send(Some(DecodedPacket {
-                    source_key: SourceKey::TrackId(track_id),
-                    packet_ts: 0.0,
-                    samples: Vec::new(),
-                    eos_flag: true,
-                }));
-            }
-            return;
-        }
-
-        if let Some(first_track_id) = decoders.keys().next().copied() {
-            let seconds = start_time.floor() as u64;
-            let frac_of_second = start_time.fract();
-            let time = Time::new(seconds, frac_of_second);
-            let _ = format.seek(
-                SeekMode::Coarse,
-                SeekTo::Time {
-                    time,
-                    track_id: Some(first_track_id),
-                },
-            );
-        }
-
-        loop {
-            if abort.load(Ordering::Relaxed) {
-                break;
-            }
-
-            let packet = match format.next_packet() {
-                Ok(packet) => packet,
-                Err(_) => {
-                    let _ = sender.send(None);
-                    error!("No packet received! End?");
-                    break;
-                }
-            };
-            let track_id = packet.track_id();
-            let Some(decoder) = decoders.get_mut(&track_id) else {
-                continue;
-            };
-
-            let packet_ts = packet_ts_seconds(
-                packet.ts(),
-                time_bases.get(&track_id).copied().flatten(),
-                sample_rates.get(&track_id).copied().flatten(),
-                start_time,
-            );
-            match decoder.decode(&packet) {
-                Ok(decoded) => {
-                    let samples = interleaved_samples(decoded, channels);
-                    if samples.is_empty() {
-                        continue;
-                    }
-                    let source_key = SourceKey::TrackId(track_id);
-                    debug!(
-                        "container decode packet ready: source={:?} ts={:.6} samples={}",
-                        source_key,
-                        packet_ts,
-                        samples.len()
-                    );
-                    if !logged_first_ready {
-                        logged_first_ready = true;
-                        info!(
-                            "mix startup trace: container worker first decoded packet ready in {}ms (track_id={} ts={:.6} samples={})",
-                            startup_trace.elapsed().as_millis(),
-                            track_id,
-                            packet_ts,
-                            samples.len()
-                        );
-                    }
-                    if !decode_backpressure.wait_for_source_room(
-                        &source_key,
-                        samples.len(),
-                        abort.as_ref(),
-                    ) {
-                        debug!(
-                            "container decode wait interrupted: source={:?} ts={:.6} samples={}",
-                            source_key,
-                            packet_ts,
-                            samples.len()
-                        );
-                        break;
-                    }
-                    debug!(
-                        "container decode packet send: source={:?} ts={:.6} samples={}",
-                        source_key,
-                        packet_ts,
-                        samples.len()
-                    );
-                    if sender
-                        .send(Some(DecodedPacket {
-                            source_key,
-                            packet_ts,
-                            samples,
-                            eos_flag: false,
-                        }))
-                        .is_err()
-                    {
-                        error!("Breaking! End?");
-                        break;
-                    } else if !logged_first_send {
-                        logged_first_send = true;
-                        info!(
-                            "mix startup trace: container worker first packet sent in {}ms (track_id={})",
-                            startup_trace.elapsed().as_millis(),
-                            track_id
-                        );
-                    }
-                }
-                Err(Error::DecodeError(_)) => {
-                    error!("Failed to decode packet");
-                }
-                Err(_) => {
-                    error!("No packet received. End?");
-                    break;
-                }
-            }
-        }
-
-        for track_id in wanted {
-            let _ = sender.send(Some(DecodedPacket {
-                source_key: SourceKey::TrackId(track_id),
-                packet_ts: 0.0,
-                samples: Vec::new(),
-                eos_flag: true,
-            }));
-        }
-    })
-}
-
-fn interleaved_samples(decoded: AudioBufferRef<'_>, channels: u8) -> Vec<f32> {
-    let channels = channels.max(1) as usize;
-    let mut out_channels: Vec<Vec<f32>> = Vec::with_capacity(channels);
-    for channel in 0..channels {
-        out_channels.push(crate::track::convert::process_channel(
-            decoded.clone(),
-            channel,
-        ));
-    }
-
-    if out_channels.is_empty() {
-        return Vec::new();
-    }
-
-    let left = out_channels[0].clone();
-    let right = out_channels
-        .get(1)
-        .cloned()
-        .unwrap_or_else(|| out_channels[0].clone());
-
-    left.into_iter()
-        .zip(right)
-        .flat_map(|(l, r)| [l, r])
-        .collect()
-}
-
-fn packet_ts_seconds(
-    ts: u64,
-    time_base: Option<TimeBase>,
-    sample_rate: Option<u32>,
-    start_time: f64,
-) -> f64 {
-    let absolute = if let Some(base) = time_base {
-        let time = base.calc_time(ts);
-        time.seconds as f64 + time.frac
-    } else if let Some(rate) = sample_rate {
-        ts as f64 / rate.max(1) as f64
-    } else {
-        0.0
-    };
-    (absolute - start_time).max(0.0)
 }

@@ -126,14 +126,13 @@ pub fn run(args: &ArgMatches, log_buffer: Arc<Mutex<VecDeque<LogLine>>>) -> Resu
     let mut player = if is_container {
         player::Player::new(&file_path)
     } else if is_directory {
-        let config = project_files::load_directory_playback_config(input_path)
-            .map_err(|err| {
-                error!("{}", err);
-                symphonia::core::errors::Error::IoError(std::io::Error::new(
-                    std::io::ErrorKind::Other,
-                    err,
-                ))
-            })?;
+        let config = project_files::load_directory_playback_config(input_path).map_err(|err| {
+            error!("{}", err);
+            symphonia::core::errors::Error::IoError(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                err,
+            ))
+        })?;
         let mut player = player::Player::new_from_file_paths(config.tracks);
         if args.get_one::<String>("effects-json").is_none() {
             if let Some(path) = config.effects_json_path {
@@ -321,7 +320,6 @@ pub fn run(args: &ArgMatches, log_buffer: Arc<Mutex<VecDeque<LogLine>>>) -> Resu
 
     Ok(0)
 }
-
 
 #[derive(Serialize)]
 struct PeakWindow {

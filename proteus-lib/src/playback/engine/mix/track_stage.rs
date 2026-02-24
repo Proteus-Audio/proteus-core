@@ -60,6 +60,7 @@ mod tests {
     use super::*;
 
     #[test]
+    /// Verifies full-left pan mutes the right lane for stereo samples.
     fn apply_track_gain_pan_handles_stereo() {
         let mut samples = vec![1.0_f32, 1.0, 0.5, 0.5];
         apply_track_gain_pan(&mut samples, 1.0, -1.0, 2);
@@ -67,6 +68,7 @@ mod tests {
     }
 
     #[test]
+    /// Verifies equal-weight mixing averages corresponding sample lanes.
     fn combine_tracks_equal_weight_averages_tracks() {
         let out = combine_tracks_equal_weight(&[
             vec![1.0_f32, 0.0, 1.0, 0.0],
