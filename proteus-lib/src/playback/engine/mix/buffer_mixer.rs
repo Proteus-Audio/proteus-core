@@ -59,13 +59,106 @@ pub(crate) struct RouteDecision {
 #[derive(Debug)]
 struct BufferInstance {
     meta: RuntimeInstanceMeta,
-    buffer: VecDeque<f32>,
+    buffer: AlignedSampleBuffer,
     buffer_capacity_samples: usize,
     full: bool,
     finished: bool,
     produced_samples: u64,
     zero_filled_samples: u64,
     eof_reached_ms: Option<u64>,
+}
+
+#[derive(Debug, Clone)]
+enum BufferSegment {
+    Zeros(usize),
+    Samples { data: Vec<f32>, pos: usize },
+}
+
+#[derive(Debug, Clone, Default)]
+struct AlignedSampleBuffer {
+    segments: VecDeque<BufferSegment>,
+    len_samples: usize,
+}
+
+impl AlignedSampleBuffer {
+    fn with_capacity(_capacity_samples: usize) -> Self {
+        Self::default()
+    }
+
+    fn len(&self) -> usize {
+        self.len_samples
+    }
+
+    fn pop_front(&mut self) -> Option<f32> {
+        loop {
+            let front = self.segments.front_mut()?;
+            match front {
+                BufferSegment::Zeros(count) => {
+                    if *count == 0 {
+                        self.segments.pop_front();
+                        continue;
+                    }
+                    *count -= 1;
+                    self.len_samples = self.len_samples.saturating_sub(1);
+                    if *count == 0 {
+                        self.segments.pop_front();
+                    }
+                    return Some(0.0);
+                }
+                BufferSegment::Samples { data, pos } => {
+                    if *pos >= data.len() {
+                        self.segments.pop_front();
+                        continue;
+                    }
+                    let value = data[*pos];
+                    *pos += 1;
+                    self.len_samples = self.len_samples.saturating_sub(1);
+                    let done = *pos >= data.len();
+                    if done {
+                        self.segments.pop_front();
+                    }
+                    return Some(value);
+                }
+            }
+        }
+    }
+
+    fn push_zeros(&mut self, count: usize) {
+        if count == 0 {
+            return;
+        }
+        match self.segments.back_mut() {
+            Some(BufferSegment::Zeros(existing)) => {
+                *existing = existing.saturating_add(count);
+            }
+            _ => self.segments.push_back(BufferSegment::Zeros(count)),
+        }
+        self.len_samples = self.len_samples.saturating_add(count);
+    }
+
+    fn push_samples_from_slice(&mut self, slice: &[f32]) {
+        if slice.is_empty() {
+            return;
+        }
+        self.segments.push_back(BufferSegment::Samples {
+            data: slice.to_vec(),
+            pos: 0,
+        });
+        self.len_samples = self.len_samples.saturating_add(slice.len());
+    }
+
+    fn push_owned_samples(&mut self, mut data: Vec<f32>) {
+        if data.is_empty() {
+            return;
+        }
+        if data.capacity() > data.len() {
+            data.shrink_to_fit();
+        }
+        let len = data.len();
+        self.segments
+            .push_back(BufferSegment::Samples { data, pos: 0 });
+        self.len_samples = self.len_samples.saturating_add(len);
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -399,7 +492,7 @@ impl BufferInstance {
     fn new(meta: RuntimeInstanceMeta, capacity_samples: usize) -> Self {
         Self {
             meta,
-            buffer: VecDeque::with_capacity(capacity_samples.max(1)),
+            buffer: AlignedSampleBuffer::with_capacity(capacity_samples.max(1)),
             buffer_capacity_samples: capacity_samples.max(1),
             full: false,
             finished: false,
@@ -1035,49 +1128,49 @@ struct PushResult {
 }
 
 fn push_owned_slice(
-    buffer: &mut VecDeque<f32>,
+    buffer: &mut AlignedSampleBuffer,
     capacity_samples: usize,
-    slice: Vec<f32>,
+    mut slice: Vec<f32>,
     full_flag: &mut bool,
 ) -> PushResult {
     let mut result = PushResult::default();
-    let mut overflow = false;
-    for sample in slice.iter() {
-        if buffer.len() >= capacity_samples.max(1) {
-            overflow = true;
-            break;
+    let original_len = slice.len();
+    let capacity = capacity_samples.max(1);
+    let available = capacity.saturating_sub(buffer.len());
+    let to_write = original_len.min(available);
+    if to_write > 0 {
+        if to_write < original_len {
+            slice.truncate(to_write);
         }
-        buffer.push_back(*sample);
+        buffer.push_owned_samples(slice);
         result.wrote_any = true;
-        result.written_samples += 1;
+        result.written_samples = to_write;
     }
-    *full_flag = overflow;
+    *full_flag = to_write < original_len;
     result
 }
 
 fn push_slice(
-    buffer: &mut VecDeque<f32>,
+    buffer: &mut AlignedSampleBuffer,
     capacity_samples: usize,
     slice: &[f32],
     full_flag: &mut bool,
 ) -> PushResult {
     let mut result = PushResult::default();
-    let mut overflow = false;
-    for sample in slice.iter().copied() {
-        if buffer.len() >= capacity_samples.max(1) {
-            overflow = true;
-            break;
-        }
-        buffer.push_back(sample);
+    let capacity = capacity_samples.max(1);
+    let available = capacity.saturating_sub(buffer.len());
+    let to_write = slice.len().min(available);
+    if to_write > 0 {
+        buffer.push_samples_from_slice(&slice[..to_write]);
         result.wrote_any = true;
-        result.written_samples += 1;
+        result.written_samples = to_write;
     }
-    *full_flag = overflow;
+    *full_flag = to_write < slice.len();
     result
 }
 
 fn push_zeros(
-    buffer: &mut VecDeque<f32>,
+    buffer: &mut AlignedSampleBuffer,
     capacity_samples: usize,
     zero_count: usize,
     full_flag: &mut bool,
@@ -1088,7 +1181,7 @@ fn push_zeros(
     let to_write = zero_count.min(available);
 
     if to_write > 0 {
-        buffer.resize(buffer.len() + to_write, 0.0);
+        buffer.push_zeros(to_write);
         result.written_samples = to_write;
         result.wrote_any = true;
     }
