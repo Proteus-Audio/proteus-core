@@ -5,13 +5,13 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::{Arc, Condvar, Mutex};
 
 use crate::dsp::utils::fade_interleaved_per_frame;
-use crate::logging::log_on_line;
+#[cfg(feature = "buffer-map")]
+use crate::logging::{clear_logfile, log_on_line};
 use crate::playback::engine::mix::utils::TransitionDirection;
 use crate::{
     container::prot::{RuntimeInstanceMeta, RuntimeInstancePlan, ShuffleSource},
-    logging::{clear_logfile, log},
+    logging::log,
     playback::engine::mix::utils::{map_cover, Cover},
-    track,
 };
 
 use super::track_stage::{apply_track_gain_pan, combine_tracks_equal_weight};
@@ -538,10 +538,10 @@ impl BufferMixer {
                     Cover::Underlay((start_sample, end_sample)) => {
                         let length = end_sample - start_sample;
 
-                        let push = push_slice(
+                        let push = push_zeros(
                             &mut instance.buffer,
                             instance.buffer_capacity_samples,
-                            &vec![0.0; length],
+                            length,
                             &mut instance.full,
                         );
                         self.decode_backpressure.on_samples_pushed(
@@ -788,13 +788,15 @@ impl BufferMixer {
         for track_indices in &self.track_instances {
             let mut track_min = usize::MAX;
             for instance_index in track_indices {
-            let instance = &mut self.instances[*instance_index];
+                let instance = &mut self.instances[*instance_index];
                 let available = if !instance_needs_data(
                     instance,
                     self.consumed_samples,
                     self.sample_rate,
                     self.channels,
-                ) || instance_fully_past_window(
+                ) {
+                    usize::MAX
+                } else if instance_fully_past_window(
                     instance,
                     self.consumed_samples,
                     self.sample_rate,
@@ -1033,6 +1035,27 @@ fn push_slice(
         result.written_samples += 1;
     }
     *full_flag = overflow;
+    result
+}
+
+fn push_zeros(
+    buffer: &mut VecDeque<f32>,
+    capacity_samples: usize,
+    zero_count: usize,
+    full_flag: &mut bool,
+) -> PushResult {
+    let mut result = PushResult::default();
+    let capacity = capacity_samples.max(1);
+    let available = capacity.saturating_sub(buffer.len());
+    let to_write = zero_count.min(available);
+
+    if to_write > 0 {
+        buffer.resize(buffer.len() + to_write, 0.0);
+        result.written_samples = to_write;
+        result.wrote_any = true;
+    }
+
+    *full_flag = to_write < zero_count;
     result
 }
 
