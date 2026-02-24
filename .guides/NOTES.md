@@ -7,6 +7,8 @@
 - If a track is marked finished, the mixer is allowed to drain its remaining buffered samples without blocking on it.
 - Mixing while a non-finished track buffer is empty causes dropouts and misalignment; avoid advancing the playhead in that case.
 - Reverb/effects tail is mixed only after track buffers are empty, so keep the effects buffer draining logic intact.
+- Diffusion reverb implementation notes and tuning guidance live in `.guides/diffusion_reverb.md`.
+- Diffusion reverb now uses per-channel decorrelated lanes; avoid reverting to a single shared interleaved delay network, which increases metallic ringing.
 - File-based playback preserves alignment by advancing non-active windows with underlay silence.
   The silence is now represented with virtual zero-fill segments (metadata) instead of materialized zero sample buffers.
 

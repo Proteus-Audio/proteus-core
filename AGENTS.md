@@ -61,3 +61,5 @@
 
 ## Persistent Notes
 - See `.guides/NOTES.md` for playback alignment constraints that should always be preserved.
+- In this repository, "knowledge base" always refers to the `knowledge-base/` directory.
+- Keep `knowledge-base/` documents up to date when `proteus-lib` behavior, algorithms, or effect implementations change.

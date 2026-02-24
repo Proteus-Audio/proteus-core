@@ -9,6 +9,12 @@
 //! Each channel keeps an independent reverb lane (with small decorrelated
 //! delay offsets) to avoid cross-channel ringing from processing interleaved
 //! samples through one shared delay network.
+//!
+//! # Tuning Notes
+//! - For a warmer/deeper tail, increase `room_size_ms` first, then `decay`.
+//! - Raise `damping` (`~0.45..0.65`) to reduce metallic high-frequency ringing.
+//! - Keep `diffusion` moderately high (`~0.65..0.80`) for density without excessive smear.
+//! - Use lower `mix` for insert use on full mixes; higher `mix` works better on sends/auxes.
 
 use log::info;
 use serde::{Deserialize, Serialize};
@@ -33,26 +39,38 @@ const OUTPUT_ALLPASS_TUNING_MULTIPLIERS: [f32; 3] = [0.28, 0.41, 0.57];
 #[serde(default)]
 pub struct DiffusionReverbSettings {
     /// Pre-delay time in milliseconds.
+    ///
+    /// Increases the gap between the dry signal and the reverb onset, which
+    /// improves clarity and perceived depth.
     pub pre_delay_ms: u64,
-    /// Base delay time in milliseconds that scales the comb filters.
+    /// Base delay time in milliseconds that scales the internal diffuser/comb timings.
+    ///
+    /// Larger values generally produce a deeper, larger-sounding space.
     pub room_size_ms: u64,
-    /// Feedback amount for the comb filters. Higher values mean longer decay.
+    /// Feedback amount for the comb filters.
+    ///
+    /// Higher values increase reverb time. Excessively high values can make the
+    /// tail ring or feel static, especially on bright sources.
     pub decay: f32,
-    /// Lowpass damping applied inside the comb feedback path.
+    /// Lowpass damping applied inside each comb feedback path.
+    ///
+    /// Higher values darken the tail and reduce metallic brightness.
     pub damping: f32,
-    /// Feedback amount for the allpass diffusers. Higher values increase density.
+    /// Feedback amount for the allpass diffusers.
+    ///
+    /// Higher values increase density and smoothness, but can blur transients.
     pub diffusion: f32,
 }
 
 impl DiffusionReverbSettings {
-    /// Create diffusion reverb settings with basic validation.
+    /// Create diffusion reverb settings with validation and clamping.
     ///
     /// # Arguments
     /// - `pre_delay_ms`: Pre-delay time in milliseconds.
-    /// - `room_size_ms`: Base delay for the comb filters in milliseconds.
+    /// - `room_size_ms`: Base delay for the internal timing network in milliseconds.
     /// - `decay`: Comb feedback gain in the range `[0.0, 1.0)`.
-    /// - `damping`: Lowpass damping factor in the range `[0.0, 1.0)`.
-    /// - `diffusion`: Allpass feedback gain in the range `[0.0, 1.0)`.
+    /// - `damping`: Comb feedback lowpass damping in the range `[0.0, 1.0)`.
+    /// - `diffusion`: Diffuser allpass feedback gain in the range `[0.0, 1.0)`.
     ///
     /// # Returns
     /// The validated settings.
@@ -97,7 +115,10 @@ impl Default for DiffusionReverbSettings {
     }
 }
 
-/// Diffusion reverb effect (pre-delay + combs + allpass diffusion).
+/// Diffusion reverb effect with a Schroeder-inspired, multi-stage topology.
+///
+/// Internally this maintains one decorrelated reverb lane per output channel to
+/// avoid left/right cross-coupled ringing when processing interleaved buffers.
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct DiffusionReverbEffect {
@@ -132,7 +153,7 @@ impl std::fmt::Debug for DiffusionReverbEffect {
 }
 
 impl DiffusionReverbEffect {
-    /// Create a new diffusion reverb effect.
+    /// Create a new diffusion reverb effect with default settings.
     ///
     /// # Arguments
     /// - `mix`: Wet/dry mix in the range `[0.0, 1.0]`.
@@ -151,10 +172,14 @@ impl DiffusionReverbEffect {
     /// # Arguments
     /// - `samples`: Interleaved input samples.
     /// - `context`: Environment details (sample rate, channels, etc.).
-    /// - `drain`: When true, flush buffered tail data.
+    /// - `drain`: When true and `samples` is empty, flush buffered tail data.
     ///
     /// # Returns
     /// Processed interleaved samples.
+    ///
+    /// # Notes
+    /// - Input is treated as interleaved frames using `context.channels`.
+    /// - If the buffer length is not frame-aligned, trailing samples are passed through unchanged.
     pub fn process(&mut self, samples: &[f32], context: &EffectContext, drain: bool) -> Vec<f32> {
         self.ensure_state(context);
         if !self.enabled || self.mix <= 0.0 {
@@ -189,7 +214,7 @@ impl DiffusionReverbEffect {
         output
     }
 
-    /// Reset any internal state buffers.
+    /// Reset all internal delay/filter buffers and drop the current state.
     ///
     /// # Returns
     /// Nothing.
@@ -201,6 +226,9 @@ impl DiffusionReverbEffect {
     }
 
     /// Mutable access to the diffusion reverb settings.
+    ///
+    /// Changing timing-related fields (`pre_delay_ms`, `room_size_ms`) will cause
+    /// the internal state to be rebuilt on the next call to [`Self::process`].
     pub fn settings_mut(&mut self) -> &mut DiffusionReverbSettings {
         &mut self.settings
     }
@@ -222,6 +250,10 @@ impl DiffusionReverbEffect {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
+/// Derived delay lengths for the internal reverb topology.
+///
+/// This is computed from user settings and sample rate, then optionally
+/// decorrelated per channel so each lane rings differently.
 struct Tuning {
     pre_delay_samples: usize,
     comb_samples: [usize; 8],
@@ -231,6 +263,7 @@ struct Tuning {
 }
 
 impl Tuning {
+    /// Build tuning values from pre-delay and room-size sample counts.
     fn new(pre_delay_samples: usize, room_size_samples: usize) -> Self {
         let comb_samples = COMB_TUNING_MULTIPLIERS
             .map(|multiplier| (room_size_samples as f32 * multiplier).round() as usize);
@@ -256,6 +289,10 @@ impl Tuning {
         }
     }
 
+    /// Apply small channel-dependent offsets to reduce stereo correlation.
+    ///
+    /// This preserves the general room scale while changing exact modal spacing
+    /// across channels.
     fn decorrelated(self, channel_index: usize) -> Self {
         if channel_index == 0 {
             return self;
@@ -302,6 +339,10 @@ impl Tuning {
 }
 
 #[derive(Clone)]
+/// Runtime state for the diffusion reverb effect.
+///
+/// Holds one [`ReverbLane`] per channel and routes interleaved frames into the
+/// matching lane.
 struct DiffusionReverbState {
     tuning: Tuning,
     channels: usize,
@@ -309,6 +350,7 @@ struct DiffusionReverbState {
 }
 
 impl DiffusionReverbState {
+    /// Create a new state instance for the current tuning and channel count.
     fn new(tuning: Tuning, channels: usize) -> Self {
         info!("Using Diffusion Reverb!");
         let lanes = (0..channels)
@@ -321,12 +363,17 @@ impl DiffusionReverbState {
         }
     }
 
+    /// Reset all channel lanes.
     fn reset(&mut self) {
         for lane in &mut self.lanes {
             lane.reset();
         }
     }
 
+    /// Process interleaved samples into the provided output buffer.
+    ///
+    /// The `diffusion` control is mapped to separate input/output diffuser
+    /// strengths so early smearing and late-tail smoothing can be balanced.
     fn process_samples(
         &mut self,
         samples: &[f32],
@@ -360,6 +407,7 @@ impl DiffusionReverbState {
         }
     }
 
+    /// Drain the buffered reverb tail by feeding silence through all lanes.
     fn drain_tail(&mut self, decay: f32, damping: f32, diffusion: f32) -> Vec<f32> {
         let input_diffusion = (0.25 + diffusion * 0.35).clamp(0.1, 0.7);
         let output_diffusion = (0.2 + diffusion * 0.45).clamp(0.1, 0.8);
@@ -377,6 +425,10 @@ impl DiffusionReverbState {
 }
 
 #[derive(Clone)]
+/// One complete mono reverb lane used by a single output channel.
+///
+/// Layout: pre-delay -> input allpass diffusion -> comb bank ->
+/// output allpass diffusion -> wet tone lowpass.
 struct ReverbLane {
     pre_delay: DelayLine,
     input_allpass: [AllpassFilter; 3],
@@ -386,6 +438,7 @@ struct ReverbLane {
 }
 
 impl ReverbLane {
+    /// Build a lane using a channel-specific tuning table.
     fn new(tuning: Tuning) -> Self {
         Self {
             pre_delay: DelayLine::new(tuning.pre_delay_samples),
@@ -413,6 +466,7 @@ impl ReverbLane {
         }
     }
 
+    /// Reset the lane and all internal filters/delays.
     fn reset(&mut self) {
         self.pre_delay.reset();
         for allpass in &mut self.input_allpass {
@@ -427,6 +481,11 @@ impl ReverbLane {
         self.wet_tone.reset();
     }
 
+    /// Process one mono sample through the lane.
+    ///
+    /// `input_diffusion` and `output_diffusion` are derived from the user-facing
+    /// diffusion control and intentionally use different ranges to keep attacks
+    /// clear while still smoothing the late tail.
     fn process_sample(
         &mut self,
         input: f32,
@@ -457,12 +516,14 @@ impl ReverbLane {
 }
 
 #[derive(Clone)]
+/// Fixed-length circular delay line.
 struct DelayLine {
     buffer: Vec<f32>,
     index: usize,
 }
 
 impl DelayLine {
+    /// Create a delay line with at least one sample of storage.
     fn new(len: usize) -> Self {
         Self {
             buffer: vec![0.0; len.max(1)],
@@ -470,11 +531,13 @@ impl DelayLine {
         }
     }
 
+    /// Clear the delay buffer and rewind the write index.
     fn reset(&mut self) {
         self.buffer.fill(0.0);
         self.index = 0;
     }
 
+    /// Push one sample and return the delayed sample at the current tap.
     fn process(&mut self, input: f32) -> f32 {
         let output = self.buffer[self.index];
         self.buffer[self.index] = input;
@@ -487,6 +550,9 @@ impl DelayLine {
 }
 
 #[derive(Clone)]
+/// Lowpass-feedback comb filter used to build the late reverb decay.
+///
+/// The internal lowpass reduces high-frequency build-up in the feedback loop.
 struct CombFilter {
     buffer: Vec<f32>,
     index: usize,
@@ -494,6 +560,7 @@ struct CombFilter {
 }
 
 impl CombFilter {
+    /// Create a comb filter with a fixed delay length.
     fn new(len: usize) -> Self {
         Self {
             buffer: vec![0.0; len.max(1)],
@@ -502,12 +569,19 @@ impl CombFilter {
         }
     }
 
+    /// Clear delay and lowpass state.
     fn reset(&mut self) {
         self.buffer.fill(0.0);
         self.index = 0;
         self.lowpass = 0.0;
     }
 
+    /// Process one sample through the comb filter.
+    ///
+    /// # Arguments
+    /// - `input`: Dry/diffused input into the comb.
+    /// - `feedback`: Feedback gain controlling decay time.
+    /// - `damping`: One-pole lowpass smoothing in the feedback path.
     fn process(&mut self, input: f32, feedback: f32, damping: f32) -> f32 {
         let delayed = self.buffer[self.index];
         self.lowpass = delayed * (1.0 - damping) + self.lowpass * damping;
@@ -522,12 +596,14 @@ impl CombFilter {
 }
 
 #[derive(Clone)]
+/// Standard feedback allpass diffuser.
 struct AllpassFilter {
     buffer: Vec<f32>,
     index: usize,
 }
 
 impl AllpassFilter {
+    /// Create an allpass filter with a fixed delay length.
     fn new(len: usize) -> Self {
         Self {
             buffer: vec![0.0; len.max(1)],
@@ -535,11 +611,13 @@ impl AllpassFilter {
         }
     }
 
+    /// Clear the delay buffer and rewind the read/write position.
     fn reset(&mut self) {
         self.buffer.fill(0.0);
         self.index = 0;
     }
 
+    /// Process one sample through the allpass diffuser.
     fn process(&mut self, input: f32, feedback: f32) -> f32 {
         let delayed = self.buffer[self.index];
         let output = delayed - feedback * input;
@@ -553,21 +631,30 @@ impl AllpassFilter {
 }
 
 #[derive(Clone, Default)]
+/// One-pole lowpass used to slightly darken the wet output tail.
 struct OnePoleLowpass {
     state: f32,
 }
 
 impl OnePoleLowpass {
+    /// Reset the filter state.
     fn reset(&mut self) {
         self.state = 0.0;
     }
 
+    /// Process one sample with the provided smoothing coefficient.
+    ///
+    /// `smoothing` near `1.0` produces a darker/slower response.
     fn process(&mut self, input: f32, smoothing: f32) -> f32 {
         self.state = input * (1.0 - smoothing) + self.state * smoothing;
         self.state
     }
 }
 
+/// Convert milliseconds to per-channel sample counts.
+///
+/// The returned value represents samples for a single channel lane (not the
+/// total number of interleaved scalar values).
 fn delay_samples(sample_rate: u32, duration_ms: u64) -> usize {
     if duration_ms == 0 {
         return 0;

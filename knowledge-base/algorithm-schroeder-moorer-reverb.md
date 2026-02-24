@@ -16,6 +16,20 @@ y_a[n] = -a\,x[n] + x[n-M] + a\,y_a[n-M]
 
 Typical networks sum several comb filters in parallel and follow them with one or more all-pass stages in series.
 
+## Proteus Context
+
+Proteus's `DiffusionReverb` uses a Schroeder/Moorer-inspired structure with
+additional diffusion and tonal smoothing:
+
+- input pre-delay
+- input all-pass diffusion stages
+- parallel low-pass-feedback comb tank
+- output all-pass diffusion stages
+- light wet-output low-pass tone shaping
+
+Proteus also runs one decorrelated reverb lane per channel (small channel-specific
+delay offsets) to reduce metallic ringing and stereo correlation artifacts.
+
 ## Variable Key
 - $`x[n]`$: input sample
 - $`y_c[n]`$: comb output
