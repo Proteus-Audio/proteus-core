@@ -291,6 +291,7 @@ fn source_room_status(
             continue;
         }
         saw_unfinished = true;
+
         let occupied = instance
             .buffered_samples
             .saturating_add(instance.reserved_samples)
@@ -787,7 +788,7 @@ impl BufferMixer {
         for track_indices in &self.track_instances {
             let mut track_min = usize::MAX;
             for instance_index in track_indices {
-                let instance = &mut self.instances[*instance_index];
+            let instance = &mut self.instances[*instance_index];
                 let available = if !instance_needs_data(
                     instance,
                     self.consumed_samples,
