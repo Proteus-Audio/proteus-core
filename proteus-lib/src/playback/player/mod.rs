@@ -185,7 +185,10 @@ impl Player {
         let (prot, info) = match path {
             Some(path) => {
                 let prot = Arc::new(Mutex::new(Prot::new(path)));
-                let info = Info::new(path.clone());
+                let info = {
+                    let locked_prot = prot.lock().unwrap();
+                    locked_prot.info.clone()
+                };
                 (prot, info)
             }
             None => {
