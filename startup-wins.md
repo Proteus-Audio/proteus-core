@@ -41,3 +41,65 @@
   - Stream reuse/overlap still helps, but IR init is the bigger target there.
 
   If you want, I can patch the low-risk win first: remove the duplicate Info::new() call and reuse prot.info in Player::new_from_path_or_paths().
+
+
+_________
+
+
+The next biggest win is not generic effect warmup. It is convolution reverb initialization, specifically.
+
+  Your logs show:
+
+  - Non-convolution container: audio_heard ~92ms
+  - Convolution container: Convolution reverb init: 257ms, effect warmup complete: 309ms, audio_heard ~372ms
+
+  That means the dominant cost is the convolution setup itself, and warmup is mostly where that setup gets triggered.
+
+  What “warmup” is doing now:
+
+  - In proteus-lib/src/playback/engine/mix/runner.rs:231, startup warmup runs effect.process() on a zero buffer of min_mix_samples.
+  - For convolution, process() triggers ensure_state(), which does the heavy build (Convolution reverb init) in proteus-lib/src/dsp/effects/convolution_reverb/mod.rs:150.
+  - IR loading also reopens/parses the container attachment in proteus-lib/src/dsp/effects/convolution_reverb/impulse_response.rs:142.
+
+  So:
+
+  - Warmup is not the root problem.
+  - Warmup is where the root problem currently happens.
+
+  Is warmup needed?
+
+  - For most effects: no, not really (your logs confirm near-zero impact).
+  - For convolution: it is useful to avoid a first-audio glitch/stall, because init is expensive.
+  - Removing warmup entirely would likely just move the same 257ms delay to the first real chunk.
+
+  Best next wins (ranked)
+
+  1. Cache/preload convolution IR state (highest impact)
+
+  - Cache decoded impulse response (or even built convolution kernels) across playback runs.
+  - Key by (container/file source, attachment/path, tail_db, channels, sample_rate if relevant).
+  - This targets the 257ms directly.
+
+  2. Stop doing full zero-buffer processing for startup warmup
+
+  - Use the existing effect.warm_up(&context) API instead of effect.process(zero_buffer, ...).
+  - That should keep convolution pre-init behavior while avoiding extra DSP work/allocation.
+  - Likely saves some time (your logs suggest maybe ~40-60ms in the convolution case).
+
+  3. Avoid reopening the .prot just to fetch the IR attachment
+
+  - load_impulse_response_from_prot_attachment_with_tail() reparses Matroska every time.
+  - If the IR attachment bytes are already known / can be cached from container load, this removes duplicate container I/O/parsing from the hot path.
+
+  About the file-based 374ms run
+
+  - That one looks like a different issue: packets are ready at 0-13ms, but start gate satisfied is delayed to 374ms.
+  - That points to start-gate/buffering policy (mix_ready_with_min_samples(...)) rather than decode or warmup.
+  - I’d treat this as the next target after convolution if file-based startup is important.
+
+  Recommendation
+
+  - Next patch should be: change startup warmup to call effect.warm_up() instead of effect.process() on a zero buffer.
+  - Then, implement convolution IR caching (decoded IR first; kernel cache if needed).
+
+  If you want, I can make the warmup-path change first (low risk), then profile again before tackling convolution IR caching.
