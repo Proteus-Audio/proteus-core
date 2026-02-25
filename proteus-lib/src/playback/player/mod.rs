@@ -46,6 +46,30 @@ pub enum PlayerState {
     Finished,
 }
 
+/// Action to apply automatically when playback reaches end-of-stream.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EndOfStreamAction {
+    /// Stop playback and reset the playback time to `0.0`.
+    Stop,
+    /// Pause playback and keep the playback time at the end position.
+    Pause,
+}
+
+/// Initialization options for [`Player`].
+#[derive(Debug, Clone, Copy)]
+pub struct PlayerInitOptions {
+    /// End-of-stream transport action.
+    pub end_of_stream_action: EndOfStreamAction,
+}
+
+impl Default for PlayerInitOptions {
+    fn default() -> Self {
+        Self {
+            end_of_stream_action: EndOfStreamAction::Stop,
+        }
+    }
+}
+
 /// Snapshot of active reverb settings for UI consumers.
 ///
 /// Values are derived from the first matching reverb in the current effect
@@ -92,6 +116,7 @@ pub struct Player {
     last_chunk_ms: Arc<AtomicU64>,
     last_time_update_ms: Arc<AtomicU64>,
     next_resume_fade_ms: Arc<Mutex<Option<f32>>>,
+    end_of_stream_action: Arc<Mutex<EndOfStreamAction>>,
     handle_count: Arc<AtomicUsize>,
     shutdown_once: Arc<AtomicBool>,
     impulse_response_override: Option<ImpulseResponseSpec>,
@@ -129,6 +154,7 @@ impl Clone for Player {
             last_chunk_ms: self.last_chunk_ms.clone(),
             last_time_update_ms: self.last_time_update_ms.clone(),
             next_resume_fade_ms: self.next_resume_fade_ms.clone(),
+            end_of_stream_action: self.end_of_stream_action.clone(),
             handle_count: self.handle_count.clone(),
             shutdown_once: self.shutdown_once.clone(),
             impulse_response_override: self.impulse_response_override.clone(),
@@ -144,7 +170,17 @@ impl Player {
     ///
     /// * `file_path` - Path to a `.prot`/`.mka` container file.
     pub fn new(file_path: &String) -> Self {
-        Self::new_from_path_or_paths(Some(file_path), None)
+        Self::new_with_options(file_path, PlayerInitOptions::default())
+    }
+
+    /// Create a new player for a single container path with explicit options.
+    ///
+    /// # Arguments
+    ///
+    /// * `file_path` - Path to a `.prot`/`.mka` container file.
+    /// * `options` - Player initialization options.
+    pub fn new_with_options(file_path: &String, options: PlayerInitOptions) -> Self {
+        Self::new_from_path_or_paths_with_options(Some(file_path), None, options)
     }
 
     /// Create a new player for a set of standalone file paths.
@@ -153,7 +189,20 @@ impl Player {
     ///
     /// * `file_paths` - Pre-normalized track path groups.
     pub fn new_from_file_paths(file_paths: Vec<PathsTrack>) -> Self {
-        Self::new_from_path_or_paths(None, Some(file_paths))
+        Self::new_from_file_paths_with_options(file_paths, PlayerInitOptions::default())
+    }
+
+    /// Create a new player for standalone file paths with explicit options.
+    ///
+    /// # Arguments
+    ///
+    /// * `file_paths` - Pre-normalized track path groups.
+    /// * `options` - Player initialization options.
+    pub fn new_from_file_paths_with_options(
+        file_paths: Vec<PathsTrack>,
+        options: PlayerInitOptions,
+    ) -> Self {
+        Self::new_from_path_or_paths_with_options(None, Some(file_paths), options)
     }
 
     /// Create a new player for legacy standalone file-path groups.
@@ -163,7 +212,21 @@ impl Player {
     /// * `file_paths` - Legacy track grouping shape where each inner vector is
     ///   interpreted as one track candidate set.
     pub fn new_from_file_paths_legacy(file_paths: Vec<Vec<String>>) -> Self {
-        Self::new_from_path_or_paths(
+        Self::new_from_file_paths_legacy_with_options(file_paths, PlayerInitOptions::default())
+    }
+
+    /// Create a new player for legacy standalone file-path groups with options.
+    ///
+    /// # Arguments
+    ///
+    /// * `file_paths` - Legacy track grouping shape where each inner vector is
+    ///   interpreted as one track candidate set.
+    /// * `options` - Player initialization options.
+    pub fn new_from_file_paths_legacy_with_options(
+        file_paths: Vec<Vec<String>>,
+        options: PlayerInitOptions,
+    ) -> Self {
+        Self::new_from_path_or_paths_with_options(
             None,
             Some(
                 file_paths
@@ -171,6 +234,7 @@ impl Player {
                     .map(PathsTrack::new_from_file_paths)
                     .collect(),
             ),
+            options,
         )
     }
 
@@ -184,6 +248,22 @@ impl Player {
     /// * `path` - Optional container path.
     /// * `paths` - Optional standalone track path groups.
     pub fn new_from_path_or_paths(path: Option<&String>, paths: Option<Vec<PathsTrack>>) -> Self {
+        Self::new_from_path_or_paths_with_options(path, paths, PlayerInitOptions::default())
+    }
+
+    /// Create a player from either a container path or standalone file paths
+    /// with explicit initialization options.
+    ///
+    /// # Arguments
+    ///
+    /// * `path` - Optional container path.
+    /// * `paths` - Optional standalone track path groups.
+    /// * `options` - Player initialization options.
+    pub fn new_from_path_or_paths_with_options(
+        path: Option<&String>,
+        paths: Option<Vec<PathsTrack>>,
+        options: PlayerInitOptions,
+    ) -> Self {
         let (prot, info) = match path {
             Some(path) => {
                 let prot = Arc::new(Mutex::new(Prot::new(path)));
@@ -247,6 +327,7 @@ impl Player {
             last_chunk_ms: Arc::new(AtomicU64::new(0)),
             last_time_update_ms: Arc::new(AtomicU64::new(0)),
             next_resume_fade_ms: Arc::new(Mutex::new(None)),
+            end_of_stream_action: Arc::new(Mutex::new(options.end_of_stream_action)),
             handle_count: Arc::new(AtomicUsize::new(1)),
             shutdown_once: Arc::new(AtomicBool::new(false)),
             impulse_response_override: None,

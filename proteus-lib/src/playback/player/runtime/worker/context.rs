@@ -12,7 +12,7 @@ use crate::playback::engine::{
 };
 use crate::playback::output_meter::OutputMeter;
 
-use super::super::super::PlayerState;
+use super::super::super::{EndOfStreamAction, PlayerState};
 
 /// Captured shared state passed from `Player::initialize_thread` into the
 /// detached worker thread.
@@ -38,6 +38,7 @@ pub(in crate::playback::player::runtime) struct ThreadContext {
     pub(in crate::playback::player::runtime) output_meter: Arc<Mutex<OutputMeter>>,
     pub(in crate::playback::player::runtime) audio_info: Info,
     pub(in crate::playback::player::runtime) next_resume_fade_ms: Arc<Mutex<Option<f32>>>,
+    pub(in crate::playback::player::runtime) end_of_stream_action: Arc<Mutex<EndOfStreamAction>>,
     pub(in crate::playback::player::runtime) audio_heard: Arc<AtomicBool>,
     pub(in crate::playback::player::runtime) play_command_ms: Arc<AtomicU64>,
     pub(in crate::playback::player::runtime) volume: Arc<Mutex<f32>>,

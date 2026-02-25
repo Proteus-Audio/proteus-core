@@ -91,6 +91,7 @@ impl Player {
             output_meter: self.output_meter.clone(),
             audio_info: self.info.clone(),
             next_resume_fade_ms: self.next_resume_fade_ms.clone(),
+            end_of_stream_action: self.end_of_stream_action.clone(),
             audio_heard: self.audio_heard.clone(),
             play_command_ms: self.play_command_ms.clone(),
             volume: self.volume.clone(),

@@ -15,7 +15,7 @@ use crossterm::{
     terminal::{self, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use log::{error, info};
-use proteus_lib::playback::player;
+use proteus_lib::playback::player::{self, EndOfStreamAction, PlayerInitOptions};
 use ratatui::{backend::CrosstermBackend, Terminal};
 use serde::Serialize;
 use symphonia::core::errors::Result;
@@ -123,8 +123,11 @@ pub fn run(args: &ArgMatches, log_buffer: Arc<Mutex<VecDeque<LogLine>>>) -> Resu
     let is_container = file_path.ends_with(".prot") || file_path.ends_with(".mka");
     let is_directory = input_path.is_dir();
 
+    let cli_player_options = PlayerInitOptions {
+        end_of_stream_action: EndOfStreamAction::Pause,
+    };
     let mut player = if is_container {
-        player::Player::new(&file_path)
+        player::Player::new_with_options(&file_path, cli_player_options)
     } else if is_directory {
         let config = project_files::load_directory_playback_config(input_path).map_err(|err| {
             error!("{}", err);
@@ -133,7 +136,8 @@ pub fn run(args: &ArgMatches, log_buffer: Arc<Mutex<VecDeque<LogLine>>>) -> Resu
                 err,
             ))
         })?;
-        let mut player = player::Player::new_from_file_paths(config.tracks);
+        let mut player =
+            player::Player::new_from_file_paths_with_options(config.tracks, cli_player_options);
         if args.get_one::<String>("effects-json").is_none() {
             if let Some(path) = config.effects_json_path {
                 match project_files::load_effects_json(path.to_string_lossy().as_ref()) {
@@ -147,7 +151,10 @@ pub fn run(args: &ArgMatches, log_buffer: Arc<Mutex<VecDeque<LogLine>>>) -> Resu
         }
         player
     } else {
-        player::Player::new_from_file_paths_legacy(vec![vec![file_path.clone()]])
+        player::Player::new_from_file_paths_legacy_with_options(
+            vec![vec![file_path.clone()]],
+            cli_player_options,
+        )
     };
     let start_buffer_ms = args
         .get_one::<String>("start-buffer-ms")
@@ -224,7 +231,7 @@ pub fn run(args: &ArgMatches, log_buffer: Arc<Mutex<VecDeque<LogLine>>>) -> Resu
     };
 
     // UI / input loop.
-    while !player.is_finished() {
+    loop {
         if let Some(term) = terminal.as_mut() {
             let time = player.get_time();
             let duration = player.get_duration();

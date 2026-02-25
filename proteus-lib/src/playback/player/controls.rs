@@ -12,7 +12,7 @@ use log::{info, warn};
 
 use crate::diagnostics::reporter::{Report, Reporter};
 
-use super::{Player, PlayerState};
+use super::{EndOfStreamAction, Player, PlayerState};
 
 impl Player {
     /// Start playback from a specific timestamp (seconds).
@@ -144,6 +144,20 @@ impl Player {
     pub fn stop(&self) {
         self.kill_current();
         self.ts.lock().unwrap().clone_from(&0.0);
+    }
+
+    /// Set the action applied automatically when playback reaches the end.
+    ///
+    /// # Arguments
+    ///
+    /// * `action` - End-of-stream behavior (`Stop` or `Pause`).
+    pub fn set_end_of_stream_action(&self, action: EndOfStreamAction) {
+        *self.end_of_stream_action.lock().unwrap() = action;
+    }
+
+    /// Get the current end-of-stream action.
+    pub fn get_end_of_stream_action(&self) -> EndOfStreamAction {
+        *self.end_of_stream_action.lock().unwrap()
     }
 
     /// Return true if playback is currently active.

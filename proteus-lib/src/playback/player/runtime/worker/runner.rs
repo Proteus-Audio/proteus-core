@@ -12,7 +12,9 @@ use log::{error, info, warn};
 use crate::playback::engine::PlayerEngine;
 use crate::tools::timer;
 
-use super::super::super::{PlayerState, OUTPUT_STREAM_OPEN_RETRIES, OUTPUT_STREAM_OPEN_RETRY_MS};
+use super::super::super::{
+    EndOfStreamAction, PlayerState, OUTPUT_STREAM_OPEN_RETRIES, OUTPUT_STREAM_OPEN_RETRY_MS,
+};
 use super::super::now_ms;
 use super::context::ThreadContext;
 use super::guard::PlaybackThreadGuard;
@@ -140,6 +142,7 @@ pub(in crate::playback::player::runtime) fn run_playback_thread(
     #[cfg(feature = "debug")]
     log_drain_loop_start(&ctx, &loop_state);
 
+    let mut drain_completed = false;
     loop {
         update_chunk_lengths(&ctx, &mut loop_state);
         if !check_runtime_state(&ctx, &mut loop_state) {
@@ -147,6 +150,7 @@ pub(in crate::playback::player::runtime) fn run_playback_thread(
         }
 
         if is_drain_complete(&ctx, &loop_state, &engine) {
+            drain_completed = true;
             break;
         }
 
@@ -155,6 +159,10 @@ pub(in crate::playback::player::runtime) fn run_playback_thread(
 
     #[cfg(feature = "debug")]
     log::info!("Finished drain loop!");
+
+    if drain_completed {
+        apply_end_of_stream_action(&ctx, &loop_state);
+    }
 }
 
 /// Open the default output stream with bounded retry behavior.
@@ -678,6 +686,45 @@ fn is_drain_complete(ctx: &ThreadContext, loop_state: &LoopState, engine: &Playe
     }
 
     false
+}
+
+/// Apply the configured transport action after a natural end-of-stream.
+fn apply_end_of_stream_action(ctx: &ThreadContext, loop_state: &LoopState) {
+    let action = *ctx.end_of_stream_action.lock().unwrap();
+    let duration = *ctx.duration.lock().unwrap();
+    let final_duration = *loop_state.final_duration.lock().unwrap();
+
+    match action {
+        EndOfStreamAction::Stop => {
+            ctx.play_state
+                .lock()
+                .unwrap()
+                .clone_from(&PlayerState::Stopped);
+            {
+                let sink = ctx.sink_mutex.lock().unwrap();
+                sink.stop();
+                sink.clear();
+            }
+            *ctx.time_passed.lock().unwrap() = 0.0;
+        }
+        EndOfStreamAction::Pause => {
+            ctx.play_state
+                .lock()
+                .unwrap()
+                .clone_from(&PlayerState::Paused);
+            {
+                let sink = ctx.sink_mutex.lock().unwrap();
+                sink.pause();
+            }
+            let target_end = match final_duration {
+                Some(value) if value.is_finite() && value >= 0.0 => value,
+                _ => duration.max(0.0),
+            };
+            *ctx.time_passed.lock().unwrap() = target_end;
+        }
+    }
+
+    ctx.last_time_update_ms.store(now_ms(), Ordering::Relaxed);
 }
 
 #[cfg(feature = "debug")]
