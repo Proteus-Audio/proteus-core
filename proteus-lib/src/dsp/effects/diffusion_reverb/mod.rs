@@ -29,6 +29,13 @@ const DEFAULT_DIFFUSION: f32 = 0.72;
 const MAX_DECAY: f32 = 0.98;
 const MAX_DAMPING: f32 = 0.99;
 const MAX_DIFFUSION: f32 = 0.9;
+// Upper bound for synthetic silence-fed tail flushing. This keeps drain time
+// finite even for very large rooms / long delay lines.
+const DRAIN_MAX_TAIL_MULTIPLIER: usize = 64;
+// Treat frames below this absolute amplitude as silence for tail termination.
+const DRAIN_SILENCE_EPSILON: f32 = 1.0e-6;
+// Require a short run of silent frames before declaring the tail finished.
+const DRAIN_SILENT_FRAMES_TO_STOP: usize = 128;
 
 const COMB_TUNING_MULTIPLIERS: [f32; 8] = [1.0, 1.09, 1.2, 1.33, 1.47, 1.63, 1.82, 2.03];
 const INPUT_ALLPASS_TUNING_MULTIPLIERS: [f32; 3] = [0.07, 0.11, 0.17];
@@ -129,6 +136,10 @@ pub struct DiffusionReverbEffect {
     pub settings: DiffusionReverbSettings,
     #[serde(skip)]
     state: Option<DiffusionReverbState>,
+    // Guards the `drain=true && samples.is_empty()` path so the mix thread does
+    // not receive an endless sequence of synthetic tail chunks.
+    #[serde(skip)]
+    tail_drained: bool,
 }
 
 impl Default for DiffusionReverbEffect {
@@ -138,6 +149,7 @@ impl Default for DiffusionReverbEffect {
             mix: 0.0,
             settings: DiffusionReverbSettings::default(),
             state: None,
+            tail_drained: false,
         }
     }
 }
@@ -192,6 +204,13 @@ impl DiffusionReverbEffect {
 
         if samples.is_empty() {
             if drain {
+                // Drain is a one-shot flush. The mix runtime may poll drain
+                // repeatedly after sources finish, so subsequent calls must be
+                // empty once the internal tail has been emitted.
+                if self.tail_drained {
+                    return Vec::new();
+                }
+                self.tail_drained = true;
                 return state.drain_tail(
                     self.settings.decay(),
                     self.settings.damping(),
@@ -200,6 +219,10 @@ impl DiffusionReverbEffect {
             }
             return Vec::new();
         }
+
+        // Any real input means the effect is active again; allow a future tail
+        // flush when playback ends.
+        self.tail_drained = false;
 
         let mix = self.mix.clamp(0.0, 1.0);
         let mut output = Vec::with_capacity(samples.len());
@@ -223,6 +246,7 @@ impl DiffusionReverbEffect {
             state.reset();
         }
         self.state = None;
+        self.tail_drained = false;
     }
 
     /// Mutable access to the diffusion reverb settings.
@@ -244,6 +268,8 @@ impl DiffusionReverbEffect {
             .map(|state| state.tuning != tuning || state.channels != channels)
             .unwrap_or(true);
         if needs_reset {
+            // Timing and channel count define delay-line topology, so rebuild
+            // when those change instead of attempting partial mutation.
             self.state = Some(DiffusionReverbState::new(tuning, channels));
         }
     }
@@ -411,13 +437,32 @@ impl DiffusionReverbState {
     fn drain_tail(&mut self, decay: f32, damping: f32, diffusion: f32) -> Vec<f32> {
         let input_diffusion = (0.25 + diffusion * 0.35).clamp(0.1, 0.7);
         let output_diffusion = (0.2 + diffusion * 0.45).clamp(0.1, 0.8);
-        let tail_frames = self.tuning.max_delay.saturating_mul(8).max(1);
-        let mut out = Vec::with_capacity(tail_frames.saturating_mul(self.channels));
-        for _ in 0..tail_frames {
+        let max_tail_frames = self
+            .tuning
+            .max_delay
+            .saturating_mul(DRAIN_MAX_TAIL_MULTIPLIER)
+            .max(1);
+        let mut out = Vec::with_capacity(max_tail_frames.saturating_mul(self.channels));
+        let mut trailing_silent_frames = 0usize;
+        for _ in 0..max_tail_frames {
+            // Track frame start so we can drop the final fully-silent run rather
+            // than returning a padded block of near-zero samples.
+            let frame_start = out.len();
+            let mut max_abs = 0.0_f32;
             for lane in &mut self.lanes {
                 let wet =
                     lane.process_sample(0.0, decay, damping, input_diffusion, output_diffusion);
+                max_abs = max_abs.max(wet.abs());
                 out.push(wet);
+            }
+            if max_abs <= DRAIN_SILENCE_EPSILON {
+                trailing_silent_frames = trailing_silent_frames.saturating_add(1);
+            } else {
+                trailing_silent_frames = 0;
+            }
+            if trailing_silent_frames >= DRAIN_SILENT_FRAMES_TO_STOP {
+                out.truncate(frame_start);
+                break;
             }
         }
         out

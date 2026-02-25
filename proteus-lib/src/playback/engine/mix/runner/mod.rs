@@ -24,6 +24,10 @@ use super::types::ActiveInlineTransition;
 use super::MixThreadArgs;
 use decode::{spawn_container_decode_worker, spawn_file_decode_worker, DecodeWorkerJoinGuard};
 
+const MAX_EFFECT_DRAIN_PASSES: usize = 1024;
+const DRAIN_SILENCE_EPSILON: f32 = 1.0e-6;
+const DRAIN_SILENT_PASSES_TO_STOP: usize = 2;
+
 /// Spawn the mixing thread and return a receiver of mixed audio buffers.
 pub fn spawn_mix_thread(
     args: MixThreadArgs,
@@ -242,6 +246,8 @@ pub fn spawn_mix_thread(
         let mut logged_start_gate = false;
         let mut logged_first_take_samples = false;
         let mut logged_first_output_send = false;
+        let mut effect_drain_passes = 0usize;
+        let mut effect_drain_silent_passes = 0usize;
 
         loop {
             if abort.load(Ordering::SeqCst) {
@@ -563,6 +569,14 @@ pub fn spawn_mix_thread(
                 #[cfg(feature = "debug")]
                 pivot_buffer();
                 info!("Mix Finished!!! (in runner)");
+                effect_drain_passes = effect_drain_passes.saturating_add(1);
+                if effect_drain_passes > MAX_EFFECT_DRAIN_PASSES {
+                    warn!(
+                        "effect drain stopped after {} passes to avoid infinite tail generation",
+                        MAX_EFFECT_DRAIN_PASSES
+                    );
+                    break;
+                }
                 let drained = if let Some(transition) = active_inline_transition.as_mut() {
                     let old_out =
                         run_effect_chain(&mut transition.old_effects, &[], &effect_context, true);
@@ -582,6 +596,19 @@ pub fn spawn_mix_thread(
                 };
 
                 if drained.is_empty() {
+                    break;
+                }
+
+                let max_abs = drained
+                    .iter()
+                    .fold(0.0_f32, |acc, sample| acc.max(sample.abs()));
+                if max_abs <= DRAIN_SILENCE_EPSILON {
+                    effect_drain_silent_passes = effect_drain_silent_passes.saturating_add(1);
+                } else {
+                    effect_drain_silent_passes = 0;
+                }
+                if effect_drain_silent_passes >= DRAIN_SILENT_PASSES_TO_STOP {
+                    info!("effect drain stopped after consecutive silent drain passes");
                     break;
                 }
 
