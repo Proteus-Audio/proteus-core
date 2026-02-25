@@ -66,4 +66,4 @@ Output: [ok][ok]         -> smooth
 ```
 
 ## Practical note
-If the mixer chunk size doesn’t align to the convolution batch size, you can get boundary discontinuities. The fix is to align chunk sizes to the preferred batch size (see `convolution-reverb-boundary-discontinuity.md`).
+If the mixer chunk size doesn't align to the convolution batch size, you can get boundary discontinuities. The fix is to align chunk sizes to the preferred batch size (see [Boundary Discontinuity Note](../convolution-reverb/convolution-reverb-boundary-discontinuity.md)).
