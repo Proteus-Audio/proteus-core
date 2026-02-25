@@ -4,13 +4,13 @@
 
 ## Audio Effects
 
-- [Compressor](./audio-effects-compressor.md)
-- [Convolution Reverb](./audio-effects-convolution-reverb.md)
-- [Delay Reverb](./audio-effects-delay-reverb.md)
-- [Diffusion Reverb](./audio-effects-diffusion-reverb.md)
-- [Distortion](./audio-effects-distortion.md)
-- [Gain](./audio-effects-gain.md)
-- [High-Pass Filter](./audio-effects-high-pass-filter.md)
-- [Limiter](./audio-effects-limiter.md)
-- [Low-Pass Filter](./audio-effects-low-pass-filter.md)
-- [Multiband EQ](./audio-effects-multiband-eq.md)
+- [Compressor](./compressor.md)
+- [Convolution Reverb](./convolution-reverb.md)
+- [Delay Reverb](./delay-reverb.md)
+- [Diffusion Reverb](./diffusion-reverb.md)
+- [Distortion](./distortion.md)
+- [Gain](./gain.md)
+- [High-Pass Filter](./high-pass-filter.md)
+- [Limiter](./limiter.md)
+- [Low-Pass Filter](./low-pass-filter.md)
+- [Multiband EQ](./multiband-eq.md)

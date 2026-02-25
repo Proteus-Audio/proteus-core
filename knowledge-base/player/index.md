@@ -4,7 +4,7 @@
 
 ## Player / Playback Notes
 
-- [Player Data Flows](./player-data-flows.md)
-- [Run Playback Thread Sample Flow](./player-run-playback-thread-sample-flow.md)
-- [Set Effects Inline](./player-set-effects-inline.md)
-- [Shuffle Points Playback](./player-shuffle-points-playback.md)
+- [Player Data Flows](./data-flows.md)
+- [Run Playback Thread Sample Flow](./run-playback-thread-sample-flow.md)
+- [Set Effects Inline](./set-effects-inline.md)
+- [Shuffle Points Playback](./shuffle-points-playback.md)

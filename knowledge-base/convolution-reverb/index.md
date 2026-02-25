@@ -4,4 +4,4 @@
 
 ## Notes
 
-- [Boundary Discontinuity](./convolution-reverb-boundary-discontinuity.md)
+- [Boundary Discontinuity](./boundary-discontinuity.md)
