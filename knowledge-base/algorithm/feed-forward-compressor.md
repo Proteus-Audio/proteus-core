@@ -41,3 +41,9 @@ y[n] = x[n] \cdot 10^{\frac{G[n]+M}{20}}
 - $`G[n]`$: smoothed gain reduction (dB)
 - $`M`$: makeup gain (dB)
 - $`\alpha`$: smoothing coefficient (attack or release dependent)
+
+## Related
+
+- [Audio Effect: Compressor](../audio-effects/compressor.md)
+- [Audio Effect: Limiter](../audio-effects/limiter.md)
+- [Algorithm: Soft-Knee Limiter](./soft-knee-limiter.md)

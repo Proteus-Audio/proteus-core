@@ -16,3 +16,10 @@ Low-pass, high-pass, shelving, and peaking filters are produced by choosing diff
 - $`y[n]`$: output sample
 - $`b_0,b_1,b_2`$: feedforward coefficients
 - $`a_1,a_2`$: feedback coefficients
+
+## Related
+
+- [Algorithm: Bilinear Transform (BLT)](./bilinear-transform.md)
+- [Audio Effect: Low-Pass Filter](../audio-effects/low-pass-filter.md)
+- [Audio Effect: High-Pass Filter](../audio-effects/high-pass-filter.md)
+- [Audio Effect: Multiband EQ](../audio-effects/multiband-eq.md)

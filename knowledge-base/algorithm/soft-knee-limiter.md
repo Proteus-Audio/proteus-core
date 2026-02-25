@@ -28,3 +28,9 @@ y[n] = x[n]\cdot 10^{\frac{G[n]}{20}}
 - $`G`$: gain reduction (dB)
 - $`x[n]`$: input sample
 - $`y[n]`$: output sample
+
+## Related
+
+- [Audio Effect: Limiter](../audio-effects/limiter.md)
+- [Audio Effect: Compressor](../audio-effects/compressor.md)
+- [Algorithm: Feed-Forward Peak Compressor](./feed-forward-compressor.md)

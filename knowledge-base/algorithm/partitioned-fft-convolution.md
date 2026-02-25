@@ -28,3 +28,9 @@ Then $`y_p[n]`$ is recovered by inverse FFT and overlap-add.
 - $`L`$: IR length (samples)
 - $`P`$: number of partitions
 - $`\omega`$: angular frequency
+
+## Related
+
+- [Algorithm: Overlap-Add (OLA)](./overlap-add.md)
+- [Audio Effect: Convolution Reverb](../audio-effects/convolution-reverb.md)
+- [Convolution Reverb Boundary Discontinuity](../convolution-reverb/boundary-discontinuity.md)

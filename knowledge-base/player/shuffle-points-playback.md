@@ -167,3 +167,8 @@ See `force_eos_from_stalled_schedule` in `mix/runner/mod.rs`.
 - Runtime applies events against source-consumed time (not post-DSP tail time).
 - Chunk boundaries are clipped to event boundaries.
 - Changed slots switch by spawning new keys, with a short outgoing fade of old keys.
+
+## Related
+
+- [Player Data Flows](./data-flows.md)
+- [Player: `run_playback_thread` Sample Processing Flow](./run-playback-thread-sample-flow.md)

@@ -21,3 +21,8 @@ Its ideal magnitude response is flat:
 - $`y[n]`$: output sample
 - $`a`$: all-pass coefficient, $`|a| < 1`$
 - $`M`$: delay (samples)
+
+## Related
+
+- [Algorithm: Schroeder-Moorer Algorithmic Reverb](./schroeder-moorer-reverb.md)
+- [Audio Effect: Diffusion Reverb](../audio-effects/diffusion-reverb.md)

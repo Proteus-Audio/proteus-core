@@ -48,3 +48,10 @@ The practical coefficient model is the same family used in Robert Bristow-Johnso
 ## Typical use
 - Remove hiss or harshness
 - Create warm, muffled tones
+
+## Related
+
+- [Algorithm: Biquad IIR Filter](../algorithm/biquad-iir-filter.md)
+- [Algorithm: Bilinear Transform (BLT)](../algorithm/bilinear-transform.md)
+- [Audio Effect: High-Pass Filter](./high-pass-filter.md)
+- [Audio Effect: Multiband EQ](./multiband-eq.md)

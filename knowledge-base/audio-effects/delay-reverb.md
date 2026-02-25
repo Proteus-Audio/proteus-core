@@ -53,3 +53,9 @@ The algorithmic precedent is classic digital reverberation work from the 1960s a
 
 ## Notes
 - The public name is **DelayReverb**. The old **BasicReverb** name remains as a deprecated alias for compatibility.
+
+## Related
+
+- [Algorithm: Schroeder-Moorer Algorithmic Reverb](../algorithm/schroeder-moorer-reverb.md)
+- [Algorithm: Comb Filter (Feedback)](../algorithm/comb-filter.md)
+- [Audio Effect: Diffusion Reverb](./diffusion-reverb.md)

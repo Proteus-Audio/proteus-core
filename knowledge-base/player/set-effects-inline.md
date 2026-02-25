@@ -24,3 +24,9 @@ Use this for live authoring or UI edits where you want fewer audible artifacts w
 ## Related API
 
 - `set_effects`: legacy disruptive update path. It resets effect state and seeks to current time to apply immediately.
+
+## Related
+
+- [Player Data Flows](./data-flows.md)
+- [Player: `run_playback_thread` Sample Processing Flow](./run-playback-thread-sample-flow.md)
+- [Audio Effects Knowledge Base](../audio-effects/index.md)

@@ -20,3 +20,9 @@ g = 10^{\frac{G_{\mathrm{dB}}}{20}}
 - $`y[n]`$: output sample
 - $`g`$: linear gain factor
 - $`G_{\mathrm{dB}}`$: gain in decibels
+
+## Related
+
+- [Audio Effect: Gain](../audio-effects/gain.md)
+- [Audio Effect: Distortion](../audio-effects/distortion.md)
+- [Audio Effect: Compressor](../audio-effects/compressor.md)

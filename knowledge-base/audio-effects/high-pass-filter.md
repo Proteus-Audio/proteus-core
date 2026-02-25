@@ -48,3 +48,10 @@ Historically and practically, this is the standard digital equivalent of analog 
 ## Typical use
 - Remove rumble or mic handling noise
 - Clean up low‑end buildup
+
+## Related
+
+- [Algorithm: Biquad IIR Filter](../algorithm/biquad-iir-filter.md)
+- [Algorithm: Bilinear Transform (BLT)](../algorithm/bilinear-transform.md)
+- [Audio Effect: Low-Pass Filter](./low-pass-filter.md)
+- [Audio Effect: Multiband EQ](./multiband-eq.md)

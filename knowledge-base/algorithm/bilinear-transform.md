@@ -17,3 +17,10 @@ with $`T = 1/f_s`$. Frequency prewarping is often used for accurate cutoff place
 - $`z`$: z-domain complex variable
 - $`T`$: sample period (seconds)
 - $`f_s`$: sample rate (Hz)
+
+## Related
+
+- [Algorithm: Biquad IIR Filter](./biquad-iir-filter.md)
+- [Audio Effect: Low-Pass Filter](../audio-effects/low-pass-filter.md)
+- [Audio Effect: High-Pass Filter](../audio-effects/high-pass-filter.md)
+- [Audio Effect: Multiband EQ](../audio-effects/multiband-eq.md)

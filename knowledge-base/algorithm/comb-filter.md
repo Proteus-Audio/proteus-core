@@ -22,3 +22,9 @@ y[n] = x[n] + b\,x[n-D]
 - $`g`$: feedback gain
 - $`b`$: feedforward gain
 - $`D`$: delay (samples)
+
+## Related
+
+- [Algorithm: Schroeder-Moorer Algorithmic Reverb](./schroeder-moorer-reverb.md)
+- [Audio Effect: Delay Reverb](../audio-effects/delay-reverb.md)
+- [Audio Effect: Diffusion Reverb](../audio-effects/diffusion-reverb.md)

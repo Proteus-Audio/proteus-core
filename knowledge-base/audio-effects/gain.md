@@ -40,3 +40,10 @@ The dB input form uses the standard amplitude conversion relationship `g = 10^(d
 | CPU cost | Low |
 | Latency | None |
 | Tone | Neutral |
+
+## Related
+
+- [Algorithm: Linear Gain Stage](../algorithm/linear-gain-stage.md)
+- [Audio Effect: Distortion](./distortion.md)
+- [Audio Effect: Compressor](./compressor.md)
+- [Audio Effect: Limiter](./limiter.md)

@@ -214,3 +214,11 @@ One chunk’s journey is:
 5. **Process DSP** chain and manage effect tails (`produce_output_samples`).
 6. **Send** `(SamplesBuffer, duration)` to playback worker (`send_samples`).
 7. **Append** to `rodio::Sink` (`update_sink`), then sink/mixer/output stream drive device playback.
+
+## Related
+
+- [Player Data Flows](./data-flows.md)
+- [Shuffle Points in Playback](./shuffle-points-playback.md)
+- [Player: `set_effects_inline`](./set-effects-inline.md)
+- [Audio Effect: Convolution Reverb](../audio-effects/convolution-reverb.md)
+- [Convolution Reverb Boundary Discontinuity](../convolution-reverb/boundary-discontinuity.md)

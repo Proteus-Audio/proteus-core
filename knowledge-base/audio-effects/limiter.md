@@ -50,3 +50,10 @@ Algorithmically, it follows the same established DRC precedent as compressor des
 | CPU cost | Low |
 | Latency | None |
 | Tone | Transparent if set gently |
+
+## Related
+
+- [Algorithm: Soft-Knee Limiter](../algorithm/soft-knee-limiter.md)
+- [Algorithm: Feed-Forward Peak Compressor](../algorithm/feed-forward-compressor.md)
+- [Audio Effect: Compressor](./compressor.md)
+- [Audio Effect: Gain](./gain.md)

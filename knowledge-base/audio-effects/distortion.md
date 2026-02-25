@@ -49,3 +49,9 @@ This has long precedent in digital audio distortion units as the simplest "drive
 | CPU cost | Low |
 | Latency | None |
 | Tone | From mild warmth to heavy crunch |
+
+## Related
+
+- [Algorithm: Hard Clipping Waveshaper](../algorithm/hard-clipping-waveshaping.md)
+- [Audio Effect: Gain](./gain.md)
+- [Audio Effect: Limiter](./limiter.md)

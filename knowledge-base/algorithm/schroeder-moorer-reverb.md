@@ -18,7 +18,7 @@ Typical networks sum several comb filters in parallel and follow them with one o
 
 ## Proteus Context
 
-Proteus's `DiffusionReverb` uses a Schroeder/Moorer-inspired structure with
+Proteus's [`DiffusionReverb`](../audio-effects/diffusion-reverb.md) uses a Schroeder/Moorer-inspired structure with
 additional diffusion and tonal smoothing:
 
 - input pre-delay
@@ -38,3 +38,10 @@ delay offsets) to reduce metallic ringing and stereo correlation artifacts.
 - $`a`$: all-pass coefficient, $`|a| < 1`$
 - $`D`$: comb delay (samples)
 - $`M`$: all-pass delay (samples)
+
+## Related
+
+- [Algorithm: Comb Filter (Feedback)](./comb-filter.md)
+- [Algorithm: All-Pass Filter (Delay Form)](./all-pass-filter.md)
+- [Audio Effect: Diffusion Reverb](../audio-effects/diffusion-reverb.md)
+- [Audio Effect: Delay Reverb](../audio-effects/delay-reverb.md)

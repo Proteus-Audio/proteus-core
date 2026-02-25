@@ -76,3 +76,11 @@ Its research precedent is that dense, decorrelated reflections can be synthesize
 | Latency | Low‑to‑medium |
 | CPU cost | Low‑to‑medium (higher than simple delay reverb; much lower than convolution) |
 | Tail character | Smooth, denser, darker, less metallic than the earlier sparse topology |
+
+## Related
+
+- [Algorithm: Schroeder-Moorer Algorithmic Reverb](../algorithm/schroeder-moorer-reverb.md)
+- [Algorithm: Comb Filter (Feedback)](../algorithm/comb-filter.md)
+- [Algorithm: All-Pass Filter (Delay Form)](../algorithm/all-pass-filter.md)
+- [Audio Effect: Delay Reverb](./delay-reverb.md)
+- [Audio Effect: Convolution Reverb](./convolution-reverb.md)

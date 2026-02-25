@@ -66,3 +66,10 @@ That architecture matches mainstream digital dynamic-range control practice and 
 | CPU cost | Low |
 | Latency | None |
 | Tone | Depends on settings (can be transparent or punchy) |
+
+## Related
+
+- [Algorithm: Feed-Forward Peak Compressor](../algorithm/feed-forward-compressor.md)
+- [Algorithm: Soft-Knee Limiter](../algorithm/soft-knee-limiter.md)
+- [Audio Effect: Limiter](./limiter.md)
+- [Audio Effect: Gain](./gain.md)

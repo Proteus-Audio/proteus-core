@@ -67,3 +67,11 @@ Output: [ok][ok]         -> smooth
 
 ## Practical note
 If the mixer chunk size doesn't align to the convolution batch size, you can get boundary discontinuities. The fix is to align chunk sizes to the preferred batch size (see [Boundary Discontinuity Note](../convolution-reverb/boundary-discontinuity.md)).
+
+## Related
+
+- [Algorithm: Partitioned FFT Convolution](../algorithm/partitioned-fft-convolution.md)
+- [Algorithm: Overlap-Add (OLA)](../algorithm/overlap-add.md)
+- [Convolution Reverb Boundary Discontinuity](../convolution-reverb/boundary-discontinuity.md)
+- [Player: `run_playback_thread` Sample Processing Flow](../player/run-playback-thread-sample-flow.md)
+- [Audio Effect: Diffusion Reverb](./diffusion-reverb.md)

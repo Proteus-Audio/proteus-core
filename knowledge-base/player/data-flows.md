@@ -185,3 +185,10 @@ Main files:
 - Decode threads fill per-track ring buffers.
 - Mix thread consumes those buffers, applies gain/effects, emits output chunks.
 - Worker thread appends chunks to sink and manages playback time/state.
+
+## Related
+
+- [Player: `run_playback_thread` Sample Processing Flow](./run-playback-thread-sample-flow.md)
+- [Shuffle Points in Playback](./shuffle-points-playback.md)
+- [Player: `set_effects_inline`](./set-effects-inline.md)
+- [Audio Effects Knowledge Base](../audio-effects/index.md)

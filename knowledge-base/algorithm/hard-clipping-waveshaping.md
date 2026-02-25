@@ -31,3 +31,8 @@ T, & u[n] > T
 - $`y[n]`$: clipped output
 - $`g`$: pre-gain (drive)
 - $`T`$: clip threshold, $`T > 0`$
+
+## Related
+
+- [Audio Effect: Distortion](../audio-effects/distortion.md)
+- [Audio Effect: Gain](../audio-effects/gain.md)

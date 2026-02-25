@@ -34,3 +34,10 @@ The effect is a cascade of **second-order IIR biquads** (peaking + optional shel
 ## Typical use
 - Broad tonal correction with many narrow points.
 - Add surgical cuts while also applying end-band tone shaping.
+
+## Related
+
+- [Algorithm: Biquad IIR Filter](../algorithm/biquad-iir-filter.md)
+- [Algorithm: Bilinear Transform (BLT)](../algorithm/bilinear-transform.md)
+- [Audio Effect: Low-Pass Filter](./low-pass-filter.md)
+- [Audio Effect: High-Pass Filter](./high-pass-filter.md)

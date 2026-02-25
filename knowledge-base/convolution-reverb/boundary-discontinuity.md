@@ -98,3 +98,11 @@ The preferred-batch approach **does not change the timeline**:
 ## Takeaway
 
 **Convolution reverb is block-based.** If the mixer feeds it chunks that don’t align to its batch size, the output can underfill, and padding creates discontinuities. Aligning the mixer’s chunk size to the **preferred batch size** makes the convolution output continuous and preserves correct timing.
+
+## Related
+
+- [Audio Effect: Convolution Reverb](../audio-effects/convolution-reverb.md)
+- [Algorithm: Partitioned FFT Convolution](../algorithm/partitioned-fft-convolution.md)
+- [Algorithm: Overlap-Add (OLA)](../algorithm/overlap-add.md)
+- [Player: `run_playback_thread` Sample Processing Flow](../player/run-playback-thread-sample-flow.md)
+- [Player Data Flows](../player/data-flows.md)
