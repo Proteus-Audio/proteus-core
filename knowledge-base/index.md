@@ -4,6 +4,7 @@ Welcome. This index links to short, practical explanations of DSP `AudioEffect` 
 
 ## Directory Indexes
 
+- [Onboarding](./onboarding/index.md)
 - [Audio Effects](./audio-effects/index.md)
 - [Algorithms](./algorithm/index.md)
 - [Player / Playback](./player/index.md)
@@ -43,3 +44,9 @@ Welcome. This index links to short, practical explanations of DSP `AudioEffect` 
 - [Run Playback Thread Sample Flow](./player/run-playback-thread-sample-flow.md)
 - [Shuffle Points Playback](./player/shuffle-points-playback.md)
 - [Set Effects Inline](./player/set-effects-inline.md)
+
+## Onboarding
+
+- [Onboarding Overview](./onboarding/index.md)
+- [Library Onboarding](./onboarding/library/index.md)
+- [CLI Onboarding](./onboarding/cli/index.md)
