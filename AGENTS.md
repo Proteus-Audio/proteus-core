@@ -1,29 +1,25 @@
 # Repository Guidelines
 
 ## Project Structure & Module Organization
-- Workspace root `Cargo.toml` defines members.
-- `proteus-lib/` is the library crate.
-- `proteus-lib/src/lib.rs` exposes the `proteus_lib` API surface.
-- `proteus-lib/src/dsp/` holds audio DSP implementations (convolution, reverb, impulse responses).
-- `proteus-lib/src/playback/` contains the real-time player and mixing engine.
-- `proteus-lib/src/container/` owns `.prot`/`.mka` parsing, play settings, and metadata scans.
-- `proteus-lib/src/track/` owns per-track decoding and buffering.
-- `proteus-cli/` is the CLI crate.
-- `proteus-cli/src/main.rs` defines the CLI and playback workflow.
-- `proteus-scripts/` is a small helper CLI (currently for impulse response normalization).
-- `play_settings_guide.rs` is a local reference for play settings schema details.
-- `Cargo.lock` captures resolved dependencies for the workspace.
+This is a Rust workspace. `Cargo.toml` at the root defines members:
+- `proteus-lib/`: core library crate (`proteus-lib/src/lib.rs`) and shared playback/container logic.
+- `proteus-cli/`: CLI entrypoint and playback workflow (`proteus-cli/src/main.rs`).
+- `proteus-scripts/`: helper utilities (for example impulse response normalization).
+
+Within `proteus-lib/src/`:
+- `dsp/` contains audio DSP implementations (reverb, convolution, impulse responses).
+- `playback/` contains the real-time player and mixing engine.
+- `container/` handles `.prot`/`.mka` parsing, settings, and metadata scanning.
+- `track/` handles per-track decoding and buffering.
 
 ## Build, Test, and Development Commands
-- `cargo build` builds all workspace members in debug mode.
-- `cargo run -p proteus-cli -- <path-to-file.prot>` runs the CLI against a `.prot` or `.mka` file.
-- `cargo run -p proteus-cli --features debug -- <path>` enables extra playback metrics in the TUI.
-- `cargo run -p proteus-scripts -- normalize --help` shows helper script usage.
-- `cargo check` performs fast type-checking without producing binaries.
-- `cargo fmt` formats Rust sources.
-- `cargo clippy -- -D warnings` runs the lints used by this codebase.
-- `cargo test` runs tests (none are currently defined today).
-- `cargo check` should pass before finishing any task.
+- `cargo check`: fast type-check across the workspace (run before finishing changes).
+- `cargo build`: build all crates in debug mode.
+- `cargo fmt`: format Rust sources.
+- `cargo clippy -- -D warnings`: run lints and fail on warnings.
+- `cargo test`: run tests (coverage is currently minimal).
+- `cargo run -p proteus-cli -- <file.prot>`: run CLI playback on a `.prot`/`.mka` file.
+- `cargo run -p proteus-cli --features debug -- <path>`: run CLI with debug playback metrics.
 
 ## Coding Style & Naming Conventions
 - Follow Rust 2021 conventions: `snake_case` for functions/modules, `CamelCase` for types, `SCREAMING_SNAKE_CASE` for constants.
@@ -37,21 +33,13 @@
 - Real-time paths should avoid unnecessary allocations and long critical sections.
 
 ## Testing Guidelines
-- No unit or integration tests are present today.
-- When adding tests, prefer:
-  - Unit tests in the module file (`mod tests { ... }`).
-  - Integration tests under `tests/` for CLI behavior.
-- Name test functions descriptively, e.g., `decodes_valid_prot_header`.
+No formal test suite is established yet. Add unit tests inline (`mod tests`) for library behavior and integration tests under `tests/` for CLI behavior. Use descriptive names such as `decodes_valid_prot_header`.
 
 ## Commit & Pull Request Guidelines
-- Commit history uses short, imperative summaries (e.g., `Update Cargo.toml`, `Refactor reporting status`). Keep messages concise and action-focused.
-- PRs should include:
-  - A clear description of behavior changes.
-  - Steps to reproduce or validate (`cargo run -- ...` or `cargo test`).
-  - Any relevant sample input files or flags used.
+Use short, imperative commit messages (for example, `Refactor playback status reporting`). PRs should describe behavior changes, include validation steps (for example `cargo check`, `cargo run ...`), and note any sample inputs/flags used.
 
 ## Configuration & Data Notes
-- The CLI expects `.prot` or `.mka` inputs and will error otherwise.
+- The CLI expects standard audio formats, `.prot`, or `.mka` inputs and will error otherwise.
 - Local test data is referenced from `proteus-lib/src/test_data.rs`; keep any new fixtures small and documented.
 - Container playback settings are read from `play_settings.json` inside `.prot`/`.mka` files.
 - Feature flags: `bench`, `debug`, and `real-fft` are supported in both `proteus-lib` and `proteus-cli`.
