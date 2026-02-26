@@ -1,9 +1,6 @@
-# proteus-cli
-CLI for reading and parsing .prot files
+# proteus-core
 
-## Library Structure
-
-The `proteus-lib` crate is structured to separate container parsing, DSP, and playback orchestration. This keeps the DSP pure, isolates IO/containers, and makes the library easier to embed in other apps.
+The main Library and CLI for reading, parsing, and playing `.prot` files.
 
 ## About
 
