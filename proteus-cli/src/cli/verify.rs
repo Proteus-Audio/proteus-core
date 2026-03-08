@@ -16,17 +16,17 @@ use proteus_lib::container::info::get_probe_result_from_string;
 /// Modes for non-playback verification.
 #[derive(Debug, Clone, Copy)]
 pub enum VerifyMode {
-    DecodeOnly,
-    ProbeOnly,
-    VerifyOnly,
+    Decode,
+    Probe,
+    Verify,
 }
 
 /// Run a verify subcommand mode for the given input file.
 pub fn run_verify(file_path: &str, mode: VerifyMode) -> Result<i32> {
     match mode {
-        VerifyMode::ProbeOnly => run_probe(file_path),
-        VerifyMode::DecodeOnly => run_decode(file_path, false),
-        VerifyMode::VerifyOnly => run_decode(file_path, true),
+        VerifyMode::Probe => run_probe(file_path),
+        VerifyMode::Decode => run_decode(file_path, false),
+        VerifyMode::Verify => run_decode(file_path, true),
     }
 }
 
@@ -94,7 +94,9 @@ fn run_decode(file_path: &str, strict: bool) -> Result<i32> {
     Ok(0)
 }
 
-fn open_decoder(file_path: &str) -> Result<(Box<dyn Decoder>, Box<dyn FormatReader>, u32)> {
+type DecoderOpenResult = (Box<dyn Decoder>, Box<dyn FormatReader>, u32);
+
+fn open_decoder(file_path: &str) -> Result<DecoderOpenResult> {
     let src = File::open(file_path).map_err(Error::IoError)?;
     let mss = MediaSourceStream::new(Box::new(src), Default::default());
 
@@ -121,7 +123,7 @@ fn open_decoder(file_path: &str) -> Result<(Box<dyn Decoder>, Box<dyn FormatRead
         .iter()
         .find(|track| track.codec_params.codec != CODEC_TYPE_NULL)
         .map(|track| (track.id, track.codec_params.clone()))
-        .ok_or_else(|| Error::Unsupported("no supported audio tracks"))?;
+        .ok_or(Error::Unsupported("no supported audio tracks"))?;
 
     let dec_opts: DecoderOptions = Default::default();
     let decoder = symphonia::default::get_codecs().make(&codec_params, &dec_opts)?;

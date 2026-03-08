@@ -29,7 +29,7 @@ impl Default for GainSettings {
 }
 
 /// Configured gain effect.
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct GainEffect {
     pub enabled: bool,
@@ -43,15 +43,6 @@ impl std::fmt::Debug for GainEffect {
             .field("enabled", &self.enabled)
             .field("settings", &self.settings)
             .finish()
-    }
-}
-
-impl Default for GainEffect {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            settings: GainSettings::default(),
-        }
     }
 }
 

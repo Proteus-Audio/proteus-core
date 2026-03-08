@@ -323,8 +323,7 @@ impl BufferMixer {
 
                         info!("Ramp: {:?}", (ramp_start, ramp_end));
 
-                        let mut slice: Vec<f32> =
-                            samples[start_sample..end_sample].iter().copied().collect();
+                        let mut slice = samples[start_sample..end_sample].to_vec();
 
                         fade_interleaved_per_frame(&mut slice, self.channels, ramp_start, ramp_end);
 

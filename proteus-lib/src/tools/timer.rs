@@ -31,7 +31,7 @@ impl Timer {
 
     /// Resume timing if it is currently paused.
     pub fn un_pause(&mut self) {
-        if self.start_time == None {
+        if self.start_time.is_none() {
             self.start_time = Some(Instant::now());
         }
     }
@@ -62,5 +62,11 @@ impl Timer {
     pub fn reset(&mut self) {
         self.start_time = None;
         self.time = Duration::new(0, 0);
+    }
+}
+
+impl Default for Timer {
+    fn default() -> Self {
+        Self::new()
     }
 }

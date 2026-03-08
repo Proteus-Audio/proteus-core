@@ -275,11 +275,8 @@ mod real_fft {
                 self.previous_frame_q.pop_back();
 
                 let mut convolved = vec![Complex { re: 0.0, im: 0.0 }; spectrum_len];
-                for i in 0..self.ir_segments.len() {
-                    add_frames(
-                        &mut convolved,
-                        mult_frames(&self.previous_frame_q[i], &self.ir_segments[i]),
-                    );
+                for (prev, ir) in self.previous_frame_q.iter().zip(self.ir_segments.iter()) {
+                    add_frames(&mut convolved, mult_frames(prev, ir));
                 }
 
                 let mut time_domain = vec![0.0_f32; self.fft_size];
@@ -329,8 +326,8 @@ mod real_fft {
 
     fn add_frames(f1: &mut [Complex<f32>], f2: Vec<Complex<f32>>) {
         for (sample1, sample2) in f1.iter_mut().zip(f2) {
-            sample1.re = sample1.re + sample2.re;
-            sample1.im = sample1.im + sample2.im;
+            sample1.re += sample2.re;
+            sample1.im += sample2.im;
         }
     }
 

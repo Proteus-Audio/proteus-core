@@ -67,7 +67,7 @@ impl Default for CompressorSettings {
 }
 
 /// Configured compressor effect with runtime state.
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct CompressorEffect {
     pub enabled: bool,
@@ -83,16 +83,6 @@ impl std::fmt::Debug for CompressorEffect {
             .field("enabled", &self.enabled)
             .field("settings", &self.settings)
             .finish()
-    }
-}
-
-impl Default for CompressorEffect {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            settings: CompressorSettings::default(),
-            state: None,
-        }
     }
 }
 
@@ -158,34 +148,36 @@ impl CompressorEffect {
         let makeup_gain_db = sanitize_makeup_db(self.settings.makeup_gain_db);
         let channels = context.channels.max(1);
 
+        let params = CompressorParams {
+            sample_rate: context.sample_rate,
+            channels,
+            threshold_db,
+            ratio,
+            attack_ms,
+            release_ms,
+            makeup_gain_db,
+        };
         let needs_reset = self
             .state
             .as_ref()
-            .map(|state| {
-                !state.matches(
-                    context.sample_rate,
-                    channels,
-                    threshold_db,
-                    ratio,
-                    attack_ms,
-                    release_ms,
-                    makeup_gain_db,
-                )
-            })
+            .map(|state| !state.matches(&params))
             .unwrap_or(true);
 
         if needs_reset {
-            self.state = Some(CompressorState::new(
-                context.sample_rate,
-                channels,
-                threshold_db,
-                ratio,
-                attack_ms,
-                release_ms,
-                makeup_gain_db,
-            ));
+            self.state = Some(CompressorState::new(&params));
         }
     }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct CompressorParams {
+    sample_rate: u32,
+    channels: usize,
+    threshold_db: f32,
+    ratio: f32,
+    attack_ms: f32,
+    release_ms: f32,
+    makeup_gain_db: f32,
 }
 
 #[derive(Clone, Debug)]
@@ -201,46 +193,31 @@ struct CompressorState {
 }
 
 impl CompressorState {
-    fn new(
-        sample_rate: u32,
-        channels: usize,
-        threshold_db: f32,
-        ratio: f32,
-        attack_ms: f32,
-        release_ms: f32,
-        makeup_gain_db: f32,
-    ) -> Self {
-        let attack_coeff = time_to_coeff(attack_ms, sample_rate);
-        let release_coeff = time_to_coeff(release_ms, sample_rate);
+    fn new(params: &CompressorParams) -> Self {
+        let attack_coeff = time_to_coeff(params.attack_ms, params.sample_rate);
+        let release_coeff = time_to_coeff(params.release_ms, params.sample_rate);
         Self {
-            sample_rate,
-            channels,
-            threshold_db,
-            ratio,
+            sample_rate: params.sample_rate,
+            channels: params.channels,
+            threshold_db: params.threshold_db,
+            ratio: params.ratio,
             attack_coeff,
             release_coeff,
-            makeup_gain_db,
+            makeup_gain_db: params.makeup_gain_db,
             current_gain_db: 0.0,
         }
     }
 
-    fn matches(
-        &self,
-        sample_rate: u32,
-        channels: usize,
-        threshold_db: f32,
-        ratio: f32,
-        attack_ms: f32,
-        release_ms: f32,
-        makeup_gain_db: f32,
-    ) -> bool {
-        self.sample_rate == sample_rate
-            && self.channels == channels
-            && (self.threshold_db - threshold_db).abs() < f32::EPSILON
-            && (self.ratio - ratio).abs() < f32::EPSILON
-            && (self.attack_coeff - time_to_coeff(attack_ms, sample_rate)).abs() < f32::EPSILON
-            && (self.release_coeff - time_to_coeff(release_ms, sample_rate)).abs() < f32::EPSILON
-            && (self.makeup_gain_db - makeup_gain_db).abs() < f32::EPSILON
+    fn matches(&self, params: &CompressorParams) -> bool {
+        self.sample_rate == params.sample_rate
+            && self.channels == params.channels
+            && (self.threshold_db - params.threshold_db).abs() < f32::EPSILON
+            && (self.ratio - params.ratio).abs() < f32::EPSILON
+            && (self.attack_coeff - time_to_coeff(params.attack_ms, params.sample_rate)).abs()
+                < f32::EPSILON
+            && (self.release_coeff - time_to_coeff(params.release_ms, params.sample_rate)).abs()
+                < f32::EPSILON
+            && (self.makeup_gain_db - params.makeup_gain_db).abs() < f32::EPSILON
     }
 
     fn update_gain(&mut self, target_gain_db: f32) {

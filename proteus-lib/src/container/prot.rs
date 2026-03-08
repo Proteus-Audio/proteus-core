@@ -71,14 +71,14 @@ pub struct Prot {
 
 impl Prot {
     /// Load a single container file and resolve tracks.
-    pub fn new(file_path: &String) -> Self {
-        let info = Info::new(file_path.clone());
+    pub fn new(file_path: &str) -> Self {
+        let info = Info::new(file_path.to_string());
 
         println!("Info: {:?}", info);
 
         let mut this = Self {
             info,
-            file_path: Some(file_path.clone()),
+            file_path: Some(file_path.to_string()),
             file_paths: None,
             file_paths_dictionary: None,
             track_ids: None,
@@ -169,7 +169,7 @@ impl Prot {
             return;
         }
 
-        if !self.file_path.is_some() {
+        if self.file_path.is_none() {
             return;
         }
 
@@ -335,7 +335,7 @@ impl Prot {
         }
 
         if let Some(track_ids) = &self.track_ids {
-            return track_ids.into_iter().map(|id| format!("{}", id)).collect();
+            return track_ids.iter().map(|id| format!("{}", id)).collect();
         }
 
         Vec::new()
@@ -471,11 +471,11 @@ impl Prot {
         // Keep schedule entries rectangular by carrying previous values for
         // missing slots.
         let mut last_sources = vec![None::<ShuffleSource>; slot_count];
-        for entry in schedule.iter_mut() {
-            for slot_index in 0..slot_count {
+        for entry in &mut schedule {
+            for (slot_index, last_source) in last_sources.iter_mut().enumerate().take(slot_count) {
                 if slot_index < entry.sources.len() {
-                    last_sources[slot_index] = Some(entry.sources[slot_index].clone());
-                } else if let Some(previous) = last_sources[slot_index].clone() {
+                    *last_source = Some(entry.sources[slot_index].clone());
+                } else if let Some(previous) = last_source.clone() {
                     entry.sources.push(previous);
                 }
             }
@@ -1174,6 +1174,7 @@ fn build_slot_layout(slot_count: usize, slot_spans: &[usize]) -> (Vec<(usize, us
     (layout, logical_track_count.max(slot_spans.len()))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_segment_instance(
     instance_id: usize,
     logical_track_index: usize,

@@ -11,7 +11,7 @@ use symphonia::core::probe::Hint;
 /// This is a convenience wrapper around [`get_reader`] and [`get_decoder`].
 pub fn open_file(file_path: &str) -> (Box<dyn Decoder>, Box<dyn FormatReader>) {
     let format = get_reader(file_path);
-    let decoder = get_decoder(&format);
+    let decoder = get_decoder(format.as_ref());
 
     (decoder, format)
 }
@@ -65,7 +65,7 @@ pub fn get_reader(file_path: &str) -> Box<dyn FormatReader> {
 ///
 /// Uses the same track-selection logic as [`get_reader`]: finds the first track
 /// with a non-null codec rather than blindly using `tracks()[0]`.
-pub fn get_decoder(format: &Box<dyn FormatReader>) -> Box<dyn Decoder> {
+pub fn get_decoder(format: &dyn FormatReader) -> Box<dyn Decoder> {
     let dec_opts: DecoderOptions = Default::default();
 
     let track = format

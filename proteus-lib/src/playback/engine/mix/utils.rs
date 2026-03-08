@@ -70,7 +70,7 @@ fn push_cover(out: &mut Vec<Cover>, c: Cover) {
 /// - If an underlay gap between two overlaps is < transition_size, we cannot fit Down then Up,
 ///   so we skip that underlay and merge the overlaps into one continuous overlap block.
 pub fn map_cover(
-    overlap: &Vec<(usize, usize)>,
+    overlap: &[(usize, usize)],
     sample_len: usize,
     transition_size: Option<usize>,
 ) -> Vec<Cover> {

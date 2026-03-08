@@ -22,7 +22,7 @@ fn run_single_bench(_args: &ArgMatches) -> Result<Option<i32>> {
     #[cfg(not(feature = "bench"))]
     {
         eprintln!("Benchmarking requires the `bench` feature.");
-        return Ok(Some(1));
+        Ok(Some(1))
     }
     #[cfg(feature = "bench")]
     {
@@ -72,7 +72,7 @@ fn run_single_bench(_args: &ArgMatches) -> Result<Option<i32>> {
             result.ir_segments
         );
 
-        return Ok(Some(0));
+        Ok(Some(0))
     }
 }
 
@@ -82,7 +82,7 @@ fn run_sweep_bench(_args: &ArgMatches) -> Result<Option<i32>> {
     #[cfg(not(feature = "bench"))]
     {
         eprintln!("Benchmarking requires the `bench` feature.");
-        return Ok(Some(1));
+        Ok(Some(1))
     }
     #[cfg(feature = "bench")]
     {
@@ -130,6 +130,6 @@ fn run_sweep_bench(_args: &ArgMatches) -> Result<Option<i32>> {
             );
         }
 
-        return Ok(Some(0));
+        Ok(Some(0))
     }
 }

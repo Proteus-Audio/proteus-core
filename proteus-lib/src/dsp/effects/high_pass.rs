@@ -35,7 +35,7 @@ impl Default for HighPassFilterSettings {
 }
 
 /// Configured high-pass filter effect with runtime state.
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct HighPassFilterEffect {
     pub enabled: bool,
@@ -51,16 +51,6 @@ impl std::fmt::Debug for HighPassFilterEffect {
             .field("enabled", &self.enabled)
             .field("settings", &self.settings)
             .finish()
-    }
-}
-
-impl Default for HighPassFilterEffect {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            settings: HighPassFilterSettings::default(),
-            state: None,
-        }
     }
 }
 

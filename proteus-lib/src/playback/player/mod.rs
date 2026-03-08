@@ -103,6 +103,7 @@ pub struct Player {
     play_command_ms: Arc<AtomicU64>,
     volume: Arc<Mutex<f32>>,
     sink: Arc<Mutex<Sink>>,
+    #[allow(clippy::arc_with_non_send_sync)]
     output_stream: Arc<Mutex<Option<OutputStream>>>,
     reporter: Option<Arc<Mutex<Reporter>>>,
     buffer_settings: Arc<Mutex<PlaybackBufferSettings>>,

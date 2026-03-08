@@ -220,7 +220,7 @@ impl Player {
         *timestamp = ts;
         drop(timestamp);
 
-        let state = self.state.lock().unwrap().clone();
+        let state = *self.state.lock().unwrap();
         let was_active = matches!(state, PlayerState::Playing | PlayerState::Resuming);
         let (seek_fade_out_ms, seek_fade_in_ms) = {
             let settings = self.buffer_settings.lock().unwrap();
@@ -399,8 +399,8 @@ impl Player {
         reporting: Arc<Mutex<dyn Fn(Report) + Send>>,
         reporting_interval: Duration,
     ) {
-        if self.reporter.is_some() {
-            self.reporter.as_ref().unwrap().lock().unwrap().stop();
+        if let Some(reporter) = self.reporter.as_ref() {
+            reporter.lock().unwrap().stop();
         }
 
         let reporter = Arc::new(Mutex::new(Reporter::new(

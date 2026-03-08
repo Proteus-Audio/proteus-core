@@ -47,9 +47,9 @@ pub fn run(args: &ArgMatches, log_buffer: Arc<Mutex<VecDeque<LogLine>>>) -> Resu
                 };
                 let file_path = verify_args.get_one::<String>("INPUT").unwrap();
                 let mode = match verify_cmd {
-                    "probe" => cli::verify::VerifyMode::ProbeOnly,
-                    "decode" => cli::verify::VerifyMode::DecodeOnly,
-                    "verify" => cli::verify::VerifyMode::VerifyOnly,
+                    "probe" => cli::verify::VerifyMode::Probe,
+                    "decode" => cli::verify::VerifyMode::Decode,
+                    "verify" => cli::verify::VerifyMode::Verify,
                     _ => {
                         error!("Unknown verify subcommand");
                         return Ok(-1);
@@ -131,10 +131,7 @@ pub fn run(args: &ArgMatches, log_buffer: Arc<Mutex<VecDeque<LogLine>>>) -> Resu
     } else if is_directory {
         let config = project_files::load_directory_playback_config(input_path).map_err(|err| {
             error!("{}", err);
-            symphonia::core::errors::Error::IoError(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                err,
-            ))
+            symphonia::core::errors::Error::IoError(std::io::Error::other(err))
         })?;
         let mut player =
             player::Player::new_from_file_paths_with_options(config.tracks, cli_player_options);

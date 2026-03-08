@@ -33,7 +33,7 @@ impl Default for PanSettings {
 }
 
 /// Configured pan effect.
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct PanEffect {
     pub enabled: bool,
@@ -47,15 +47,6 @@ impl std::fmt::Debug for PanEffect {
             .field("enabled", &self.enabled)
             .field("settings", &self.settings)
             .finish()
-    }
-}
-
-impl Default for PanEffect {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            settings: PanSettings::default(),
-        }
     }
 }
 

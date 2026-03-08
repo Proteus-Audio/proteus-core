@@ -35,7 +35,7 @@ impl Default for LowPassFilterSettings {
 }
 
 /// Configured low-pass filter effect with runtime state.
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct LowPassFilterEffect {
     pub enabled: bool,
@@ -51,16 +51,6 @@ impl std::fmt::Debug for LowPassFilterEffect {
             .field("enabled", &self.enabled)
             .field("settings", &self.settings)
             .finish()
-    }
-}
-
-impl Default for LowPassFilterEffect {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            settings: LowPassFilterSettings::default(),
-            state: None,
-        }
     }
 }
 

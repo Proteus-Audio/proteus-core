@@ -95,8 +95,7 @@ pub fn get_probe_result_from_string(file_path: &str) -> Result<ProbeResult, Erro
         }
     }
 
-    Err(Error::IoError(std::io::Error::new(
-        std::io::ErrorKind::Other,
+    Err(Error::IoError(std::io::Error::other(
         "Failed to probe media file",
     )))
 }
@@ -197,15 +196,10 @@ pub fn get_durations_by_scan(file_path: &str) -> HashMap<u32, f64> {
         sample_rates.insert(track.id, track.codec_params.sample_rate);
     }
 
-    loop {
-        match probed.format.next_packet() {
-            Ok(packet) => {
-                let entry = max_ts.entry(packet.track_id()).or_insert(0);
-                if packet.ts() > *entry {
-                    *entry = packet.ts();
-                }
-            }
-            Err(_) => break,
+    while let Ok(packet) = probed.format.next_packet() {
+        let entry = max_ts.entry(packet.track_id()).or_insert(0);
+        if packet.ts() > *entry {
+            *entry = packet.ts();
         }
     }
 
@@ -637,10 +631,7 @@ impl Info {
 
     /// Get the duration for the given track index, if known.
     pub fn get_duration(&self, index: u32) -> Option<f64> {
-        match self.duration_map.get(&index) {
-            Some(duration) => Some(*duration),
-            None => None,
-        }
+        self.duration_map.get(&index).copied()
     }
 }
 

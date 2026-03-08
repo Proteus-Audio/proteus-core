@@ -103,8 +103,7 @@ pub fn spawn_mix_thread(
             let batch_samples =
                 convolution_reverb::preferred_batch_samples(audio_info.channels.max(1) as usize);
             if batch_samples > 0 {
-                min_mix_samples =
-                    ((min_mix_samples + batch_samples - 1) / batch_samples) * batch_samples;
+                min_mix_samples = min_mix_samples.div_ceil(batch_samples) * batch_samples;
             }
         }
         let convolution_batch_samples = if has_convolution {
@@ -262,10 +261,7 @@ pub fn spawn_mix_thread(
                     );
                     logged_first_packet_drain = true;
                 }
-                if packet.is_none() {
-                    buffer_mixer.signal_finish_all();
-                } else {
-                    let packet = packet.unwrap();
+                if let Some(packet) = packet {
                     if packet.eos_flag {
                         buffer_mixer.signal_finish(&packet.source_key);
                     } else {
@@ -287,6 +283,8 @@ pub fn spawn_mix_thread(
 
                         // if packet.samples.len() != decision.sample_targets_written
                     }
+                } else {
+                    buffer_mixer.signal_finish_all();
                 }
             }
 
@@ -411,12 +409,11 @@ pub fn spawn_mix_thread(
                 && buffer_mixer.mix_finished()
                 && !pending_mix_samples.is_empty()
             {
-                let missing_samples =
-                    convolution_batch_samples - pending_mix_samples.len() as usize;
+                let missing_samples = convolution_batch_samples - pending_mix_samples.len();
 
                 // Fill up pending_mix to full length
                 pending_mix_samples.append(&mut vec![0.0; missing_samples]);
-                samples_for_processing = Some(pending_mix_samples.drain(..).collect());
+                samples_for_processing = Some(std::mem::take(&mut pending_mix_samples));
             }
 
             if let Some(samples) = samples_for_processing {
@@ -535,7 +532,7 @@ pub fn spawn_mix_thread(
                 }
 
                 let input_channels = audio_info.channels as u16;
-                let sample_rate = audio_info.sample_rate as u32;
+                let sample_rate = audio_info.sample_rate;
                 match super::output_stage::send_samples(
                     &sender,
                     input_channels,
@@ -613,7 +610,7 @@ pub fn spawn_mix_thread(
                 }
 
                 let input_channels = audio_info.channels as u16;
-                let sample_rate = audio_info.sample_rate as u32;
+                let sample_rate = audio_info.sample_rate;
                 match super::output_stage::send_samples(
                     &sender,
                     input_channels,

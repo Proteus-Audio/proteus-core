@@ -114,9 +114,7 @@ pub(super) fn extract_peaks_from_audio(
                     channel_limit,
                     &mut accumulators,
                     window_size,
-                    |channel, push| {
-                        for_each_channel_sample(&decoded, channel, |sample| push(sample))
-                    },
+                    |channel, push| for_each_channel_sample(&decoded, channel, push),
                 );
             }
             Err(Error::DecodeError(err)) => {
@@ -149,9 +147,9 @@ fn process_channels<F>(
 ) where
     F: FnMut(usize, &mut dyn FnMut(f32)),
 {
-    for channel in 0..channels {
+    for (channel, acc) in accumulators.iter_mut().enumerate().take(channels) {
         let mut push_sample = |sample: f32| {
-            accumulators[channel].push(sample, window_size);
+            acc.push(sample, window_size);
         };
         each_channel(channel, &mut push_sample);
     }

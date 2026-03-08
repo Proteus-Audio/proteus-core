@@ -48,22 +48,6 @@ pub fn convert_unsigned_32bit_to_f32(sample: u32) -> f32 {
     shifted_sample as f32 / 2f32.powi(31)
 }
 
-/// Return the decoded buffer format label used by logging.
-pub fn decoded_format_label(decoded: &AudioBufferRef<'_>) -> &'static str {
-    match decoded {
-        AudioBufferRef::U8(_) => "U8",
-        AudioBufferRef::S8(_) => "S8",
-        AudioBufferRef::U16(_) => "U16",
-        AudioBufferRef::S16(_) => "S16",
-        AudioBufferRef::U24(_) => "U24",
-        AudioBufferRef::S24(_) => "S24",
-        AudioBufferRef::U32(_) => "U32",
-        AudioBufferRef::S32(_) => "S32",
-        AudioBufferRef::F32(_) => "F32",
-        AudioBufferRef::F64(_) => "F64",
-    }
-}
-
 /// Iterate through decoded samples for a single channel and map them to `f32`.
 pub fn for_each_channel_sample(
     decoded: &AudioBufferRef<'_>,

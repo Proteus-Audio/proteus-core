@@ -66,6 +66,7 @@ pub struct PlayerEngine {
 
 impl PlayerEngine {
     /// Create a new engine for the given container and settings.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         prot: Arc<Mutex<Prot>>,
         abort_option: Option<Arc<AtomicBool>>,
@@ -82,11 +83,7 @@ impl PlayerEngine {
         let track_weights = Arc::new(Mutex::new(HashMap::new()));
         let track_channel_gains = Arc::new(Mutex::new(HashMap::new()));
         let finished_tracks: Arc<Mutex<Vec<u16>>> = Arc::new(Mutex::new(Vec::new()));
-        let abort = if abort_option.is_some() {
-            abort_option.unwrap()
-        } else {
-            Arc::new(AtomicBool::new(false))
-        };
+        let abort = abort_option.unwrap_or_else(|| Arc::new(AtomicBool::new(false)));
 
         let prot_unlocked = prot.lock().unwrap();
         let start_buffer_ms = buffer_settings.lock().unwrap().start_buffer_ms;

@@ -111,7 +111,7 @@ impl Default for MultibandEqSettings {
 }
 
 /// Configured multiband EQ effect with runtime state.
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct MultibandEqEffect {
     pub enabled: bool,
@@ -127,16 +127,6 @@ impl std::fmt::Debug for MultibandEqEffect {
             .field("enabled", &self.enabled)
             .field("settings", &self.settings)
             .finish()
-    }
-}
-
-impl Default for MultibandEqEffect {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            settings: MultibandEqSettings::default(),
-            state: None,
-        }
     }
 }
 

@@ -245,7 +245,7 @@ fn append_startup_silence(ctx: &ThreadContext) {
         return;
     }
 
-    let sample_rate = ctx.audio_info.sample_rate as u32;
+    let sample_rate = ctx.audio_info.sample_rate;
     let channels = ctx.audio_info.channels as u16;
     let samples =
         ((startup_silence_ms / 1000.0) * sample_rate as f32).ceil() as usize * channels as usize;

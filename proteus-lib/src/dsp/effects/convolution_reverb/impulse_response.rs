@@ -170,7 +170,7 @@ where
     let mut channel_samples = vec![Vec::new(); channels];
 
     for (index, sample) in source.enumerate() {
-        channel_samples[index % channels].push(sample as f32);
+        channel_samples[index % channels].push(sample);
     }
 
     normalize_impulse_response_channels(&mut channel_samples, tail_db);

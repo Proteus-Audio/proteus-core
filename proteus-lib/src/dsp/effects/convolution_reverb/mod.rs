@@ -36,7 +36,7 @@ pub fn preferred_batch_samples(channels: usize) -> usize {
 }
 
 /// Serialized configuration for convolution reverb impulse response selection.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ConvolutionReverbSettings {
     pub impulse_response: Option<String>,
@@ -44,18 +44,6 @@ pub struct ConvolutionReverbSettings {
     pub impulse_response_path: Option<String>,
     pub impulse_response_tail_db: Option<f32>,
     pub impulse_response_tail: Option<f32>,
-}
-
-impl Default for ConvolutionReverbSettings {
-    fn default() -> Self {
-        Self {
-            impulse_response: None,
-            impulse_response_attachment: None,
-            impulse_response_path: None,
-            impulse_response_tail_db: None,
-            impulse_response_tail: None,
-        }
-    }
 }
 
 /// Configured convolution reverb effect with runtime state.
@@ -286,7 +274,7 @@ impl ConvolutionReverbState {
 
             let mut out = Vec::new();
             if !self.output_buffer.is_empty() {
-                out.extend(self.output_buffer.drain(..));
+                out.append(&mut self.output_buffer);
             }
             out.extend(self.drain_tail_blocks());
             self.tail_drained = true;

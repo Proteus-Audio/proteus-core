@@ -35,7 +35,7 @@ impl Default for DistortionSettings {
 }
 
 /// Configured distortion effect.
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct DistortionEffect {
     pub enabled: bool,
@@ -49,15 +49,6 @@ impl std::fmt::Debug for DistortionEffect {
             .field("enabled", &self.enabled)
             .field("settings", &self.settings)
             .finish()
-    }
-}
-
-impl Default for DistortionEffect {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            settings: DistortionSettings::default(),
-        }
     }
 }
 

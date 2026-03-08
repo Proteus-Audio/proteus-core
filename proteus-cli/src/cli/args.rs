@@ -49,7 +49,7 @@ pub fn build_cli() -> Command {
                 .short('s')
                 .value_name("TIME")
                 .help("Seek to the given time in seconds")
-                .conflicts_with_all(&["verify"]),
+                .conflicts_with_all(["verify"]),
         )
         .arg(
             Arg::new("GAIN")

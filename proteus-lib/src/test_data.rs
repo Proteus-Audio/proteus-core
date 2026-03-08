@@ -85,3 +85,9 @@ impl TestData {
         }
     }
 }
+
+impl Default for TestData {
+    fn default() -> Self {
+        Self::new()
+    }
+}

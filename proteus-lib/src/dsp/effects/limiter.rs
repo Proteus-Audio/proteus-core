@@ -60,7 +60,7 @@ impl Default for LimiterSettings {
 }
 
 /// Configured limiter effect with runtime state.
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct LimiterEffect {
     pub enabled: bool,
@@ -76,16 +76,6 @@ impl std::fmt::Debug for LimiterEffect {
             .field("enabled", &self.enabled)
             .field("settings", &self.settings)
             .finish()
-    }
-}
-
-impl Default for LimiterEffect {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            settings: LimiterSettings::default(),
-            state: None,
-        }
     }
 }
 

@@ -323,7 +323,7 @@ impl Tuning {
         if channel_index == 0 {
             return self;
         }
-        let channel_step = channel_index as usize;
+        let channel_step = channel_index;
         let mut tuned = self;
         tuned.pre_delay_samples = tuned.pre_delay_samples.saturating_add(channel_step * 3);
         tuned.comb_samples = tuned
