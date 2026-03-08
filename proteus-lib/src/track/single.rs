@@ -48,34 +48,44 @@ pub fn buffer_track(args: TrackArgs, abort: Arc<AtomicBool>) -> JoinHandle<()> {
     let (mut decoder, mut format) = open_file(&file_path);
 
     thread::spawn(move || {
-        let (track_id, track) = match track_id {
+        // Locate the track to decode. Use the requested track ID if present,
+        // otherwise fall back to the first supported audio track.
+        let found = match track_id {
             Some(requested_id) => format
                 .tracks()
                 .iter()
-                .find(|track| track.id == requested_id)
-                .map(|track| (requested_id, track))
-                .unwrap_or_else(|| {
-                    let fallback = format
+                .find(|t| t.id == requested_id)
+                .or_else(|| {
+                    format
                         .tracks()
                         .iter()
                         .find(|t| t.codec_params.codec != symphonia::core::codecs::CODEC_TYPE_NULL)
-                        .expect("no track found");
-                    (fallback.id, fallback)
                 }),
-            None => {
-                let fallback = format
-                    .tracks()
-                    .iter()
-                    .find(|t| t.codec_params.codec != symphonia::core::codecs::CODEC_TYPE_NULL)
-                    .expect("no track found");
-                (fallback.id, fallback)
-            }
+            None => format
+                .tracks()
+                .iter()
+                .find(|t| t.codec_params.codec != symphonia::core::codecs::CODEC_TYPE_NULL),
         };
 
-        let dur = track
-            .codec_params
-            .n_frames
-            .map(|frames| track.codec_params.start_ts + frames);
+        // Extract the values we need from the track reference before using
+        // `format` mutably for seek/decode.
+        let (track_id, dur) = match found {
+            Some(track) => {
+                let dur = track
+                    .codec_params
+                    .n_frames
+                    .map(|frames| track.codec_params.start_ts + frames);
+                (track.id, dur)
+            }
+            None => {
+                warn!("no supported audio track found in '{}'", file_path);
+                mark_track_as_finished(&mut finished_tracks.clone(), track_key);
+                if let Some(notify) = buffer_notify.as_ref() {
+                    notify.notify_all();
+                }
+                return;
+            }
+        };
 
         let seconds = start_time.floor() as u64;
         let frac_of_second = start_time.fract();

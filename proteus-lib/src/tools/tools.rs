@@ -61,15 +61,20 @@ pub fn get_reader(file_path: &str) -> Box<dyn FormatReader> {
     format
 }
 
-/// Build a decoder for the first audio track in a `FormatReader`.
+/// Build a decoder for the first supported audio track in a `FormatReader`.
+///
+/// Uses the same track-selection logic as [`get_reader`]: finds the first track
+/// with a non-null codec rather than blindly using `tracks()[0]`.
 pub fn get_decoder(format: &Box<dyn FormatReader>) -> Box<dyn Decoder> {
-    // Use the default options for the decoder.
     let dec_opts: DecoderOptions = Default::default();
 
-    // Create a decoder for the track.
-    let decoder = symphonia::default::get_codecs()
-        .make(&format.tracks()[0].codec_params, &dec_opts)
-        .expect("unsupported codec");
+    let track = format
+        .tracks()
+        .iter()
+        .find(|t| t.codec_params.codec != CODEC_TYPE_NULL)
+        .expect("no supported audio tracks");
 
-    decoder
+    symphonia::default::get_codecs()
+        .make(&track.codec_params, &dec_opts)
+        .expect("unsupported codec")
 }

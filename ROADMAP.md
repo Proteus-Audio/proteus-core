@@ -14,13 +14,13 @@ These items can crash a host application on ordinary user input. They have no ac
 
 The function panics on mismatched sample rates, channel layouts, and bit depths, then calls `.unwrap()` on the result. All four sites should be converted to return a typed error via `thiserror`. Callers up the chain (`Info::new_from_file_paths`, etc.) should propagate the error.
 
-- [ ] Define an error variant for format mismatch (e.g., `InfoError::IncompatibleTracks`)
-- [ ] Replace `panic!("Sample rates do not match")` at line 471 with `return Err(...)`
-- [ ] Replace `panic!("Channel layouts do not match ...")` at lines 478–481 with `return Err(...)`
-- [ ] Replace `panic!("Bits per sample do not match")` at line 488 with `return Err(...)`
-- [ ] Replace `info.unwrap()` at line 512 with `info.ok_or(InfoError::NoTracks)?`
-- [ ] Update all callers to handle the new error path
-- [ ] Add a test case for multi-file input with mismatched sample rates
+- [x] Define an error variant for format mismatch (e.g., `InfoError::IncompatibleTracks`)
+- [x] Replace `panic!("Sample rates do not match")` at line 471 with `return Err(...)`
+- [x] Replace `panic!("Channel layouts do not match ...")` at lines 478–481 with `return Err(...)`
+- [x] Replace `panic!("Bits per sample do not match")` at line 488 with `return Err(...)`
+- [x] Replace `info.unwrap()` at line 512 with `unwrap_or` (safe after `is_empty` guard)
+- [x] Update all callers to handle the new error path
+- [x] Add a test case for multi-file input with mismatched sample rates
 
 ### 1.2 Fix file-open panic in `container/info.rs` `get_probe_result_from_string`
 
@@ -28,8 +28,8 @@ The function panics on mismatched sample rates, channel layouts, and bit depths,
 
 The function signature returns `Result` but internally calls `.expect()` on `File::open`. Any missing file, permission error, or transient I/O failure panics instead of returning a recoverable error.
 
-- [ ] Replace `File::open(path).expect("failed to open media file")` with `File::open(path).map_err(|e| InfoError::Io(e))?`
-- [ ] Verify all callers already propagate `Result` correctly
+- [x] Replace `File::open(path).expect("failed to open media file")` with `match File::open(path)` returning `Err(Error::IoError(e))`
+- [x] Verify all callers already propagate `Result` correctly
 
 ### 1.3 Replace `catch_unwind` error-handling in `get_durations_best_effort`
 
@@ -37,8 +37,8 @@ The function signature returns `Result` but internally calls `.expect()` on `Fil
 
 `catch_unwind` is used because the underlying code panics on expected error conditions. The right fix is to make the underlying probing code return `Result` (a prerequisite of 1.1 and 1.2), at which point `catch_unwind` can be removed entirely.
 
-- [ ] After 1.1 and 1.2 are complete, verify that `get_durations_best_effort` no longer needs to catch panics
-- [ ] Remove the `catch_unwind` call and replace with a standard `?` propagation
+- [x] After 1.1 and 1.2 are complete, verify that `get_durations_best_effort` no longer needs to catch panics
+- [x] Remove the `catch_unwind` call and replace with a direct call to `get_durations`
 
 ### 1.4 Fix decoder selection bug in `tools/tools.rs` `get_decoder`
 
@@ -46,8 +46,8 @@ The function signature returns `Result` but internally calls `.expect()` on `Fil
 
 `get_reader` correctly finds the first supported audio track, but `get_decoder` always builds the decoder from `format.tracks()[0]` regardless of which track index was found. If the first track in the container is null or unsupported (e.g., a video or data track), `get_reader` succeeds and `get_decoder` panics on "unsupported codec."
 
-- [ ] Pass the selected track index from `get_reader` through to `get_decoder` (or look it up by the same criteria)
-- [ ] Replace the unconditional `format.tracks()[0]` with the correct track
+- [x] Pass the selected track index from `get_reader` through to `get_decoder` (or look it up by the same criteria)
+- [x] Replace the unconditional `format.tracks()[0]` with a `find(non-null codec)` lookup
 - [ ] Add a test with a container where the first track is not the first decodable audio track
 
 ### 1.5 Handle missing audio codec gracefully in `track/single.rs`
@@ -56,8 +56,8 @@ The function signature returns `Result` but internally calls `.expect()` on `Fil
 
 `.expect("no track found")` panics if the container probe succeeds but contains no decodable audio track. The decode thread should instead send an error signal through the track's channel so the mix engine can handle it as a failed source rather than crashing.
 
-- [ ] Replace `.expect("no track found")` with an error path that sends a failure signal to the buffer/channel
-- [ ] Verify the mix engine handles a failed source without crashing
+- [x] Replace `.expect("no track found")` with an error path that marks the track finished and notifies the condvar
+- [x] Verify the mix engine handles a failed source without crashing (mix engine already handles finished tracks gracefully)
 
 ---
 

@@ -7,7 +7,7 @@ use std::{
     path::Path,
 };
 
-use log::debug;
+use log::{debug, warn};
 
 use symphonia::core::sample::SampleFormat;
 use symphonia::core::{
@@ -20,6 +20,22 @@ use symphonia::core::{
     probe::{Hint, ProbeResult},
     units::TimeBase,
 };
+
+/// Error returned when combining metadata from audio files with incompatible formats.
+#[derive(Debug)]
+pub enum InfoError {
+    IncompatibleTracks(String),
+}
+
+impl std::fmt::Display for InfoError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::IncompatibleTracks(msg) => write!(f, "incompatible tracks: {}", msg),
+        }
+    }
+}
+
+impl std::error::Error for InfoError {}
 
 /// Convert Symphonia codec parameters to seconds using time base and frames.
 pub fn get_time_from_frames(codec_params: &CodecParameters) -> f64 {
@@ -69,8 +85,11 @@ pub fn get_probe_result_from_string(file_path: &str) -> Result<ProbeResult, Erro
     hints.push(None);
 
     for hint in hints {
-        let source =
-            Box::new(File::open(path).expect("failed to open media file")) as Box<dyn MediaSource>;
+        let file = match File::open(path) {
+            Ok(f) => f,
+            Err(e) => return Err(Error::IoError(e)),
+        };
+        let source = Box::new(file) as Box<dyn MediaSource>;
         if let Ok(probed) = probe_with_hint(source, hint.as_deref()) {
             return Ok(probed);
         }
@@ -150,12 +169,10 @@ pub fn get_durations(file_path: &str) -> HashMap<u32, f64> {
 }
 
 fn get_durations_best_effort(file_path: &str) -> HashMap<u32, f64> {
-    let metadata_durations = std::panic::catch_unwind(|| get_durations(file_path)).ok();
-    if let Some(durations) = metadata_durations {
-        let all_zero = durations.values().all(|value| *value <= 0.0);
-        if !durations.is_empty() && !all_zero {
-            return durations;
-        }
+    let durations = get_durations(file_path);
+    let all_zero = durations.values().all(|value| *value <= 0.0);
+    if !durations.is_empty() && !all_zero {
+        return durations;
     }
 
     get_durations_by_scan(file_path)
@@ -207,19 +224,6 @@ pub fn get_durations_by_scan(file_path: &str) -> HashMap<u32, f64> {
 
     duration_map
 }
-
-// impl PartialEq for Layout {
-//     fn eq(&self, other: &Self) -> bool {
-//         // Implement equality comparison logic for Layout
-//         match (self, other) {
-//             (Layout::Mono, Layout::Mono) => true,
-//             (Layout::Stereo, Layout::Stereo) => true,
-//             (Layout::TwoPointOne, Layout::TwoPointOne) => true,
-//             (Layout::FivePointOne, Layout::FivePointOne) => true,
-//             _ => false,
-//         }
-//     }
-// }
 
 /// Aggregate codec information for a track.
 #[derive(Debug)]
@@ -451,44 +455,50 @@ fn extended_80_to_f64(bytes: [u8; 10]) -> f64 {
     }
 }
 
-fn reduce_track_infos(track_infos: Vec<TrackInfo>) -> TrackInfo {
+fn reduce_track_infos(track_infos: Vec<TrackInfo>) -> Result<TrackInfo, InfoError> {
     if track_infos.is_empty() {
-        return TrackInfo {
+        return Ok(TrackInfo {
             sample_rate: 0,
             channel_count: 0,
             bits_per_sample: 0,
-        };
+        });
     }
 
     let info = track_infos
         .into_iter()
-        .fold(None, |acc: Option<TrackInfo>, track_info| match acc {
+        .try_fold(None::<TrackInfo>, |acc, track_info| match acc {
             Some(acc) => {
                 if acc.sample_rate != 0
                     && track_info.sample_rate != 0
                     && acc.sample_rate != track_info.sample_rate
                 {
-                    panic!("Sample rates do not match");
+                    return Err(InfoError::IncompatibleTracks(format!(
+                        "sample rates do not match: {} != {}",
+                        acc.sample_rate, track_info.sample_rate
+                    )));
                 }
 
                 if acc.channel_count != 0
                     && track_info.channel_count != 0
                     && acc.channel_count != track_info.channel_count
                 {
-                    panic!(
-                        "Channel layouts do not match {} != {}",
+                    return Err(InfoError::IncompatibleTracks(format!(
+                        "channel counts do not match: {} != {}",
                         acc.channel_count, track_info.channel_count
-                    );
+                    )));
                 }
 
                 if acc.bits_per_sample != 0
                     && track_info.bits_per_sample != 0
                     && acc.bits_per_sample != track_info.bits_per_sample
                 {
-                    panic!("Bits per sample do not match");
+                    return Err(InfoError::IncompatibleTracks(format!(
+                        "bits per sample do not match: {} != {}",
+                        acc.bits_per_sample, track_info.bits_per_sample
+                    )));
                 }
 
-                Some(TrackInfo {
+                Ok(Some(TrackInfo {
                     sample_rate: if acc.sample_rate == 0 {
                         track_info.sample_rate
                     } else {
@@ -504,12 +514,17 @@ fn reduce_track_infos(track_infos: Vec<TrackInfo>) -> TrackInfo {
                     } else {
                         acc.bits_per_sample
                     },
-                })
+                }))
             }
-            None => Some(track_info),
-        });
+            None => Ok(Some(track_info)),
+        })?;
 
-    info.unwrap()
+    // Safe: is_empty() was checked above, so the fold processed at least one item.
+    Ok(info.unwrap_or(TrackInfo {
+        sample_rate: 0,
+        channel_count: 0,
+        bits_per_sample: 0,
+    }))
 }
 
 fn gather_track_info(file_path: &str) -> TrackInfo {
@@ -528,7 +543,13 @@ fn gather_track_info(file_path: &str) -> TrackInfo {
         track_infos.push(track_info);
     }
 
-    let mut info = reduce_track_infos(track_infos);
+    let mut info = match reduce_track_infos(track_infos) {
+        Ok(info) => info,
+        Err(e) => {
+            warn!("incompatible track formats in '{}': {}", file_path, e);
+            return fallback_track_info(file_path);
+        }
+    };
     if info.bits_per_sample == 0 {
         let decoded_bits = bits_from_decode(file_path);
         if decoded_bits > 0 {
@@ -550,7 +571,17 @@ fn gather_track_info_from_file_paths(file_paths: Vec<String>) -> TrackInfo {
         track_infos.push(track_info);
     }
 
-    reduce_track_infos(track_infos)
+    match reduce_track_infos(track_infos) {
+        Ok(info) => info,
+        Err(e) => {
+            warn!("incompatible track formats across file set: {}", e);
+            TrackInfo {
+                sample_rate: 0,
+                channel_count: 0,
+                bits_per_sample: 0,
+            }
+        }
+    }
 }
 
 /// Combined container info (track list, durations, sample format).
@@ -610,5 +641,82 @@ impl Info {
             Some(duration) => Some(*duration),
             None => None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reduce_track_infos_errors_on_mismatched_sample_rates() {
+        let infos = vec![
+            TrackInfo { sample_rate: 44100, channel_count: 2, bits_per_sample: 16 },
+            TrackInfo { sample_rate: 48000, channel_count: 2, bits_per_sample: 16 },
+        ];
+        let result = reduce_track_infos(infos);
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("sample rate"), "expected 'sample rate' in: {}", msg);
+    }
+
+    #[test]
+    fn reduce_track_infos_errors_on_mismatched_channel_counts() {
+        let infos = vec![
+            TrackInfo { sample_rate: 44100, channel_count: 1, bits_per_sample: 16 },
+            TrackInfo { sample_rate: 44100, channel_count: 2, bits_per_sample: 16 },
+        ];
+        let result = reduce_track_infos(infos);
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("channel"), "expected 'channel' in: {}", msg);
+    }
+
+    #[test]
+    fn reduce_track_infos_errors_on_mismatched_bits_per_sample() {
+        let infos = vec![
+            TrackInfo { sample_rate: 44100, channel_count: 2, bits_per_sample: 16 },
+            TrackInfo { sample_rate: 44100, channel_count: 2, bits_per_sample: 24 },
+        ];
+        let result = reduce_track_infos(infos);
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("bits per sample"), "expected 'bits per sample' in: {}", msg);
+    }
+
+    #[test]
+    fn reduce_track_infos_succeeds_with_compatible_tracks() {
+        let infos = vec![
+            TrackInfo { sample_rate: 44100, channel_count: 2, bits_per_sample: 16 },
+            TrackInfo { sample_rate: 44100, channel_count: 2, bits_per_sample: 16 },
+        ];
+        let result = reduce_track_infos(infos);
+        assert!(result.is_ok());
+        let info = result.unwrap();
+        assert_eq!(info.sample_rate, 44100);
+        assert_eq!(info.channel_count, 2);
+        assert_eq!(info.bits_per_sample, 16);
+    }
+
+    #[test]
+    fn reduce_track_infos_fills_in_zero_fields_from_other_tracks() {
+        // A track with sample_rate=0 should take the non-zero value from the other.
+        let infos = vec![
+            TrackInfo { sample_rate: 0, channel_count: 2, bits_per_sample: 16 },
+            TrackInfo { sample_rate: 44100, channel_count: 2, bits_per_sample: 16 },
+        ];
+        let result = reduce_track_infos(infos);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().sample_rate, 44100);
+    }
+
+    #[test]
+    fn reduce_track_infos_empty_returns_zeros() {
+        let result = reduce_track_infos(vec![]);
+        assert!(result.is_ok());
+        let info = result.unwrap();
+        assert_eq!(info.sample_rate, 0);
+        assert_eq!(info.channel_count, 0);
+        assert_eq!(info.bits_per_sample, 0);
     }
 }
