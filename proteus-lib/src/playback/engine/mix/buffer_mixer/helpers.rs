@@ -4,7 +4,9 @@ use crate::container::prot::ActiveWindow;
 #[cfg(feature = "buffer-map")]
 use crate::logging::log;
 
-use super::{AlignedSampleBuffer, BufferInstance, FillState};
+use super::{AlignedSampleBuffer, BufferInstance};
+#[cfg(any(test, feature = "debug"))]
+use super::FillState;
 
 #[derive(Debug, Clone, Copy, Default)]
 pub(super) struct PushResult {
@@ -79,6 +81,7 @@ pub(super) fn push_zeros(
 }
 
 /// Collapse multiple per-instance "full" flags into one aggregate fill state.
+#[cfg(any(test, feature = "debug"))]
 pub(super) fn aggregate_fill_state<I>(states: I) -> FillState
 where
     I: IntoIterator<Item = bool>,
@@ -196,20 +199,6 @@ pub(super) fn log_buffer(instance: &BufferInstance, map: Vec<&str>) {
     let instance_id = instance.meta.instance_id;
     log(&format!("[{}] <- i{}\n", map.join(""), instance_id));
 }
-
-#[cfg(not(feature = "buffer-map"))]
-/// No-op header logger when buffer-map diagnostics are disabled.
-pub(super) fn log_buffer_header(
-    _logical_track_index: usize,
-    _sample_rate: u32,
-    _channels: usize,
-    _consumed_samples: usize,
-) {
-}
-
-#[cfg(not(feature = "buffer-map"))]
-/// No-op row logger when buffer-map diagnostics are disabled.
-pub(super) fn log_buffer(_instance: &BufferInstance, _map: Vec<&str>) {}
 
 /// Convert the final active-window end of an instance into interleaved sample offset.
 fn window_end_samples(

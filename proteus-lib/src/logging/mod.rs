@@ -1,12 +1,13 @@
+#[cfg(feature = "debug")]
 pub mod pivot_buffer_trace;
 
+#[cfg(feature = "buffer-map")]
 use std::{
     fs::{File, OpenOptions},
     io::{BufWriter, Write},
 };
 
-use log::info;
-
+#[cfg(feature = "buffer-map")]
 fn append_to_log(message: &str) {
     let filepath = std::env::current_dir().expect("Failed to get current directory");
     let log_path = filepath.join("log.txt");
@@ -23,7 +24,10 @@ fn append_to_log(message: &str) {
         .expect("Failed to write to log file");
 }
 
+#[cfg(feature = "buffer-map")]
 use std::io::{self, Read, Seek, SeekFrom};
+
+#[cfg(feature = "buffer-map")]
 pub fn append_on_line(file: &mut File, message: &str, line_number: usize) -> io::Result<()> {
     // Read entire file
     let mut contents = String::new();
@@ -56,10 +60,12 @@ pub fn append_on_line(file: &mut File, message: &str, line_number: usize) -> io:
     Ok(())
 }
 
+#[cfg(feature = "buffer-map")]
 pub fn log(message: &str) {
     append_to_log(message);
 }
 
+#[cfg(feature = "buffer-map")]
 pub fn clear_logfile() {
     let filepath = std::env::current_dir().expect("Failed to get current directory");
     let log_path = filepath.join("log.txt");
@@ -77,6 +83,7 @@ pub fn clear_logfile() {
         .expect("Failed to write to log file");
 }
 
+#[cfg(feature = "buffer-map")]
 pub fn log_on_line(message: &str, line_number: usize) -> io::Result<()> {
     let filepath = std::env::current_dir().expect("Failed to get current directory");
     let log_path = filepath.join("log.txt");

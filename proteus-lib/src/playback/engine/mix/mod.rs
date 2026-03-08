@@ -14,8 +14,6 @@ mod decoder_events;
 mod effects;
 mod output_stage;
 mod runner;
-mod source_spawner;
-mod track_mix;
 mod track_stage;
 mod types;
 mod utils;

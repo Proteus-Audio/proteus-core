@@ -21,9 +21,11 @@ use super::track_stage::{apply_track_gain_pan, combine_tracks_equal_weight};
 use aligned_buffer::AlignedSampleBuffer;
 pub(crate) use backpressure::DecodeBackpressure;
 use helpers::{
-    aggregate_fill_state, instance_fully_past_window, instance_needs_data, instance_past_window_ts,
-    packet_overlap_samples, push_owned_slice, push_slice, push_zeros, samples_to_ms,
+    instance_fully_past_window, instance_needs_data, instance_past_window_ts, packet_overlap_samples,
+    push_owned_slice, push_slice, push_zeros, samples_to_ms,
 };
+#[cfg(any(test, feature = "debug"))]
+use helpers::aggregate_fill_state;
 #[cfg(feature = "buffer-map")]
 use helpers::{log_buffer, log_buffer_header};
 
@@ -47,6 +49,7 @@ impl From<&ShuffleSource> for SourceKey {
 }
 
 /// Aggregate fill state for a track or the whole mix.
+#[cfg(any(test, feature = "debug"))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum FillState {
     /// Mix/track buffers are neither uniformly full nor uniformly not-full.
@@ -398,6 +401,7 @@ impl BufferMixer {
     }
 
     /// True when each instance in the logical track has samples or is finished.
+    #[cfg(any(test, feature = "debug"))]
     pub(crate) fn track_ready(&self, logical_track_index: usize) -> bool {
         self.track_ready_with_min_samples(logical_track_index, 1)
     }
@@ -461,6 +465,7 @@ impl BufferMixer {
     }
 
     /// Fill-state aggregate for one logical track.
+    #[cfg(any(test, feature = "debug"))]
     pub(crate) fn instance_buffer_fills(&self) -> Vec<(usize, usize)> {
         self.instances
             .iter()
@@ -469,6 +474,7 @@ impl BufferMixer {
     }
 
     /// Fill-state aggregate for one logical track.
+    #[cfg(any(test, feature = "debug"))]
     pub(crate) fn tracks_fill_state(&self) -> Vec<FillState> {
         let tracks: Vec<FillState> = self
             .track_instances
@@ -486,6 +492,7 @@ impl BufferMixer {
     }
 
     /// Fill-state aggregate for one logical track.
+    #[cfg(any(test, feature = "debug"))]
     pub(crate) fn track_fill_state(&self, logical_track_index: usize) -> FillState {
         let Some(instances) = self.track_instances.get(logical_track_index) else {
             return FillState::NotFull;
@@ -498,6 +505,7 @@ impl BufferMixer {
     }
 
     /// Fill-state aggregate across all logical tracks.
+    #[cfg(any(test, feature = "debug"))]
     pub(crate) fn mix_fill_state(&self) -> FillState {
         aggregate_fill_state(self.instances.iter().map(|instance| instance.full))
     }
@@ -651,6 +659,7 @@ impl BufferMixer {
     }
 
     /// Return per-instance debug counters.
+    #[cfg(any(test, feature = "debug"))]
     pub(crate) fn counters(&self) -> Vec<(usize, u64, u64, Option<u64>)> {
         self.instances
             .iter()

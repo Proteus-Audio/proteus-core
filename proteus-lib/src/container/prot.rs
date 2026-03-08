@@ -25,12 +25,6 @@ pub(crate) struct ShuffleScheduleEntry {
     pub sources: Vec<ShuffleSource>,
 }
 
-#[derive(Debug, Clone)]
-pub(crate) struct ShuffleRuntimePlan {
-    pub current_sources: Vec<ShuffleSource>,
-    pub upcoming_events: Vec<ShuffleScheduleEntry>,
-}
-
 /// Active time range for one instance in milliseconds relative to playback start.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ActiveWindow {
@@ -421,36 +415,6 @@ impl Prot {
     /// Get the longest selected duration (seconds).
     pub fn get_duration(&self) -> &f64 {
         &self.duration
-    }
-
-    pub(crate) fn build_runtime_shuffle_plan(&self, start_time: f64) -> ShuffleRuntimePlan {
-        if self.shuffle_schedule.is_empty() {
-            let mut sources = Vec::new();
-            if let Some(track_ids) = &self.track_ids {
-                sources.extend(track_ids.iter().copied().map(ShuffleSource::TrackId));
-            } else if let Some(track_paths) = &self.track_paths {
-                sources.extend(track_paths.iter().cloned().map(ShuffleSource::FilePath));
-            }
-            return ShuffleRuntimePlan {
-                current_sources: sources,
-                upcoming_events: Vec::new(),
-            };
-        }
-
-        let start_ms = seconds_to_ms(start_time);
-        let mut current_index = 0usize;
-        for (index, entry) in self.shuffle_schedule.iter().enumerate() {
-            if entry.at_ms <= start_ms {
-                current_index = index;
-            } else {
-                break;
-            }
-        }
-
-        ShuffleRuntimePlan {
-            current_sources: self.shuffle_schedule[current_index].sources.clone(),
-            upcoming_events: self.shuffle_schedule[(current_index + 1)..].to_vec(),
-        }
     }
 
     /// Expand grouped shuffle schedule entries into concrete source instances.
