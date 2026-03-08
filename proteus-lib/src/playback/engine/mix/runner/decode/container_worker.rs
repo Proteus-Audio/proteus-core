@@ -183,3 +183,13 @@ pub(crate) fn spawn_container_decode_worker(
         }
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::spawn_container_decode_worker;
+
+    #[test]
+    fn container_worker_symbol_is_linked() {
+        let _ = spawn_container_decode_worker;
+    }
+}

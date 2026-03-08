@@ -194,3 +194,23 @@ pub fn pivot_buffer() -> Result<(), Box<dyn std::error::Error>> {
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn type_line_detector_accepts_prefixed_digits_only() {
+        assert!(is_type_line("T0"));
+        assert!(is_type_line("T123"));
+        assert!(!is_type_line("T12x"));
+        assert!(!is_type_line("A1"));
+    }
+
+    #[test]
+    fn parse_item_line_extracts_frame_and_item() {
+        let (frame, item) = parse_item_line("[____] <- i3").unwrap();
+        assert_eq!(frame, "[____]");
+        assert_eq!(item, "i3");
+    }
+}

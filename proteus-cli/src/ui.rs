@@ -390,3 +390,22 @@ pub fn draw_info(
         f.render_widget(footer, chunks[3]);
     });
 }
+
+#[cfg(test)]
+mod tests {
+    #[cfg(feature = "output-meter")]
+    use super::{format_db, render_bar};
+
+    #[cfg(feature = "output-meter")]
+    #[test]
+    fn render_bar_respects_width() {
+        let bar = render_bar(0.5, 10);
+        assert_eq!(bar.chars().count(), 10);
+    }
+
+    #[cfg(feature = "output-meter")]
+    #[test]
+    fn format_db_handles_negative_infinity() {
+        assert_eq!(format_db(f32::NEG_INFINITY), "-inf");
+    }
+}

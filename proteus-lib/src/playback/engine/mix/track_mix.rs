@@ -51,27 +51,19 @@ pub(super) fn mix_tracks_into_premix(args: TrackMixArgs<'_>) -> (u64, bool) {
         channel_count,
     } = args;
 
-    let mut current_chunk = if !all_tracks_finished && active_min_len >= min_mix_samples {
-        min_mix_samples
-    } else if all_tracks_finished && finished_min_len > 0 {
-        finished_min_len
-    } else {
-        0
-    };
-
-    if let Some(next_event_ms) = next_event_ms {
-        if sample_rate > 0 && next_event_ms > current_source_ms {
-            let remaining_ms = next_event_ms - current_source_ms;
-            let frames_until_event = (remaining_ms.saturating_mul(sample_rate as u64)) / 1000;
-            let samples_until_event = frames_until_event as usize * channel_count;
-            if samples_until_event > 0 {
-                current_chunk = current_chunk.min(samples_until_event);
-            }
-        }
-    }
-
-    let premix_room = premix_max_samples.saturating_sub(premix_buffer.len());
-    current_chunk = current_chunk.min(premix_room).min(mix_buffer.len());
+    let current_chunk = compute_current_chunk_size(ChunkSizingArgs {
+        all_tracks_finished,
+        active_min_len,
+        finished_min_len,
+        min_mix_samples,
+        next_event_ms,
+        current_source_ms,
+        sample_rate,
+        channel_count,
+        premix_max_samples,
+        premix_len: premix_buffer.len(),
+        mix_buffer_len: mix_buffer.len(),
+    });
 
     if current_chunk == 0 {
         return (0, false);
@@ -79,6 +71,78 @@ pub(super) fn mix_tracks_into_premix(args: TrackMixArgs<'_>) -> (u64, bool) {
 
     mix_buffer.fill(0.0);
 
+    mix_active_tracks(
+        mix_buffer,
+        active_buffer_snapshot,
+        weights_snapshot,
+        channel_gains_snapshot,
+        channel_count,
+        current_chunk,
+    );
+
+    if !fading_buffer_snapshot.is_empty() {
+        mix_fading_tracks(
+            mix_buffer,
+            fading_buffer_snapshot,
+            weights_snapshot,
+            channel_gains_snapshot,
+            fading_tracks,
+            channel_count,
+            current_chunk,
+        );
+    }
+
+    premix_buffer.push_interleaved(&mix_buffer[..current_chunk]);
+    let consumed_source_frames = current_chunk as u64 / channel_count as u64;
+    (consumed_source_frames, true)
+}
+
+struct ChunkSizingArgs {
+    all_tracks_finished: bool,
+    active_min_len: usize,
+    finished_min_len: usize,
+    min_mix_samples: usize,
+    next_event_ms: Option<u64>,
+    current_source_ms: u64,
+    sample_rate: u32,
+    channel_count: usize,
+    premix_max_samples: usize,
+    premix_len: usize,
+    mix_buffer_len: usize,
+}
+
+fn compute_current_chunk_size(args: ChunkSizingArgs) -> usize {
+    let mut chunk = if !args.all_tracks_finished && args.active_min_len >= args.min_mix_samples {
+        args.min_mix_samples
+    } else if args.all_tracks_finished && args.finished_min_len > 0 {
+        args.finished_min_len
+    } else {
+        0
+    };
+
+    if let Some(next_event_ms) = args.next_event_ms {
+        if args.sample_rate > 0 && next_event_ms > args.current_source_ms {
+            let remaining_ms = next_event_ms - args.current_source_ms;
+            let frames_until_event = (remaining_ms.saturating_mul(args.sample_rate as u64)) / 1000;
+            let samples_until_event = frames_until_event as usize * args.channel_count;
+            if samples_until_event > 0 {
+                chunk = chunk.min(samples_until_event);
+            }
+        }
+    }
+
+    let premix_room = args.premix_max_samples.saturating_sub(args.premix_len);
+    chunk.min(premix_room).min(args.mix_buffer_len)
+}
+
+fn mix_active_tracks(
+    mix_buffer: &mut [f32],
+    active_buffer_snapshot: &[(u16, TrackBuffer)],
+    weights_snapshot: &HashMap<u16, f32>,
+    channel_gains_snapshot: &HashMap<u16, Vec<f32>>,
+    channel_count: usize,
+    current_chunk: usize,
+) {
     for (track_key, buffer) in active_buffer_snapshot {
         let weight = weights_snapshot.get(track_key).copied().unwrap_or(1.0);
         let channel_gains = channel_gains_snapshot.get(track_key).map(Vec::as_slice);
@@ -94,47 +158,49 @@ pub(super) fn mix_tracks_into_premix(args: TrackMixArgs<'_>) -> (u64, bool) {
             }
         }
     }
+}
 
-    if !fading_buffer_snapshot.is_empty() {
-        let chunk_frames = (current_chunk / channel_count).max(1) as u32;
-        for (track_key, buffer) in fading_buffer_snapshot {
-            let Some((frames_remaining, total_frames)) = fading_tracks.get(track_key).copied()
-            else {
+fn mix_fading_tracks(
+    mix_buffer: &mut [f32],
+    fading_buffer_snapshot: &[(u16, TrackBuffer)],
+    weights_snapshot: &HashMap<u16, f32>,
+    channel_gains_snapshot: &HashMap<u16, Vec<f32>>,
+    fading_tracks: &mut HashMap<u16, (u32, u32)>,
+    channel_count: usize,
+    current_chunk: usize,
+) {
+    let chunk_frames = (current_chunk / channel_count).max(1) as u32;
+    for (track_key, buffer) in fading_buffer_snapshot {
+        let Some((frames_remaining, total_frames)) = fading_tracks.get(track_key).copied() else {
+            continue;
+        };
+        if total_frames == 0 {
+            continue;
+        }
+        let weight = weights_snapshot.get(track_key).copied().unwrap_or(1.0);
+        let channel_gains = channel_gains_snapshot.get(track_key).map(Vec::as_slice);
+        let mut buffer = buffer.lock().unwrap();
+        let take = buffer.len().min(current_chunk);
+        for (sample_index, sample) in mix_buffer.iter_mut().take(take).enumerate() {
+            let Some(value) = buffer.pop() else {
                 continue;
             };
-            if total_frames == 0 {
+            let frame_index = (sample_index / channel_count) as u32;
+            if frame_index >= frames_remaining {
                 continue;
             }
-            let weight = weights_snapshot.get(track_key).copied().unwrap_or(1.0);
-            let channel_gains = channel_gains_snapshot.get(track_key).map(Vec::as_slice);
-            let mut buffer = buffer.lock().unwrap();
-            let take = buffer.len().min(current_chunk);
-            for (sample_index, sample) in mix_buffer.iter_mut().take(take).enumerate() {
-                let Some(value) = buffer.pop() else {
-                    continue;
-                };
-                let frame_index = (sample_index / channel_count) as u32;
-                if frame_index >= frames_remaining {
-                    continue;
-                }
-                let fade_gain =
-                    frames_remaining.saturating_sub(frame_index) as f32 / total_frames as f32;
-                let gain = channel_gains
-                    .and_then(|gains| gains.get(sample_index % channel_count))
-                    .copied()
-                    .unwrap_or(1.0);
-                *sample += value * weight * gain * fade_gain;
-            }
-            if let Some((remaining, _)) = fading_tracks.get_mut(track_key) {
-                *remaining = remaining.saturating_sub(chunk_frames);
-            }
+            let fade_gain = frames_remaining.saturating_sub(frame_index) as f32 / total_frames as f32;
+            let gain = channel_gains
+                .and_then(|gains| gains.get(sample_index % channel_count))
+                .copied()
+                .unwrap_or(1.0);
+            *sample += value * weight * gain * fade_gain;
         }
-        fading_tracks.retain(|_, (remaining, _)| *remaining > 0);
+        if let Some((remaining, _)) = fading_tracks.get_mut(track_key) {
+            *remaining = remaining.saturating_sub(chunk_frames);
+        }
     }
-
-    premix_buffer.push_interleaved(&mix_buffer[..current_chunk]);
-    let consumed_source_frames = current_chunk as u64 / channel_count as u64;
-    (consumed_source_frames, true)
+    fading_tracks.retain(|_, (remaining, _)| *remaining > 0);
 }
 
 #[cfg(test)]

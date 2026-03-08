@@ -20,3 +20,14 @@ mod utils;
 
 pub use runner::spawn_mix_thread;
 pub use types::MixThreadArgs;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mix_module_exports_public_api() {
+        let _ = spawn_mix_thread;
+        let _ = core::mem::size_of::<MixThreadArgs>();
+    }
+}

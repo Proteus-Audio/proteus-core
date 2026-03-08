@@ -163,3 +163,30 @@ fn coefficients(kind: BiquadKind, sample_rate: u32, freq: u32, q: f32) -> Biquad
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn biquad_process_returns_matching_length() {
+        let mut state = BiquadState::new(BiquadKind::LowPass, 48_000, 2, 1_200, 0.707);
+        let input = vec![0.0_f32, 1.0, 0.5, -0.5, -1.0, 0.25];
+        let output = state.process(&input);
+        assert_eq!(output.len(), input.len());
+    }
+
+    #[test]
+    fn biquad_matches_uses_sanitized_values() {
+        let state = BiquadState::new(BiquadKind::HighPass, 48_000, 1, 200_000, f32::NAN);
+        assert!(state.matches(BiquadKind::HighPass, 48_000, 1, 200_000, f32::NAN));
+    }
+
+    #[test]
+    fn sanitize_helpers_clamp_invalid_input() {
+        assert_eq!(sanitize_freq(0, 48_000), 1);
+        assert_eq!(sanitize_q(f32::INFINITY), 0.5);
+        assert_eq!(sanitize_q(0.01), 0.1);
+        assert_eq!(sanitize_q(20.0), 10.0);
+    }
+}

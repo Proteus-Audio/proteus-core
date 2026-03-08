@@ -278,3 +278,35 @@ impl Reverb {
 //     println!("Processed length: {:?}", processed.len());
 //     processed
 // }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::dsp::effects::convolution_reverb::impulse_response::ImpulseResponse;
+
+    #[test]
+    fn preferred_batch_samples_is_zero_for_zero_channels() {
+        assert_eq!(preferred_batch_samples(0), 0);
+    }
+
+    #[test]
+    fn reverb_passthrough_when_dry_wet_is_zero() {
+        let mut reverb = Reverb::new(2, 0.0);
+        let input = vec![0.1_f32, -0.1, 0.2, -0.2];
+        let output = reverb.process(&input);
+        assert_eq!(output, input);
+    }
+
+    #[test]
+    fn reverb_with_custom_ir_processes_interleaved_input() {
+        let ir = ImpulseResponse {
+            sample_rate: 48_000,
+            channels: vec![vec![1.0_f32], vec![1.0_f32]],
+        };
+        let mut reverb = Reverb::new_with_impulse_response(2, 0.5, &ir);
+        let input = vec![0.1_f32, -0.1, 0.3, -0.3];
+        let mut out = Vec::new();
+        reverb.process_into(&input, &mut out);
+        assert_eq!(out.len(), input.len());
+    }
+}

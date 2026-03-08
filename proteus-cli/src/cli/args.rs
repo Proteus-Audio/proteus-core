@@ -301,3 +301,30 @@ pub fn build_cli() -> Command {
                 ),
         )
 }
+
+#[cfg(test)]
+mod tests {
+    use super::build_cli;
+
+    #[test]
+    fn parses_basic_input_and_defaults() {
+        let matches = build_cli()
+            .try_get_matches_from(["prot", "song.wav"])
+            .expect("cli should parse");
+        assert_eq!(
+            matches.get_one::<String>("INPUT").map(String::as_str),
+            Some("song.wav")
+        );
+        assert_eq!(
+            matches.get_one::<String>("GAIN").map(String::as_str),
+            Some("70")
+        );
+    }
+
+    #[test]
+    fn rejects_seek_with_verify_flag() {
+        let result =
+            build_cli().try_get_matches_from(["prot", "--seek", "12", "--verify", "song.wav"]);
+        assert!(result.is_err());
+    }
+}

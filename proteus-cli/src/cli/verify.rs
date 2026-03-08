@@ -129,3 +129,16 @@ fn open_decoder(file_path: &str) -> Result<DecoderOpenResult> {
     let decoder = symphonia::default::get_codecs().make(&codec_params, &dec_opts)?;
     Ok((decoder, format, track_id))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{run_verify, VerifyMode};
+
+    #[test]
+    fn invalid_path_returns_error_for_all_modes() {
+        let missing = "/definitely/missing/audio.file";
+        assert!(run_verify(missing, VerifyMode::Probe).is_err());
+        assert!(run_verify(missing, VerifyMode::Decode).is_err());
+        assert!(run_verify(missing, VerifyMode::Verify).is_err());
+    }
+}

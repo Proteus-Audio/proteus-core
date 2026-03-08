@@ -1703,4 +1703,19 @@ mod tests {
         assert_eq!(plan.instances[0].active_windows[0].end_ms, Some(5_000));
         assert_eq!(plan.instances[1].active_windows[0].start_ms, 5_000);
     }
+
+    #[test]
+    fn parse_timestamp_ms_parses_common_formats() {
+        assert_eq!(parse_timestamp_ms("1:02.500"), Some(62_500));
+        assert_eq!(parse_timestamp_ms("90"), Some(90_000));
+        assert_eq!(parse_timestamp_ms("bad"), None);
+    }
+
+    #[test]
+    fn sanitize_helpers_clamp_ranges() {
+        assert_eq!(sanitize_level(-1.0), 0.0);
+        assert_eq!(sanitize_level(3.0), 2.0);
+        assert_eq!(sanitize_pan(-2.0), -1.0);
+        assert_eq!(sanitize_pan(2.0), 1.0);
+    }
 }

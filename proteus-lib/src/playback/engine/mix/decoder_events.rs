@@ -14,3 +14,22 @@ pub(crate) struct DecodedPacket {
     /// End-of-stream signal for this source.
     pub(crate) eos_flag: bool,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn decoded_packet_stores_fields() {
+        let packet = DecodedPacket {
+            source_key: SourceKey::TrackId(7),
+            packet_ts: 1.25,
+            samples: vec![0.1, -0.1],
+            eos_flag: true,
+        };
+        assert!(matches!(packet.source_key, SourceKey::TrackId(7)));
+        assert_eq!(packet.packet_ts, 1.25);
+        assert_eq!(packet.samples.len(), 2);
+        assert!(packet.eos_flag);
+    }
+}

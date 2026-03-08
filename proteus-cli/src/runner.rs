@@ -588,3 +588,14 @@ impl Drop for RawModeGuard {
         let _ = terminal::disable_raw_mode();
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::run_peaks_json;
+
+    #[test]
+    fn peaks_json_missing_file_returns_error_code() {
+        let code = run_peaks_json("/definitely/missing/audio.file", false);
+        assert_eq!(code, -1);
+    }
+}

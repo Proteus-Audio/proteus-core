@@ -96,3 +96,28 @@ impl SourceSpawner {
         Some(buffer_track(track_args, self.abort.clone()))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Condvar;
+
+    #[test]
+    fn spawn_returns_none_for_track_id_without_container_path() {
+        let spawner = SourceSpawner {
+            buffer_map: Arc::new(Mutex::new(HashMap::new())),
+            buffer_notify: Arc::new(Condvar::new()),
+            track_weights: Arc::new(Mutex::new(HashMap::new())),
+            track_channel_gains: Arc::new(Mutex::new(HashMap::new())),
+            finished_tracks: Arc::new(Mutex::new(Vec::new())),
+            abort: Arc::new(AtomicBool::new(false)),
+            container_path: None,
+            track_buffer_size: 8,
+            output_channels: 2,
+            fallback_channel_gains: Arc::new(Mutex::new(vec![vec![1.0, 1.0]])),
+        };
+
+        let handle = spawner.spawn(0, 1, &ShuffleSource::TrackId(7), 0.0);
+        assert!(handle.is_none());
+    }
+}

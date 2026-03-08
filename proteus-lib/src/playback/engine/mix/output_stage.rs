@@ -31,3 +31,23 @@ pub(super) fn send_samples(
     // info!("Samples sent successfully of length {}", length_in_seconds);
     SendStatus::Sent
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn send_samples_returns_empty_for_empty_buffers() {
+        let (tx, _rx) = mpsc::sync_channel(1);
+        let status = send_samples(&tx, 2, 48_000, Vec::new());
+        assert!(matches!(status, SendStatus::Empty));
+    }
+
+    #[test]
+    fn send_samples_returns_disconnected_when_receiver_is_gone() {
+        let (tx, rx) = mpsc::sync_channel(1);
+        drop(rx);
+        let status = send_samples(&tx, 2, 48_000, vec![0.1, -0.1]);
+        assert!(matches!(status, SendStatus::Disconnected));
+    }
+}

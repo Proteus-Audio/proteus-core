@@ -210,3 +210,67 @@ fn format_time(time: f64) -> String {
 
     format!("{:02}:{:02}:{:02}", hours, minutes, seconds)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{status_text, StatusArgs};
+
+    #[test]
+    fn status_text_includes_effects() {
+        let snapshot = status_text(StatusArgs {
+            time: 5.0,
+            duration: 20.0,
+            playing: true,
+            effects: vec!["gain".to_string(), "reverb".to_string()],
+            #[cfg(feature = "debug")]
+            sample_rate: 48_000,
+            #[cfg(feature = "debug")]
+            overrun: false,
+            #[cfg(feature = "debug")]
+            overrun_ms: 0.0,
+            #[cfg(feature = "debug")]
+            avg_overrun_ms: 0.0,
+            #[cfg(feature = "debug")]
+            max_overrun_ms: 0.0,
+            #[cfg(feature = "debug")]
+            track_key_count: 0,
+            #[cfg(feature = "debug")]
+            finished_track_count: 0,
+            #[cfg(feature = "debug")]
+            prot_key_count: 0,
+            #[cfg(feature = "debug")]
+            chain_ksps: 0.0,
+            #[cfg(feature = "debug")]
+            avg_chain_ksps: 0.0,
+            #[cfg(feature = "debug")]
+            min_chain_ksps: 0.0,
+            #[cfg(feature = "debug")]
+            max_chain_ksps: 0.0,
+            #[cfg(feature = "debug")]
+            underrun_count: 0,
+            #[cfg(feature = "debug")]
+            underrun_active: false,
+            #[cfg(feature = "debug")]
+            pop_count: 0,
+            #[cfg(feature = "debug")]
+            clip_count: 0,
+            #[cfg(feature = "debug")]
+            nan_count: 0,
+            #[cfg(feature = "debug")]
+            late_append_count: 0,
+            #[cfg(feature = "debug")]
+            late_append_active: false,
+            #[cfg(feature = "debug")]
+            thread_exists: true,
+            #[cfg(feature = "debug")]
+            state_label: "playing".to_string(),
+            #[cfg(feature = "debug")]
+            audio_heard: true,
+            #[cfg(feature = "debug")]
+            buffering_done: true,
+            #[cfg(feature = "debug")]
+            sink_len: 0,
+        });
+        assert!(snapshot.text.contains("Effects:"));
+    }
+}

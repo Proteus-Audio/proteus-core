@@ -277,3 +277,38 @@ fn trim_impulse_response_tail(channels: &mut [Vec<f32>], tail_db: f32) {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn channel_for_output_wraps_multi_channel_indices() {
+        let ir = ImpulseResponse {
+            sample_rate: 48_000,
+            channels: vec![vec![1.0], vec![2.0]],
+        };
+        assert_eq!(ir.channel_for_output(0), &[1.0]);
+        assert_eq!(ir.channel_for_output(1), &[2.0]);
+        assert_eq!(ir.channel_for_output(2), &[1.0]);
+    }
+
+    #[test]
+    fn normalize_impulse_response_channels_scales_peak() {
+        let mut channels = vec![vec![2.0_f32, -1.0], vec![0.5, -0.25]];
+        normalize_impulse_response_channels(&mut channels, None);
+        let max = channels
+            .iter()
+            .flat_map(|channel| channel.iter())
+            .fold(0.0_f32, |acc, sample| acc.max(sample.abs()));
+        assert!((max - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn normalize_impulse_response_channels_trims_tail_when_requested() {
+        let mut channels = vec![vec![1.0_f32, 0.2, 0.01, 0.0001, 0.00001]];
+        normalize_impulse_response_channels(&mut channels, Some(-40.0));
+        assert!(channels[0].len() < 5);
+        assert!(!channels[0].is_empty());
+    }
+}

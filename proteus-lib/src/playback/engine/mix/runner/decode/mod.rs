@@ -80,3 +80,21 @@ pub(super) fn packet_ts_seconds(
     };
     (absolute - start_time).max(0.0)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use symphonia::core::units::TimeBase;
+
+    #[test]
+    fn packet_ts_seconds_uses_sample_rate_fallback() {
+        let ts = packet_ts_seconds(48_000, None, Some(48_000), 0.5);
+        assert!((ts - 0.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn packet_ts_seconds_clamps_to_zero() {
+        let ts = packet_ts_seconds(0, Some(TimeBase::new(1, 1)), None, 2.0);
+        assert_eq!(ts, 0.0);
+    }
+}

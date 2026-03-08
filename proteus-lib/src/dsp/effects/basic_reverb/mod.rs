@@ -220,3 +220,41 @@ pub type BasicReverbSettings = DelayReverbSettings;
 
 #[deprecated(note = "Use DelayReverbEffect instead.")]
 pub type BasicReverbEffect = DelayReverbEffect;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn context() -> EffectContext {
+        EffectContext {
+            sample_rate: 48_000,
+            channels: 2,
+            container_path: None,
+            impulse_response_spec: None,
+            impulse_response_tail_db: -60.0,
+        }
+    }
+
+    #[test]
+    fn delay_samples_handles_zero_duration() {
+        assert_eq!(delay_samples(48_000, 2, 0), 0);
+    }
+
+    #[test]
+    fn delay_reverb_passthrough_when_mix_is_zero() {
+        let mut effect = DelayReverbEffect::new(0.0);
+        effect.enabled = true;
+        let input = vec![0.2_f32, -0.2, 0.3, -0.3];
+        let output = effect.process(&input, &context(), false);
+        assert_eq!(output, input);
+    }
+
+    #[test]
+    fn delay_reverb_process_preserves_length() {
+        let mut effect = DelayReverbEffect::new(0.4);
+        effect.settings.duration_ms = 20;
+        let input = vec![0.5_f32, -0.5, 0.25, -0.25];
+        let output = effect.process(&input, &context(), false);
+        assert_eq!(output.len(), input.len());
+    }
+}

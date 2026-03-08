@@ -19,3 +19,15 @@ pub struct PlaySettingsV2 {
     #[serde(default)]
     pub tracks: Vec<SettingsTrack>,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn v2_defaults_to_empty_lists() {
+        let parsed: PlaySettingsV2 = serde_json::from_str("{}").unwrap();
+        assert!(parsed.effects.is_empty());
+        assert!(parsed.tracks.is_empty());
+    }
+}

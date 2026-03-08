@@ -105,3 +105,42 @@ impl Reporter {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reporter_emits_on_state_changes() {
+        let time = Arc::new(Mutex::new(0.0));
+        let volume = Arc::new(Mutex::new(1.0));
+        let duration = Arc::new(Mutex::new(10.0));
+        let state = Arc::new(Mutex::new(PlayerState::Paused));
+        let reports = Arc::new(Mutex::new(Vec::<Report>::new()));
+        let sink = reports.clone();
+        let callback = Arc::new(Mutex::new(move |report: Report| {
+            sink.lock().unwrap().push(report);
+        })) as Arc<Mutex<dyn Fn(Report) + Send>>;
+
+        let reporter = Reporter::new(
+            time.clone(),
+            volume.clone(),
+            duration.clone(),
+            state.clone(),
+            callback,
+            Duration::from_millis(5),
+        );
+
+        reporter.start();
+        std::thread::sleep(Duration::from_millis(15));
+        *state.lock().unwrap() = PlayerState::Playing;
+        *time.lock().unwrap() = 1.0;
+        std::thread::sleep(Duration::from_millis(15));
+        reporter.stop();
+
+        let captured = reports.lock().unwrap();
+        assert!(!captured.is_empty());
+        assert!(captured.iter().any(|report| report.playing));
+        assert!(captured.iter().any(|report| report.time >= 1.0));
+    }
+}

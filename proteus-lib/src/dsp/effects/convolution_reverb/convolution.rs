@@ -389,3 +389,27 @@ pub use complex_fft::Convolver;
 
 #[cfg(feature = "real-fft")]
 pub use real_fft::Convolver;
+
+#[cfg(test)]
+mod tests {
+    use super::Convolver;
+
+    #[test]
+    fn convolver_process_length_matches_input() {
+        let mut convolver = Convolver::new(&[1.0, 0.5, 0.25], 64);
+        let input = vec![0.1_f32; 32];
+        let output = convolver.process(&input);
+        assert_eq!(output.len(), input.len());
+    }
+
+    #[test]
+    fn convolver_clear_state_resets_tail() {
+        let mut convolver = Convolver::new(&[1.0, 0.5], 64);
+        let _ = convolver.process(&[0.2_f32; 16]);
+        convolver.clear_state();
+        assert!(convolver
+            .previous_tail
+            .iter()
+            .all(|sample| sample.abs() < 1e-9));
+    }
+}

@@ -154,3 +154,37 @@ fn process_channels<F>(
         each_channel(channel, &mut push_sample);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn channel_accumulator_flushes_partial_window() {
+        let mut acc = ChannelAccumulator::new();
+        acc.push(0.5, 4);
+        acc.push(-0.2, 4);
+        acc.flush_partial();
+        assert_eq!(acc.peaks.len(), 1);
+        assert_eq!(acc.peaks[0].max, 0.5);
+        assert_eq!(acc.peaks[0].min, -0.2);
+    }
+
+    #[test]
+    fn process_channels_routes_samples_per_channel() {
+        let mut accumulators = vec![ChannelAccumulator::new(), ChannelAccumulator::new()];
+        process_channels(2, &mut accumulators, 2, |channel, push| {
+            if channel == 0 {
+                push(0.1);
+                push(0.3);
+            } else {
+                push(-0.4);
+                push(-0.2);
+            }
+        });
+        assert_eq!(accumulators[0].peaks.len(), 1);
+        assert_eq!(accumulators[1].peaks.len(), 1);
+        assert_eq!(accumulators[0].peaks[0].max, 0.3);
+        assert_eq!(accumulators[1].peaks[0].min, -0.4);
+    }
+}

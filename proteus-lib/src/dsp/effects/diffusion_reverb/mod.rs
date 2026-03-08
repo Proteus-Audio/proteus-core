@@ -708,3 +708,47 @@ fn delay_samples(sample_rate: u32, duration_ms: u64) -> usize {
     let samples = ns.saturating_mul(sample_rate as u64) / 1_000_000_000;
     samples as usize
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn context() -> EffectContext {
+        EffectContext {
+            sample_rate: 48_000,
+            channels: 2,
+            container_path: None,
+            impulse_response_spec: None,
+            impulse_response_tail_db: -60.0,
+        }
+    }
+
+    #[test]
+    fn delay_samples_returns_zero_for_zero_duration() {
+        assert_eq!(delay_samples(48_000, 0), 0);
+    }
+
+    #[test]
+    fn diffusion_settings_new_clamps_values() {
+        let settings = DiffusionReverbSettings::new(0, 0, 10.0, 10.0, 10.0);
+        assert!(settings.decay <= MAX_DECAY);
+        assert!(settings.damping <= MAX_DAMPING);
+        assert!(settings.diffusion <= MAX_DIFFUSION);
+    }
+
+    #[test]
+    fn diffusion_reverb_passthrough_when_mix_is_zero() {
+        let mut effect = DiffusionReverbEffect::new(0.0);
+        let input = vec![0.1_f32, -0.1, 0.2, -0.2];
+        let output = effect.process(&input, &context(), false);
+        assert_eq!(output, input);
+    }
+
+    #[test]
+    fn diffusion_reverb_process_preserves_length() {
+        let mut effect = DiffusionReverbEffect::new(0.4);
+        let input = vec![0.1_f32, -0.1, 0.2, -0.2];
+        let output = effect.process(&input, &context(), false);
+        assert_eq!(output.len(), input.len());
+    }
+}

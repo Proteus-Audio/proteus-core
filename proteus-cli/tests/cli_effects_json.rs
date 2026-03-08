@@ -1,5 +1,5 @@
 use assert_cmd::Command;
-use predicates::prelude::*;
+use predicates::str::contains;
 
 #[test]
 fn create_effects_json_outputs_all_effects() {
@@ -7,12 +7,12 @@ fn create_effects_json_outputs_all_effects() {
     cmd.args(["create", "effects-json"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("ConvolutionReverbSettings"))
-        .stdout(predicate::str::contains("DelayReverbSettings"))
-        .stdout(predicate::str::contains("LowPassFilterSettings"))
-        .stdout(predicate::str::contains("HighPassFilterSettings"))
-        .stdout(predicate::str::contains("DistortionSettings"))
-        .stdout(predicate::str::contains("CompressorSettings"))
-        .stdout(predicate::str::contains("LimiterSettings"))
-        .stdout(predicate::str::contains("MultibandEqSettings"));
+        .stdout(contains("ConvolutionReverbSettings"))
+        .stdout(contains("DelayReverbSettings"))
+        .stdout(contains("LowPassFilterSettings"))
+        .stdout(contains("HighPassFilterSettings"))
+        .stdout(contains("DistortionSettings"))
+        .stdout(contains("CompressorSettings"))
+        .stdout(contains("LimiterSettings"))
+        .stdout(contains("MultibandEqSettings"));
 }

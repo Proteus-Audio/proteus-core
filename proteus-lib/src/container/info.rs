@@ -458,60 +458,61 @@ fn reduce_track_infos(track_infos: Vec<TrackInfo>) -> Result<TrackInfo, InfoErro
         });
     }
 
-    let info = track_infos
-        .into_iter()
-        .try_fold(None::<TrackInfo>, |acc, track_info| match acc {
-            Some(acc) => {
-                if acc.sample_rate != 0
-                    && track_info.sample_rate != 0
-                    && acc.sample_rate != track_info.sample_rate
-                {
-                    return Err(InfoError::IncompatibleTracks(format!(
-                        "sample rates do not match: {} != {}",
-                        acc.sample_rate, track_info.sample_rate
-                    )));
-                }
+    let info =
+        track_infos
+            .into_iter()
+            .try_fold(None::<TrackInfo>, |acc, track_info| match acc {
+                Some(acc) => {
+                    if acc.sample_rate != 0
+                        && track_info.sample_rate != 0
+                        && acc.sample_rate != track_info.sample_rate
+                    {
+                        return Err(InfoError::IncompatibleTracks(format!(
+                            "sample rates do not match: {} != {}",
+                            acc.sample_rate, track_info.sample_rate
+                        )));
+                    }
 
-                if acc.channel_count != 0
-                    && track_info.channel_count != 0
-                    && acc.channel_count != track_info.channel_count
-                {
-                    return Err(InfoError::IncompatibleTracks(format!(
-                        "channel counts do not match: {} != {}",
-                        acc.channel_count, track_info.channel_count
-                    )));
-                }
+                    if acc.channel_count != 0
+                        && track_info.channel_count != 0
+                        && acc.channel_count != track_info.channel_count
+                    {
+                        return Err(InfoError::IncompatibleTracks(format!(
+                            "channel counts do not match: {} != {}",
+                            acc.channel_count, track_info.channel_count
+                        )));
+                    }
 
-                if acc.bits_per_sample != 0
-                    && track_info.bits_per_sample != 0
-                    && acc.bits_per_sample != track_info.bits_per_sample
-                {
-                    return Err(InfoError::IncompatibleTracks(format!(
-                        "bits per sample do not match: {} != {}",
-                        acc.bits_per_sample, track_info.bits_per_sample
-                    )));
-                }
+                    if acc.bits_per_sample != 0
+                        && track_info.bits_per_sample != 0
+                        && acc.bits_per_sample != track_info.bits_per_sample
+                    {
+                        return Err(InfoError::IncompatibleTracks(format!(
+                            "bits per sample do not match: {} != {}",
+                            acc.bits_per_sample, track_info.bits_per_sample
+                        )));
+                    }
 
-                Ok(Some(TrackInfo {
-                    sample_rate: if acc.sample_rate == 0 {
-                        track_info.sample_rate
-                    } else {
-                        acc.sample_rate
-                    },
-                    channel_count: if acc.channel_count == 0 {
-                        track_info.channel_count
-                    } else {
-                        acc.channel_count
-                    },
-                    bits_per_sample: if acc.bits_per_sample == 0 {
-                        track_info.bits_per_sample
-                    } else {
-                        acc.bits_per_sample
-                    },
-                }))
-            }
-            None => Ok(Some(track_info)),
-        })?;
+                    Ok(Some(TrackInfo {
+                        sample_rate: if acc.sample_rate == 0 {
+                            track_info.sample_rate
+                        } else {
+                            acc.sample_rate
+                        },
+                        channel_count: if acc.channel_count == 0 {
+                            track_info.channel_count
+                        } else {
+                            acc.channel_count
+                        },
+                        bits_per_sample: if acc.bits_per_sample == 0 {
+                            track_info.bits_per_sample
+                        } else {
+                            acc.bits_per_sample
+                        },
+                    }))
+                }
+                None => Ok(Some(track_info)),
+            })?;
 
     // Safe: is_empty() was checked above, so the fold processed at least one item.
     Ok(info.unwrap_or(TrackInfo {
@@ -638,24 +639,45 @@ impl Info {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use symphonia::core::{codecs::CodecParameters, units::TimeBase};
 
     #[test]
     fn reduce_track_infos_errors_on_mismatched_sample_rates() {
         let infos = vec![
-            TrackInfo { sample_rate: 44100, channel_count: 2, bits_per_sample: 16 },
-            TrackInfo { sample_rate: 48000, channel_count: 2, bits_per_sample: 16 },
+            TrackInfo {
+                sample_rate: 44100,
+                channel_count: 2,
+                bits_per_sample: 16,
+            },
+            TrackInfo {
+                sample_rate: 48000,
+                channel_count: 2,
+                bits_per_sample: 16,
+            },
         ];
         let result = reduce_track_infos(infos);
         assert!(result.is_err());
         let msg = result.unwrap_err().to_string();
-        assert!(msg.contains("sample rate"), "expected 'sample rate' in: {}", msg);
+        assert!(
+            msg.contains("sample rate"),
+            "expected 'sample rate' in: {}",
+            msg
+        );
     }
 
     #[test]
     fn reduce_track_infos_errors_on_mismatched_channel_counts() {
         let infos = vec![
-            TrackInfo { sample_rate: 44100, channel_count: 1, bits_per_sample: 16 },
-            TrackInfo { sample_rate: 44100, channel_count: 2, bits_per_sample: 16 },
+            TrackInfo {
+                sample_rate: 44100,
+                channel_count: 1,
+                bits_per_sample: 16,
+            },
+            TrackInfo {
+                sample_rate: 44100,
+                channel_count: 2,
+                bits_per_sample: 16,
+            },
         ];
         let result = reduce_track_infos(infos);
         assert!(result.is_err());
@@ -666,20 +688,40 @@ mod tests {
     #[test]
     fn reduce_track_infos_errors_on_mismatched_bits_per_sample() {
         let infos = vec![
-            TrackInfo { sample_rate: 44100, channel_count: 2, bits_per_sample: 16 },
-            TrackInfo { sample_rate: 44100, channel_count: 2, bits_per_sample: 24 },
+            TrackInfo {
+                sample_rate: 44100,
+                channel_count: 2,
+                bits_per_sample: 16,
+            },
+            TrackInfo {
+                sample_rate: 44100,
+                channel_count: 2,
+                bits_per_sample: 24,
+            },
         ];
         let result = reduce_track_infos(infos);
         assert!(result.is_err());
         let msg = result.unwrap_err().to_string();
-        assert!(msg.contains("bits per sample"), "expected 'bits per sample' in: {}", msg);
+        assert!(
+            msg.contains("bits per sample"),
+            "expected 'bits per sample' in: {}",
+            msg
+        );
     }
 
     #[test]
     fn reduce_track_infos_succeeds_with_compatible_tracks() {
         let infos = vec![
-            TrackInfo { sample_rate: 44100, channel_count: 2, bits_per_sample: 16 },
-            TrackInfo { sample_rate: 44100, channel_count: 2, bits_per_sample: 16 },
+            TrackInfo {
+                sample_rate: 44100,
+                channel_count: 2,
+                bits_per_sample: 16,
+            },
+            TrackInfo {
+                sample_rate: 44100,
+                channel_count: 2,
+                bits_per_sample: 16,
+            },
         ];
         let result = reduce_track_infos(infos);
         assert!(result.is_ok());
@@ -693,8 +735,16 @@ mod tests {
     fn reduce_track_infos_fills_in_zero_fields_from_other_tracks() {
         // A track with sample_rate=0 should take the non-zero value from the other.
         let infos = vec![
-            TrackInfo { sample_rate: 0, channel_count: 2, bits_per_sample: 16 },
-            TrackInfo { sample_rate: 44100, channel_count: 2, bits_per_sample: 16 },
+            TrackInfo {
+                sample_rate: 0,
+                channel_count: 2,
+                bits_per_sample: 16,
+            },
+            TrackInfo {
+                sample_rate: 44100,
+                channel_count: 2,
+                bits_per_sample: 16,
+            },
         ];
         let result = reduce_track_infos(infos);
         assert!(result.is_ok());
@@ -709,5 +759,23 @@ mod tests {
         assert_eq!(info.sample_rate, 0);
         assert_eq!(info.channel_count, 0);
         assert_eq!(info.bits_per_sample, 0);
+    }
+
+    #[test]
+    fn get_time_from_frames_uses_time_base_when_present() {
+        let params = CodecParameters {
+            time_base: Some(TimeBase::new(1, 48_000)),
+            n_frames: Some(48_000),
+            start_ts: 0,
+            ..Default::default()
+        };
+        assert!((get_time_from_frames(&params) - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn extended_80_to_f64_handles_zero_and_negative_values() {
+        assert_eq!(extended_80_to_f64([0; 10]), 0.0);
+        let negative_one = [0xBF, 0xFF, 0x80, 0, 0, 0, 0, 0, 0, 0];
+        assert!((extended_80_to_f64(negative_one) + 1.0).abs() < 1e-6);
     }
 }

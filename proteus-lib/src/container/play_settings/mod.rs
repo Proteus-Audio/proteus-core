@@ -192,3 +192,46 @@ impl Serialize for PlaySettingsFile {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn container_inner_accessors_work_for_both_variants() {
+        let mut nested = PlaySettingsContainer::Nested {
+            play_settings: 1_u32,
+        };
+        assert_eq!(*nested.inner(), 1);
+        *nested.inner_mut() = 2;
+        assert_eq!(*nested.inner(), 2);
+
+        let mut flat = PlaySettingsContainer::Flat(3_u32);
+        assert_eq!(*flat.inner(), 3);
+        *flat.inner_mut() = 4;
+        assert_eq!(*flat.inner(), 4);
+    }
+
+    #[test]
+    fn deserialize_versioned_settings_and_preserve_encoder_version_on_serialize() {
+        let parsed: PlaySettingsFile = serde_json::from_str(
+            r#"{
+                "encoder_version": "1",
+                "play_settings": { "effects": [], "tracks": [] }
+            }"#,
+        )
+        .unwrap();
+
+        assert_eq!(parsed.encoder_version(), Some("1"));
+        let serialized = serde_json::to_value(parsed).unwrap();
+        assert_eq!(serialized["encoder_version"], "1");
+    }
+
+    #[test]
+    fn deserialize_unknown_encoder_version_as_unknown_variant() {
+        let parsed: PlaySettingsFile =
+            serde_json::from_str(r#"{"encoder_version": "99", "play_settings": {}}"#).unwrap();
+        assert!(matches!(parsed, PlaySettingsFile::Unknown { .. }));
+        assert_eq!(parsed.encoder_version(), Some("99"));
+    }
+}

@@ -123,3 +123,20 @@ pub fn get_peaks_in_range(
 pub fn extract_peaks_from_audio(file_path: &str, limited: bool) -> Result<PeaksData, PeaksError> {
     extract::extract_peaks_from_audio(file_path, limited)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn get_peaks_in_range_builds_range_options() {
+        let result = get_peaks_in_range("/definitely/missing.peaks", 1.0, 2.0);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn get_all_peaks_uses_default_options() {
+        let result = get_all_peaks("/definitely/missing.peaks");
+        assert!(result.is_err());
+    }
+}

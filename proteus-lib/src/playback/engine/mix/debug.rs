@@ -22,3 +22,17 @@ pub(super) fn effect_label(effect: &AudioEffect) -> &'static str {
         AudioEffect::Pan(_) => "Pan",
     }
 }
+
+#[cfg(all(test, feature = "debug"))]
+mod tests {
+    use super::effect_label;
+    use crate::dsp::effects::{AudioEffect, GainEffect};
+
+    #[test]
+    fn effect_label_returns_stable_name() {
+        assert_eq!(
+            effect_label(&AudioEffect::Gain(GainEffect::default())),
+            "Gain"
+        );
+    }
+}

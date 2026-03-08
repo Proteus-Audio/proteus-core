@@ -133,3 +133,16 @@ fn run_sweep_bench(_args: &ArgMatches) -> Result<Option<i32>> {
         Ok(Some(0))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::run_bench_subcommand;
+    use clap::Command;
+
+    #[test]
+    fn bench_without_subcommand_returns_one() {
+        let args = Command::new("bench").get_matches_from(["bench"]);
+        let code = run_bench_subcommand(&args).expect("bench command should run");
+        assert_eq!(code, 1);
+    }
+}

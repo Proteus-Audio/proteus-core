@@ -150,3 +150,13 @@ pub(crate) fn spawn_file_decode_worker(
         }));
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::spawn_file_decode_worker;
+
+    #[test]
+    fn file_worker_symbol_is_linked() {
+        let _ = spawn_file_decode_worker;
+    }
+}

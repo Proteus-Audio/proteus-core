@@ -28,3 +28,14 @@ fn main() {
 
     std::process::exit(code)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::cli;
+
+    #[test]
+    fn cli_builder_exposes_program_name() {
+        let cmd = cli::args::build_cli();
+        assert_eq!(cmd.get_name(), "Prot Play");
+    }
+}

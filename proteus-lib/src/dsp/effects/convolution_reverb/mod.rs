@@ -547,3 +547,40 @@ impl ConvolutionReverbSettings {
             .unwrap_or(DEFAULT_TAIL_DB)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resolve_impulse_response_path_uses_container_parent_for_relative_paths() {
+        let resolved = resolve_impulse_response_path(Some("/tmp/project/song.prot"), "ir/hall.wav");
+        assert_eq!(resolved, PathBuf::from("/tmp/project/ir/hall.wav"));
+    }
+
+    #[test]
+    fn tail_db_or_default_prefers_explicit_values() {
+        let settings = ConvolutionReverbSettings {
+            impulse_response_tail_db: Some(-24.0),
+            impulse_response_tail: Some(-30.0),
+            ..Default::default()
+        };
+        assert_eq!(settings.tail_db_or_default(), -24.0);
+    }
+
+    #[test]
+    fn convolution_effect_passthrough_when_disabled() {
+        let mut effect = ConvolutionReverbEffect::default();
+        effect.enabled = false;
+        let input = vec![0.2_f32, -0.2, 0.1, -0.1];
+        let context = EffectContext {
+            sample_rate: 48_000,
+            channels: 2,
+            container_path: None,
+            impulse_response_spec: None,
+            impulse_response_tail_db: -60.0,
+        };
+        let output = effect.process(&input, &context, false);
+        assert_eq!(output, input);
+    }
+}

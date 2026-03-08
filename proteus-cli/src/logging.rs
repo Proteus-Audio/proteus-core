@@ -201,3 +201,22 @@ pub fn capture_stderr(buffer: Arc<Mutex<VecDeque<LogLine>>>) -> Option<StderrCap
         reader_handle: Some(handle),
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{snapshot_lines, LogKind, LogLine};
+    use std::collections::VecDeque;
+    use std::sync::{Arc, Mutex};
+
+    #[test]
+    fn snapshot_returns_buffered_lines() {
+        let buffer = Arc::new(Mutex::new(VecDeque::new()));
+        buffer.lock().unwrap().push_back(LogLine {
+            kind: LogKind::Info,
+            text: "hello".to_string(),
+        });
+        let lines = snapshot_lines(&buffer);
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].text, "hello");
+    }
+}

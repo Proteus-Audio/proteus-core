@@ -32,3 +32,14 @@ pub fn buffer_remaining_space(track_buffers: &TrackBufferMap, track_key: u16) ->
         None => 0,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{buffer_remaining_space, init_buffer_map};
+
+    #[test]
+    fn missing_track_has_no_remaining_space() {
+        let map = init_buffer_map();
+        assert_eq!(buffer_remaining_space(&map, 42), 0);
+    }
+}
