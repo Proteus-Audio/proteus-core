@@ -730,3 +730,49 @@ fn log_drain_loop_start(ctx: &ThreadContext, loop_state: &LoopState) {
         final_duration
     );
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{update_append_timing, LoopState};
+    use std::thread;
+    use std::time::Duration;
+
+    #[test]
+    fn loop_state_initializes_with_start_time() {
+        let state = LoopState::new(3.25);
+        assert_eq!(state.start_time, 3.25);
+        assert!(state.startup_fade_pending);
+        assert_eq!(*state.time_chunks_passed.lock().unwrap(), 3.25);
+        assert!(!state
+            .buffering_done
+            .load(std::sync::atomic::Ordering::Relaxed));
+        assert!(state.final_duration.lock().unwrap().is_none());
+    }
+
+    #[test]
+    fn update_append_timing_marks_late_when_delta_exceeds_threshold() {
+        let state = LoopState::new(0.0);
+        {
+            let mut timing = state.append_timing.lock().unwrap();
+            timing.0 = std::time::Instant::now() - Duration::from_millis(100);
+        }
+
+        let (delay_ms, late) = update_append_timing(&state, 0.01);
+        assert!(delay_ms >= 80.0);
+        assert!(late);
+        assert_eq!(state.append_timing.lock().unwrap().2, 1);
+    }
+
+    #[test]
+    fn update_append_timing_tracks_average_without_late_increment() {
+        let state = LoopState::new(0.0);
+        let _ = update_append_timing(&state, 0.5);
+        thread::sleep(Duration::from_millis(5));
+        let (_, late) = update_append_timing(&state, 0.5);
+        assert!(!late);
+        let timing = state.append_timing.lock().unwrap();
+        assert!(timing.1 > 0.0);
+        assert_eq!(timing.2, 0);
+        assert!(timing.3 >= timing.1);
+    }
+}

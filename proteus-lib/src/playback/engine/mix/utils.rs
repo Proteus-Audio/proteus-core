@@ -227,3 +227,36 @@ pub fn map_cover(
     // If everything collapsed into underlay or overlap, coalescing already handled adjacency.
     out
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{map_cover, Cover, TransitionDirection};
+
+    #[test]
+    fn map_cover_without_transition_interleaves_underlay_and_overlap() {
+        let cover = map_cover(&[(2, 4)], 8, None);
+        assert_eq!(
+            cover,
+            vec![
+                Cover::Underlay((0, 2)),
+                Cover::Overlap((2, 4)),
+                Cover::Underlay((4, 8))
+            ]
+        );
+    }
+
+    #[test]
+    fn map_cover_with_transition_adds_up_and_down_segments() {
+        let cover = map_cover(&[(4, 10)], 16, Some(4));
+        assert_eq!(
+            cover,
+            vec![
+                Cover::Underlay((0, 2)),
+                Cover::Transition((TransitionDirection::Up, (2, 6))),
+                Cover::Overlap((6, 8)),
+                Cover::Transition((TransitionDirection::Down, (8, 12))),
+                Cover::Underlay((12, 16))
+            ]
+        );
+    }
+}

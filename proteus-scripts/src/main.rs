@@ -161,3 +161,28 @@ fn write_wav(path: &PathBuf, sample_rate: u32, channels: &[Vec<f32>]) -> Result<
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::write_wav;
+    use std::path::PathBuf;
+
+    #[test]
+    fn write_wav_writes_non_empty_output_file() {
+        let unique = format!(
+            "proteus-scripts-test-{}.wav",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+        let path: PathBuf = std::env::temp_dir().join(unique);
+        let channels = vec![vec![0.1_f32, -0.1, 0.2], vec![0.0_f32, 0.0, 0.0]];
+
+        write_wav(&path, 44_100, &channels).expect("write_wav should succeed");
+        let metadata = std::fs::metadata(&path).expect("output file should exist");
+        assert!(metadata.len() > 0);
+
+        let _ = std::fs::remove_file(path);
+    }
+}

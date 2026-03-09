@@ -8,11 +8,14 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph},
     Terminal,
 };
-use text_to_ascii_art::to_art;
 
-use crate::controls::StatusSnapshot;
+use super::controls::StatusSnapshot;
 use crate::logging::{LogKind, LogLine};
 use proteus_lib::container::info::Info;
+
+fn title_banner() -> &'static str {
+    "Proteus Audio"
+}
 
 /// Render the TUI frame (title, controls, status, logs).
 pub fn draw_status(
@@ -34,9 +37,7 @@ pub fn draw_status(
                 4
             }
         };
-        let title_text = to_art("Proteus".to_string(), "standard", 0, 1, 0)
-            .unwrap_or_else(|_| "Proteus Audio".to_string());
-        let title_text = format!("{title_text}\nv{}", env!("CARGO_PKG_VERSION"));
+        let title_text = format!("{}\nv{}", title_banner(), env!("CARGO_PKG_VERSION"));
         let title_height = title_text.lines().count().max(1) as u16;
 
         let chunks = Layout::default()
@@ -332,9 +333,7 @@ pub fn draw_info(
     file_path: &str,
 ) {
     let _ = terminal.draw(|f| {
-        let title_text = to_art("Proteus".to_string(), "standard", 0, 1, 0)
-            .unwrap_or_else(|_| "Proteus Audio".to_string());
-        let title_text = format!("{title_text}\nv{}", env!("CARGO_PKG_VERSION"));
+        let title_text = format!("{}\nv{}", title_banner(), env!("CARGO_PKG_VERSION"));
         let title_height = title_text.lines().count().max(1) as u16;
 
         let chunks = Layout::default()
@@ -393,8 +392,14 @@ pub fn draw_info(
 
 #[cfg(test)]
 mod tests {
+    use super::title_banner;
     #[cfg(feature = "output-meter")]
     use super::{format_db, render_bar};
+
+    #[test]
+    fn title_banner_is_non_empty() {
+        assert!(!title_banner().trim().is_empty());
+    }
 
     #[cfg(feature = "output-meter")]
     #[test]

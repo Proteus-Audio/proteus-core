@@ -2,8 +2,8 @@ use log::warn;
 use symphonia::core::audio::Channels;
 use symphonia::core::errors::Error;
 
+use crate::audio::decode::for_each_channel_sample;
 use crate::tools::decode::open_file;
-use crate::track::convert::for_each_channel_sample;
 
 use super::{PeakWindow, PeaksData, PeaksError};
 

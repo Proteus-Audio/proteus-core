@@ -145,4 +145,18 @@ mod tests {
         assert!(output.iter().any(|value| (*value - 1.0).abs() > 1e-6));
         assert!(output.iter().all(|value| value.is_finite()));
     }
+
+    #[test]
+    fn low_pass_reset_restores_passthrough_when_disabled() {
+        let mut effect = LowPassFilterEffect::default();
+        effect.enabled = true;
+        effect.settings.freq_hz = 350;
+        let samples = vec![0.3_f32, -0.4, 0.9, -0.8];
+        let _ = effect.process(&samples, &context(), false);
+
+        effect.reset_state();
+        effect.enabled = false;
+        let output = effect.process(&samples, &context(), false);
+        assert_eq!(output, samples);
+    }
 }

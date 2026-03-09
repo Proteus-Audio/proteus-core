@@ -138,4 +138,23 @@ mod tests {
         let tail_db = parse_impulse_response_tail_db(&play_settings);
         assert_eq!(tail_db, Some(-42.0));
     }
+
+    #[test]
+    fn parse_tail_uses_legacy_tail_when_tail_db_missing() {
+        let mut effect = ConvolutionReverbEffect::default();
+        effect.settings.impulse_response = Some("file:/tmp/ir.wav".to_string());
+        effect.settings.impulse_response_tail_db = None;
+        effect.settings.impulse_response_tail = Some(-12.0);
+
+        let settings = PlaySettingsV2 {
+            tracks: Vec::new(),
+            effects: vec![AudioEffect::ConvolutionReverb(effect)],
+        };
+        let file = PlaySettingsV2File {
+            settings: PlaySettingsContainer::Flat(settings),
+        };
+        let play_settings = PlaySettingsFile::V2(file);
+
+        assert_eq!(parse_impulse_response_tail_db(&play_settings), Some(-12.0));
+    }
 }

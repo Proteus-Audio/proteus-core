@@ -12,6 +12,14 @@ use super::super::Player;
 use super::now_ms;
 use super::worker::{open_output_stream_with_retry, run_playback_thread, ThreadContext};
 
+fn trace_elapsed(trace_ms: u64, now: u64) -> Option<u64> {
+    if trace_ms > 0 {
+        Some(now.saturating_sub(trace_ms))
+    } else {
+        None
+    }
+}
+
 impl Player {
     /// Initialize and spawn a fresh playback thread.
     ///
@@ -22,11 +30,10 @@ impl Player {
     pub(in crate::playback::player) fn initialize_thread(&mut self, ts: Option<f64>) {
         let trace_ms = self.play_command_ms.load(Ordering::Relaxed);
         let now = now_ms();
-        if trace_ms > 0 {
+        if let Some(elapsed_ms) = trace_elapsed(trace_ms, now) {
             debug!(
                 "play trace: initialize_thread start ts={:?} +{}ms",
-                ts,
-                now.saturating_sub(trace_ms)
+                ts, elapsed_ms
             );
         } else {
             debug!("play trace: initialize_thread start ts={:?}", ts);
@@ -63,8 +70,7 @@ impl Player {
             };
             (stream.mixer().clone(), opened_now)
         };
-        if trace_ms > 0 {
-            let elapsed_ms = now_ms().saturating_sub(trace_ms);
+        if let Some(elapsed_ms) = trace_elapsed(trace_ms, now_ms()) {
             if opened_now {
                 debug!("play trace: output stream opened +{}ms", elapsed_ms);
             } else {
@@ -102,11 +108,10 @@ impl Player {
 
         let handle = thread::spawn(move || run_playback_thread(context, playback_id, ts));
         *self.playback_thread_handle.lock().unwrap() = Some(handle);
-        if trace_ms > 0 {
+        if let Some(elapsed_ms) = trace_elapsed(trace_ms, now_ms()) {
             debug!(
                 "play trace: initialize_thread spawned playback_id={} +{}ms",
-                playback_id,
-                now_ms().saturating_sub(trace_ms)
+                playback_id, elapsed_ms
             );
         } else {
             debug!(
@@ -114,5 +119,21 @@ impl Player {
                 playback_id
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::trace_elapsed;
+
+    #[test]
+    fn trace_elapsed_returns_none_when_trace_not_set() {
+        assert_eq!(trace_elapsed(0, 500), None);
+    }
+
+    #[test]
+    fn trace_elapsed_saturates_and_returns_delta() {
+        assert_eq!(trace_elapsed(100, 250), Some(150));
+        assert_eq!(trace_elapsed(300, 250), Some(0));
     }
 }

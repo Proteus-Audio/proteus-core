@@ -143,4 +143,20 @@ mod tests {
         assert!(captured.iter().any(|report| report.playing));
         assert!(captured.iter().any(|report| report.time >= 1.0));
     }
+
+    #[test]
+    fn reporter_stop_is_idempotent_without_start() {
+        let reporter = Reporter::new(
+            Arc::new(Mutex::new(0.0)),
+            Arc::new(Mutex::new(1.0)),
+            Arc::new(Mutex::new(10.0)),
+            Arc::new(Mutex::new(PlayerState::Paused)),
+            Arc::new(Mutex::new(|_report: Report| {})),
+            Duration::from_millis(5),
+        );
+
+        reporter.stop();
+        reporter.stop();
+        assert!(reporter.finish.load(Ordering::Relaxed));
+    }
 }

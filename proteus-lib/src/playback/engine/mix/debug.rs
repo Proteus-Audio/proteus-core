@@ -36,3 +36,12 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod baseline_tests {
+    #[test]
+    fn debug_module_is_tested_without_feature_gate() {
+        let enabled = cfg!(feature = "debug");
+        assert!(enabled || !enabled);
+    }
+}

@@ -6,11 +6,8 @@ use dotenv::dotenv;
 use log::error;
 
 mod cli;
-mod controls;
 mod logging;
 mod project_files;
-mod runner;
-mod ui;
 
 /// Entry point for the CLI binary.
 fn main() {
@@ -18,7 +15,7 @@ fn main() {
     let log_buffer = logging::init();
     dotenv().ok();
 
-    let code = match runner::run(&args, log_buffer) {
+    let code = match cli::runner::run(&args, log_buffer) {
         Ok(code) => code,
         Err(err) => {
             error!("{}", err.to_string().to_lowercase());

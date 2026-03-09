@@ -426,3 +426,13 @@ fn current_ms() -> u64 {
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::current_ms;
+
+    #[test]
+    fn current_ms_returns_non_zero_epoch_time() {
+        assert!(current_ms() > 0);
+    }
+}

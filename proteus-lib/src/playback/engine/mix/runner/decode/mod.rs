@@ -84,6 +84,8 @@ pub(super) fn packet_ts_seconds(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Arc, Mutex};
+    use std::thread;
     use symphonia::core::units::TimeBase;
 
     #[test]
@@ -96,5 +98,20 @@ mod tests {
     fn packet_ts_seconds_clamps_to_zero() {
         let ts = packet_ts_seconds(0, Some(TimeBase::new(1, 1)), None, 2.0);
         assert_eq!(ts, 0.0);
+    }
+
+    #[test]
+    fn decode_worker_join_guard_joins_registered_threads() {
+        let joined = Arc::new(Mutex::new(0_u32));
+        let joined_clone = joined.clone();
+        let handle = thread::spawn(move || {
+            *joined_clone.lock().unwrap() += 1;
+        });
+
+        let mut guard = DecodeWorkerJoinGuard::default();
+        guard.push(handle);
+        drop(guard);
+
+        assert_eq!(*joined.lock().unwrap(), 1);
     }
 }

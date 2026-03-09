@@ -70,3 +70,29 @@ impl Default for Timer {
         Self::new()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::Timer;
+    use std::time::Duration;
+
+    #[test]
+    fn timer_start_at_and_reset_work() {
+        let mut timer = Timer::new();
+        timer.start_at(Duration::from_millis(50));
+        assert!(timer.get_time() >= Duration::from_millis(50));
+        timer.reset();
+        assert_eq!(timer.get_time(), Duration::from_millis(0));
+    }
+
+    #[test]
+    fn timer_pause_freezes_elapsed_time() {
+        let mut timer = Timer::new();
+        timer.start();
+        std::thread::sleep(Duration::from_millis(2));
+        timer.pause();
+        let paused = timer.get_time();
+        std::thread::sleep(Duration::from_millis(2));
+        assert_eq!(timer.get_time(), paused);
+    }
+}

@@ -94,3 +94,27 @@ pub fn mark_track_as_finished(finished_tracks: &mut Arc<Mutex<Vec<u16>>>, track_
     drop(finished_tracks_copy);
     log::info!("track finished: key={}", track_key);
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{add_samples_to_buffer_map_nonblocking, mark_track_as_finished};
+    use crate::audio::buffer::init_buffer_map;
+    use std::sync::atomic::AtomicBool;
+    use std::sync::{Arc, Mutex};
+
+    #[test]
+    fn mark_track_as_finished_is_idempotent() {
+        let mut finished = Arc::new(Mutex::new(Vec::new()));
+        mark_track_as_finished(&mut finished, 4);
+        mark_track_as_finished(&mut finished, 4);
+        assert_eq!(finished.lock().unwrap().as_slice(), &[4]);
+    }
+
+    #[test]
+    fn nonblocking_add_with_missing_track_is_noop() {
+        let mut map = init_buffer_map();
+        let abort = Arc::new(AtomicBool::new(false));
+        add_samples_to_buffer_map_nonblocking(&mut map, 9, vec![0.1, 0.2], &abort, None);
+        assert!(map.lock().unwrap().is_empty());
+    }
+}

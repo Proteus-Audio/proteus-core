@@ -1,4 +1,16 @@
 //! Chainable DSP effect modules.
+//!
+//! ## Internal Module Layout Convention
+//! - Keep each effect's `mod.rs` as the API surface that exposes settings,
+//!   runtime state entry points (`new`, `process`, `reset_state`), and serde
+//!   contracts.
+//! - Split reusable algorithmic components into sibling submodules (for
+//!   example `convolution`, `impulse_response`, `reverb`) when complexity
+//!   grows.
+//! - Prefer one effect per directory when internals exceed a single-file scope.
+//! - Temporary exception: `diffusion_reverb` currently remains in one file for
+//!   behavior stability and will be split once its internal stages are
+//!   extracted behind compatibility-preserving helpers.
 
 use serde::{Deserialize, Serialize};
 

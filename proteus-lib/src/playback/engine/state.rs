@@ -57,3 +57,40 @@ pub struct DspChainMetrics {
     pub late_append_count: u64,
     pub late_append_active: bool,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{DspChainMetrics, PlaybackBufferSettings};
+
+    #[test]
+    fn playback_buffer_settings_clamps_negative_start_buffer() {
+        let settings = PlaybackBufferSettings::new(-42.0);
+        assert_eq!(settings.start_buffer_ms, 0.0);
+    }
+
+    #[test]
+    fn playback_buffer_settings_uses_expected_defaults() {
+        let settings = PlaybackBufferSettings::new(25.0);
+        assert_eq!(settings.start_buffer_ms, 25.0);
+        assert_eq!(settings.track_eos_ms, 1000.0);
+        assert_eq!(settings.startup_fade_ms, 150.0);
+        assert_eq!(settings.seek_fade_out_ms, 30.0);
+        assert_eq!(settings.seek_fade_in_ms, 80.0);
+        assert!(!settings.effect_boundary_log);
+    }
+
+    #[test]
+    fn dsp_chain_metrics_default_is_zeroed_and_flags_false() {
+        let metrics = DspChainMetrics::default();
+        assert!(!metrics.overrun);
+        assert_eq!(metrics.overrun_ms, 0.0);
+        assert_eq!(metrics.track_key_count, 0);
+        assert_eq!(metrics.underrun_count, 0);
+        assert!(!metrics.underrun_active);
+        assert_eq!(metrics.pop_count, 0);
+        assert_eq!(metrics.clip_count, 0);
+        assert_eq!(metrics.nan_count, 0);
+        assert_eq!(metrics.late_append_count, 0);
+        assert!(!metrics.late_append_active);
+    }
+}

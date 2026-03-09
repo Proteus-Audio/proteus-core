@@ -145,4 +145,13 @@ mod tests {
         let code = run_bench_subcommand(&args).expect("bench command should run");
         assert_eq!(code, 1);
     }
+
+    #[test]
+    fn bench_unknown_subcommand_returns_one() {
+        let args = Command::new("bench")
+            .subcommand(Command::new("noop"))
+            .get_matches_from(["bench", "noop"]);
+        let code = run_bench_subcommand(&args).expect("bench command should run");
+        assert_eq!(code, 1);
+    }
 }

@@ -213,7 +213,7 @@ fn format_time(time: f64) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{status_text, StatusArgs};
+    use super::{format_time, status_text, StatusArgs};
 
     #[test]
     fn status_text_includes_effects() {
@@ -272,5 +272,12 @@ mod tests {
             sink_len: 0,
         });
         assert!(snapshot.text.contains("Effects:"));
+    }
+
+    #[test]
+    fn format_time_formats_hms_from_millis_input() {
+        assert_eq!(format_time(0.0), "00:00:00");
+        assert_eq!(format_time(1_000.0), "00:00:01");
+        assert_eq!(format_time(3_661_000.0), "01:01:01");
     }
 }

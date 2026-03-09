@@ -260,3 +260,19 @@ fn linear_to_dbfs(value: f32) -> f32 {
         20.0 * value.log10()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::linear_to_dbfs;
+
+    #[test]
+    fn zero_or_negative_linear_maps_to_negative_infinity() {
+        assert!(linear_to_dbfs(0.0).is_infinite() && linear_to_dbfs(0.0).is_sign_negative());
+        assert!(linear_to_dbfs(-1.0).is_infinite() && linear_to_dbfs(-1.0).is_sign_negative());
+    }
+
+    #[test]
+    fn unity_linear_maps_to_zero_dbfs() {
+        assert_eq!(linear_to_dbfs(1.0), 0.0);
+    }
+}

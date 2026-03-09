@@ -300,3 +300,36 @@ pub fn buffer_container_tracks(args: ContainerTrackArgs, abort: Arc<AtomicBool>)
         }
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{buffer_container_tracks, ContainerTrackArgs};
+    use crate::audio::buffer::init_buffer_map;
+    use std::collections::HashMap;
+    use std::sync::atomic::AtomicBool;
+    use std::sync::{Arc, Mutex};
+
+    #[test]
+    fn buffer_container_tracks_marks_all_finished_when_open_fails() {
+        let finished_tracks = Arc::new(Mutex::new(Vec::new()));
+        let args = ContainerTrackArgs {
+            file_path: "/definitely/missing/container.mka".to_string(),
+            track_entries: vec![(1, 10), (2, 11)],
+            buffer_map: init_buffer_map(),
+            buffer_notify: None,
+            track_weights: Some(Arc::new(Mutex::new(HashMap::new()))),
+            finished_tracks: finished_tracks.clone(),
+            start_time: 0.0,
+            channels: 2,
+            track_eos_ms: 0.0,
+        };
+        let abort = Arc::new(AtomicBool::new(false));
+
+        let handle = buffer_container_tracks(args, abort);
+        handle.join().expect("worker thread should complete");
+
+        let done = finished_tracks.lock().unwrap().clone();
+        assert!(done.contains(&1));
+        assert!(done.contains(&2));
+    }
+}

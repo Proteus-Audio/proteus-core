@@ -9,6 +9,10 @@ use crate::playback::engine::{InlineTrackMixUpdate, PlaybackBufferSettings};
 
 use super::{Player, PlayerState};
 
+fn clamp_non_negative(value: f32) -> f32 {
+    value.max(0.0)
+}
+
 impl Player {
     /// Apply a cohesive in-place update to buffer settings under one lock.
     ///
@@ -39,7 +43,7 @@ impl Player {
     /// * `start_buffer_ms` - Startup prebuffer target in milliseconds.
     pub fn set_start_buffer_ms(&self, start_buffer_ms: f32) {
         self.update_buffer_settings(|settings| {
-            settings.start_buffer_ms = start_buffer_ms.max(0.0);
+            settings.start_buffer_ms = clamp_non_negative(start_buffer_ms);
         });
     }
 
@@ -50,7 +54,7 @@ impl Player {
     /// * `track_eos_ms` - End-of-track threshold in milliseconds.
     pub fn set_track_eos_ms(&self, track_eos_ms: f32) {
         self.update_buffer_settings(|settings| {
-            settings.track_eos_ms = track_eos_ms.max(0.0);
+            settings.track_eos_ms = clamp_non_negative(track_eos_ms);
         });
     }
 
@@ -73,42 +77,42 @@ impl Player {
     /// Configure the startup silence pre-roll (ms).
     pub fn set_startup_silence_ms(&self, ms: f32) {
         self.update_buffer_settings(|settings| {
-            settings.startup_silence_ms = ms.max(0.0);
+            settings.startup_silence_ms = clamp_non_negative(ms);
         });
     }
 
     /// Configure the startup fade-in length (ms).
     pub fn set_startup_fade_ms(&self, ms: f32) {
         self.update_buffer_settings(|settings| {
-            settings.startup_fade_ms = ms.max(0.0);
+            settings.startup_fade_ms = clamp_non_negative(ms);
         });
     }
 
     /// Configure seek fade-out length (ms) before restarting playback.
     pub fn set_seek_fade_out_ms(&self, ms: f32) {
         self.update_buffer_settings(|settings| {
-            settings.seek_fade_out_ms = ms.max(0.0);
+            settings.seek_fade_out_ms = clamp_non_negative(ms);
         });
     }
 
     /// Configure seek fade-in length (ms) after restarting playback.
     pub fn set_seek_fade_in_ms(&self, ms: f32) {
         self.update_buffer_settings(|settings| {
-            settings.seek_fade_in_ms = ms.max(0.0);
+            settings.seek_fade_in_ms = clamp_non_negative(ms);
         });
     }
 
     /// Configure the append jitter logging threshold (ms). 0 disables logging.
     pub fn set_append_jitter_log_ms(&self, ms: f32) {
         self.update_buffer_settings(|settings| {
-            settings.append_jitter_log_ms = ms.max(0.0);
+            settings.append_jitter_log_ms = clamp_non_negative(ms);
         });
     }
 
     /// Configure inline effects transition duration (ms) for `set_effects_inline`.
     pub fn set_inline_effects_transition_ms(&self, ms: f32) {
         self.update_buffer_settings(|settings| {
-            settings.inline_effects_transition_ms = ms.max(0.0);
+            settings.inline_effects_transition_ms = clamp_non_negative(ms);
         });
     }
 
@@ -175,5 +179,20 @@ impl Player {
         let empty = sink.empty();
         let len = sink.len();
         (paused, empty, len)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::clamp_non_negative;
+
+    #[test]
+    fn clamp_non_negative_zeroes_negative_values() {
+        assert_eq!(clamp_non_negative(-12.5), 0.0);
+    }
+
+    #[test]
+    fn clamp_non_negative_keeps_positive_values() {
+        assert_eq!(clamp_non_negative(12.5), 12.5);
     }
 }

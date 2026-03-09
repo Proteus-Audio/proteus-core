@@ -197,3 +197,34 @@ pub fn buffer_track(args: TrackArgs, abort: Arc<AtomicBool>) -> JoinHandle<()> {
         }
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{buffer_track, TrackArgs};
+    use crate::audio::buffer::init_buffer_map;
+    use std::collections::HashMap;
+    use std::sync::atomic::AtomicBool;
+    use std::sync::{Arc, Mutex};
+
+    #[test]
+    fn buffer_track_marks_finished_when_open_fails() {
+        let finished_tracks = Arc::new(Mutex::new(Vec::new()));
+        let args = TrackArgs {
+            file_path: "/definitely/missing/audio-file.wav".to_string(),
+            track_id: None,
+            track_key: 9,
+            buffer_map: init_buffer_map(),
+            buffer_notify: None,
+            track_weights: Some(Arc::new(Mutex::new(HashMap::new()))),
+            finished_tracks: finished_tracks.clone(),
+            start_time: 0.0,
+            channels: 2,
+        };
+        let abort = Arc::new(AtomicBool::new(false));
+
+        let handle = buffer_track(args, abort);
+        handle.join().expect("worker thread should complete");
+
+        assert_eq!(finished_tracks.lock().unwrap().as_slice(), &[9]);
+    }
+}

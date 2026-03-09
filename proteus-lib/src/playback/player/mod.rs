@@ -494,3 +494,26 @@ impl Drop for Player {
         self.impulse_response_tail_override = None;
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{Player, PlayerInitError, PlayerInitOptions};
+
+    #[test]
+    fn player_init_error_display_is_actionable() {
+        assert_eq!(
+            PlayerInitError::MissingSource.to_string(),
+            "player source input is required"
+        );
+    }
+
+    #[test]
+    fn try_new_from_path_or_paths_requires_input_source() {
+        let result = Player::try_new_from_path_or_paths_with_options(
+            None,
+            None,
+            PlayerInitOptions::default(),
+        );
+        assert!(matches!(result, Err(PlayerInitError::MissingSource)));
+    }
+}

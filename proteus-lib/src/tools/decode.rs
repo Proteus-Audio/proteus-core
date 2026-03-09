@@ -120,3 +120,26 @@ pub fn get_decoder(format: &dyn FormatReader) -> Result<Box<dyn Decoder>, Decode
         .make(&track.codec_params, &dec_opts)
         .map_err(DecoderOpenError::UnsupportedCodec)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{get_reader, DecoderOpenError};
+
+    #[test]
+    fn get_reader_returns_io_error_for_missing_file() {
+        let err = match get_reader("/definitely/missing/file.mp3") {
+            Ok(_) => panic!("missing file should error"),
+            Err(err) => err,
+        };
+        assert!(matches!(err, DecoderOpenError::Io(_)));
+    }
+
+    #[test]
+    fn decoder_open_error_display_mentions_open_failure() {
+        let err = match get_reader("/definitely/missing/file.wav") {
+            Ok(_) => panic!("missing file should error"),
+            Err(err) => err,
+        };
+        assert!(err.to_string().contains("failed to open media file"));
+    }
+}

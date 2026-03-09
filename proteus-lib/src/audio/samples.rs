@@ -44,4 +44,14 @@ mod tests {
         let right_samples: Vec<f32> = right.buffered().collect();
         assert_eq!(left_samples, right_samples);
     }
+
+    #[test]
+    fn clone_samples_buffer_preserves_frame_count() {
+        let source = SamplesBuffer::new(1, 44_100, vec![0.1_f32, 0.2, 0.3]);
+        let (left, right) = clone_samples_buffer(source);
+        let left_count = left.count();
+        let right_count = right.count();
+        assert_eq!(left_count, right_count);
+        assert_eq!(left_count, 3);
+    }
 }

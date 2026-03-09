@@ -189,4 +189,14 @@ mod tests {
         assert_eq!(sanitize_q(0.01), 0.1);
         assert_eq!(sanitize_q(20.0), 10.0);
     }
+
+    #[test]
+    fn biquad_reset_clears_state_history() {
+        let mut state = BiquadState::new(BiquadKind::LowPass, 48_000, 2, 1_200, 0.707);
+        let _ = state.process(&[1.0, -1.0, 0.5, -0.5]);
+        state.reset();
+        let output = state.process(&[0.0, 0.0]);
+        assert_eq!(output.len(), 2);
+        assert!(output.iter().all(|v| v.is_finite()));
+    }
 }

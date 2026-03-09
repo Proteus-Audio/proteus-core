@@ -40,3 +40,22 @@ pub(super) struct ActiveInlineTransition {
     pub(super) total_samples: usize,
     pub(super) remaining_samples: usize,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::ActiveInlineTransition;
+
+    #[test]
+    fn active_inline_transition_tracks_sample_budget() {
+        let transition = ActiveInlineTransition {
+            old_effects: Vec::new(),
+            new_effects: Vec::new(),
+            total_samples: 256,
+            remaining_samples: 128,
+        };
+        assert_eq!(transition.total_samples, 256);
+        assert_eq!(transition.remaining_samples, 128);
+        assert!(transition.old_effects.is_empty());
+        assert!(transition.new_effects.is_empty());
+    }
+}

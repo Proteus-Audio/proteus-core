@@ -20,9 +20,10 @@ use ratatui::{backend::CrosstermBackend, Terminal};
 use serde::Serialize;
 use symphonia::core::errors::Result;
 
+use super::{controls, ui};
 use crate::logging::LogLine;
 use crate::project_files;
-use crate::{cli, controls, logging, ui};
+use crate::{cli, logging};
 
 /// Main CLI execution path: parse args, run benches, or start playback.
 pub fn run(args: &ArgMatches, log_buffer: Arc<Mutex<VecDeque<LogLine>>>) -> Result<i32> {

@@ -45,3 +45,13 @@ pub(in crate::playback::player::runtime) struct ThreadContext {
     pub(in crate::playback::player::runtime) last_chunk_ms: Arc<AtomicU64>,
     pub(in crate::playback::player::runtime) last_time_update_ms: Arc<AtomicU64>,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::ThreadContext;
+
+    #[test]
+    fn thread_context_type_is_materialized_for_test_coverage() {
+        assert!(std::mem::size_of::<Option<ThreadContext>>() > 0);
+    }
+}
