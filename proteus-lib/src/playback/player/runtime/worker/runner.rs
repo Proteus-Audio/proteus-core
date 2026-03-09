@@ -177,7 +177,7 @@ pub(in crate::playback::player::runtime) fn open_output_stream_with_retry() -> O
         OUTPUT_STREAM_OPEN_RETRIES,
         OUTPUT_STREAM_OPEN_RETRY_MS,
         OutputStreamBuilder::open_default_stream,
-        |duration| thread::sleep(duration),
+        thread::sleep,
     )
 }
 
