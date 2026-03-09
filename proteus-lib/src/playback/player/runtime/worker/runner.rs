@@ -7,7 +7,7 @@ use std::sync::{mpsc::RecvTimeoutError, Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use log::{error, info, warn};
+use log::{debug, error, warn};
 
 use crate::playback::engine::PlayerEngine;
 use crate::tools::timer;
@@ -19,7 +19,7 @@ use super::super::now_ms;
 use super::context::ThreadContext;
 use super::guard::PlaybackThreadGuard;
 
-/// Per-run mutable state for playback time, buffering, and append timing.
+// Per-run mutable state for playback time, buffering, and append timing.
 struct LoopState {
     start_time: f64,
     startup_fade_pending: bool,
@@ -34,11 +34,11 @@ struct LoopState {
 }
 
 impl LoopState {
-    /// Build initialized loop state for a new playback-thread run.
-    ///
-    /// # Arguments
-    ///
-    /// * `start_time` - Initial playback position in seconds.
+    // Build initialized loop state for a new playback-thread run.
+    //
+    // # Arguments
+    //
+    // * `start_time` - Initial playback position in seconds.
     fn new(start_time: f64) -> Self {
         let timer = Arc::new(Mutex::new(timer::Timer::new()));
         {
@@ -60,13 +60,13 @@ impl LoopState {
     }
 }
 
-/// Run the playback worker loop for a single generation (`playback_id`).
-///
-/// # Arguments
-///
-/// * `ctx` - Captured shared state and handles for this run.
-/// * `playback_id` - Generation ID used to invalidate stale workers.
-/// * `ts` - Optional start timestamp in seconds.
+// Run the playback worker loop for a single generation (`playback_id`).
+//
+// # Arguments
+//
+// * `ctx` - Captured shared state and handles for this run.
+// * `playback_id` - Generation ID used to invalidate stale workers.
+// * `ts` - Optional start timestamp in seconds.
 pub(in crate::playback::player::runtime) fn run_playback_thread(
     ctx: ThreadContext,
     playback_id: u64,
@@ -75,7 +75,7 @@ pub(in crate::playback::player::runtime) fn run_playback_thread(
     let _thread_guard = PlaybackThreadGuard::new(ctx.playback_thread_exists.clone());
     let start_time = ts.unwrap_or(0.0);
     if let Some(elapsed_ms) = play_trace_elapsed_ms(&ctx) {
-        info!(
+        debug!(
             "play trace: playback worker start playback_id={} ts={:.3} +{}ms",
             playback_id, start_time, elapsed_ms
         );
@@ -95,7 +95,7 @@ pub(in crate::playback::player::runtime) fn run_playback_thread(
 
     initialize_sink(&ctx, &ctx.output_mixer);
     if let Some(elapsed_ms) = play_trace_elapsed_ms(&ctx) {
-        info!("play trace: sink initialized +{}ms", elapsed_ms);
+        debug!("play trace: sink initialized +{}ms", elapsed_ms);
     }
     set_duration_from_engine(&ctx, &engine);
     set_start_time(&ctx, start_time);
@@ -105,7 +105,7 @@ pub(in crate::playback::player::runtime) fn run_playback_thread(
 
     let receiver = engine.start_receiver();
     if let Some(elapsed_ms) = play_trace_elapsed_ms(&ctx) {
-        info!("play trace: engine receiver started +{}ms", elapsed_ms);
+        debug!("play trace: engine receiver started +{}ms", elapsed_ms);
     }
     let mut logged_first_engine_chunk = false;
     loop {
@@ -117,7 +117,7 @@ pub(in crate::playback::player::runtime) fn run_playback_thread(
                 if !logged_first_engine_chunk {
                     logged_first_engine_chunk = true;
                     if let Some(elapsed_ms) = play_trace_elapsed_ms(&ctx) {
-                        info!("play trace: first engine chunk received +{}ms", elapsed_ms);
+                        debug!("play trace: first engine chunk received +{}ms", elapsed_ms);
                     }
                 }
                 update_sink(&ctx, &mut loop_state, playback_id, chunk);
@@ -165,11 +165,11 @@ pub(in crate::playback::player::runtime) fn run_playback_thread(
     }
 }
 
-/// Open the default output stream with bounded retry behavior.
-///
-/// # Returns
-///
-/// `Some(OutputStream)` on success, otherwise `None` after all retries fail.
+// Open the default output stream with bounded retry behavior.
+//
+// # Returns
+//
+// `Some(OutputStream)` on success, otherwise `None` after all retries fail.
 pub(in crate::playback::player::runtime) fn open_output_stream_with_retry() -> Option<OutputStream>
 {
     for attempt in 1..=OUTPUT_STREAM_OPEN_RETRIES {
@@ -194,12 +194,12 @@ pub(in crate::playback::player::runtime) fn open_output_stream_with_retry() -> O
     None
 }
 
-/// Recreate and initialize the sink connected to the active mixer.
-///
-/// # Arguments
-///
-/// * `ctx` - Shared worker context with sink and volume state.
-/// * `mixer` - Output mixer from the opened output stream.
+// Recreate and initialize the sink connected to the active mixer.
+//
+// # Arguments
+//
+// * `ctx` - Shared worker context with sink and volume state.
+// * `mixer` - Output mixer from the opened output stream.
 fn initialize_sink(ctx: &ThreadContext, mixer: &rodio::mixer::Mixer) {
     let mut sink = ctx.sink_mutex.lock().unwrap();
     *sink = Sink::connect_new(mixer);
@@ -208,36 +208,36 @@ fn initialize_sink(ctx: &ThreadContext, mixer: &rodio::mixer::Mixer) {
     sink.set_volume(0.0);
 }
 
-/// Snapshot the total engine duration into shared player state.
-///
-/// # Arguments
-///
-/// * `ctx` - Shared worker context containing duration state.
-/// * `engine` - Active engine instance for this playback run.
+// Snapshot the total engine duration into shared player state.
+//
+// # Arguments
+//
+// * `ctx` - Shared worker context containing duration state.
+// * `engine` - Active engine instance for this playback run.
 fn set_duration_from_engine(ctx: &ThreadContext, engine: &PlayerEngine) {
     let mut duration = ctx.duration.lock().unwrap();
     *duration = engine.get_duration();
 }
 
-/// Initialize shared playback time to the selected start position.
-///
-/// # Arguments
-///
-/// * `ctx` - Shared worker context containing playback time state.
-/// * `start_time` - Start position in seconds.
+// Initialize shared playback time to the selected start position.
+//
+// # Arguments
+//
+// * `ctx` - Shared worker context containing playback time state.
+// * `start_time` - Start position in seconds.
 fn set_start_time(ctx: &ThreadContext, start_time: f64) {
     let mut time_passed = ctx.time_passed.lock().unwrap();
     *time_passed = start_time;
 }
 
-/// Append startup silence pre-roll when configured.
-///
-/// # Arguments
-///
-/// * `ctx` - Shared worker context with startup settings and sink handle.
+// Append startup silence pre-roll when configured.
+//
+// # Arguments
+//
+// * `ctx` - Shared worker context with startup settings and sink handle.
 fn append_startup_silence(ctx: &ThreadContext) {
     let startup_silence_ms = {
-        let startup_settings = ctx.buffer_settings_for_state.lock().unwrap();
+        let startup_settings = ctx.buffer_settings.lock().unwrap();
         startup_settings.startup_silence_ms
     };
 
@@ -257,14 +257,14 @@ fn append_startup_silence(ctx: &ThreadContext) {
     sink.append(silence_buffer);
 }
 
-/// Fade out and pause the sink.
-///
-/// # Arguments
-///
-/// * `ctx` - Shared worker context containing playback clock state.
-/// * `loop_state` - Per-run loop state providing start-time reference.
-/// * `sink` - Output sink to fade and pause.
-/// * `fade_seconds` - Fade duration in seconds.
+// Fade out and pause the sink.
+//
+// # Arguments
+//
+// * `ctx` - Shared worker context containing playback clock state.
+// * `loop_state` - Per-run loop state providing start-time reference.
+// * `sink` - Output sink to fade and pause.
+// * `fade_seconds` - Fade duration in seconds.
 fn pause_sink(ctx: &ThreadContext, loop_state: &LoopState, sink: &Sink, fade_seconds: f32) {
     let timestamp = *ctx.time_passed.lock().unwrap();
     let fade_increments = sink.volume() / (fade_seconds * 100.0);
@@ -276,17 +276,17 @@ fn pause_sink(ctx: &ThreadContext, loop_state: &LoopState, sink: &Sink, fade_sec
     sink.pause();
 }
 
-/// Start or resume sink playback with optional fade-in.
-///
-/// # Arguments
-///
-/// * `ctx` - Shared worker context containing target volume state.
-/// * `sink` - Output sink to resume.
-/// * `fade_seconds` - Fade duration in seconds.
+// Start or resume sink playback with optional fade-in.
+//
+// # Arguments
+//
+// * `ctx` - Shared worker context containing target volume state.
+// * `sink` - Output sink to resume.
+// * `fade_seconds` - Fade duration in seconds.
 fn resume_sink(ctx: &ThreadContext, sink: &Sink, fade_seconds: f32) {
     let target_volume = *ctx.volume.lock().unwrap();
     if let Some(elapsed_ms) = play_trace_elapsed_ms(ctx) {
-        info!(
+        debug!(
             "play trace: resume_sink begin fade_s={:.3} target_volume={:.3} +{}ms",
             fade_seconds, target_volume, elapsed_ms
         );
@@ -295,7 +295,7 @@ fn resume_sink(ctx: &ThreadContext, sink: &Sink, fade_seconds: f32) {
         sink.play();
         sink.set_volume(target_volume);
         if let Some(elapsed_ms) = play_trace_elapsed_ms(ctx) {
-            info!(
+            debug!(
                 "play trace: resume_sink sink.play() immediate +{}ms",
                 elapsed_ms
             );
@@ -312,7 +312,7 @@ fn resume_sink(ctx: &ThreadContext, sink: &Sink, fade_seconds: f32) {
     let fade_increments = ((target_volume - current) / (fade_seconds * 100.0)).max(0.000_001);
     sink.play();
     if let Some(elapsed_ms) = play_trace_elapsed_ms(ctx) {
-        info!("play trace: resume_sink sink.play() +{}ms", elapsed_ms);
+        debug!("play trace: resume_sink sink.play() +{}ms", elapsed_ms);
     }
     while sink.volume() < target_volume {
         let next = (sink.volume() + fade_increments).min(target_volume);
@@ -320,20 +320,20 @@ fn resume_sink(ctx: &ThreadContext, sink: &Sink, fade_seconds: f32) {
         thread::sleep(Duration::from_millis(5));
     }
     if let Some(elapsed_ms) = play_trace_elapsed_ms(ctx) {
-        info!("play trace: resume_sink fade complete +{}ms", elapsed_ms);
+        debug!("play trace: resume_sink fade complete +{}ms", elapsed_ms);
     }
 }
 
-/// Poll control/abort state and apply transport transitions.
-///
-/// # Arguments
-///
-/// * `ctx` - Shared worker context containing transport flags/states.
-/// * `loop_state` - Mutable per-run state used by fade logic.
-///
-/// # Returns
-///
-/// `false` when the worker should terminate, otherwise `true`.
+// Poll control/abort state and apply transport transitions.
+//
+// # Arguments
+//
+// * `ctx` - Shared worker context containing transport flags/states.
+// * `loop_state` - Mutable per-run state used by fade logic.
+//
+// # Returns
+//
+// `false` when the worker should terminate, otherwise `true`.
 fn check_runtime_state(ctx: &ThreadContext, loop_state: &mut LoopState) -> bool {
     if ctx.abort.load(Ordering::SeqCst) {
         let sink = ctx.sink_mutex.lock().unwrap();
@@ -343,11 +343,7 @@ fn check_runtime_state(ctx: &ThreadContext, loop_state: &mut LoopState) -> bool 
     }
 
     let state = *ctx.play_state.lock().unwrap();
-    let start_sink_chunks = ctx
-        .buffer_settings_for_state
-        .lock()
-        .unwrap()
-        .start_sink_chunks;
+    let start_sink_chunks = ctx.buffer_settings.lock().unwrap().start_sink_chunks;
 
     // Lock ordering matters during live seek/stop: control thread takes
     // play_state -> sink, so avoid taking sink -> play_state here.
@@ -379,7 +375,7 @@ fn check_runtime_state(ctx: &ThreadContext, loop_state: &mut LoopState) -> bool 
             .map(|start| start.elapsed().as_millis())
             .unwrap_or(0);
         if let Some(elapsed_ms) = play_trace_elapsed_ms(ctx) {
-            info!(
+            debug!(
                 "play trace: resuming gate passed sink_len={} start_sink_chunks={} gate_wait_ms={} +{}ms",
                 sink.len(),
                 start_sink_chunks,
@@ -392,12 +388,7 @@ fn check_runtime_state(ctx: &ThreadContext, loop_state: &mut LoopState) -> bool 
             if let Some(ms) = ctx.next_resume_fade_ms.lock().unwrap().take() {
                 (ms / 1000.0).max(0.0)
             } else {
-                (ctx.buffer_settings_for_state
-                    .lock()
-                    .unwrap()
-                    .startup_fade_ms
-                    / 1000.0)
-                    .max(0.0)
+                (ctx.buffer_settings.lock().unwrap().startup_fade_ms / 1000.0).max(0.0)
             }
         } else {
             0.1
@@ -419,12 +410,12 @@ fn check_runtime_state(ctx: &ThreadContext, loop_state: &mut LoopState) -> bool 
     true
 }
 
-/// Advance playback clock/meter state from sink and timer progress.
-///
-/// # Arguments
-///
-/// * `ctx` - Shared worker context with sink, meter, and timestamps.
-/// * `loop_state` - Mutable per-run timing and chunk bookkeeping.
+// Advance playback clock/meter state from sink and timer progress.
+//
+// # Arguments
+//
+// * `ctx` - Shared worker context with sink, meter, and timestamps.
+// * `loop_state` - Mutable per-run timing and chunk bookkeeping.
 fn update_chunk_lengths(ctx: &ThreadContext, loop_state: &mut LoopState) {
     if ctx.abort.load(Ordering::SeqCst) {
         return;
@@ -465,27 +456,23 @@ fn update_chunk_lengths(ctx: &ThreadContext, loop_state: &mut LoopState) {
     *time_passed_unlocked = current_audio_time;
 }
 
-/// Block append path until sink queue depth is below configured maximum.
-///
-/// # Arguments
-///
-/// * `ctx` - Shared worker context containing sink and buffering settings.
-/// * `loop_state` - Mutable loop state used to keep time/state responsive.
-/// * `playback_id` - Generation ID used to reject stale worker updates.
-///
-/// # Returns
-///
-/// `true` if appending may proceed, `false` if aborted/stale.
+// Block append path until sink queue depth is below configured maximum.
+//
+// # Arguments
+//
+// * `ctx` - Shared worker context containing sink and buffering settings.
+// * `loop_state` - Mutable loop state used to keep time/state responsive.
+// * `playback_id` - Generation ID used to reject stale worker updates.
+//
+// # Returns
+//
+// `true` if appending may proceed, `false` if aborted/stale.
 fn wait_for_sink_capacity(
     ctx: &ThreadContext,
     loop_state: &mut LoopState,
     playback_id: u64,
 ) -> bool {
-    let max_sink_chunks = ctx
-        .buffer_settings_for_state
-        .lock()
-        .unwrap()
-        .max_sink_chunks;
+    let max_sink_chunks = ctx.buffer_settings.lock().unwrap().max_sink_chunks;
     if max_sink_chunks == 0 {
         return true;
     }
@@ -511,16 +498,16 @@ fn wait_for_sink_capacity(
     }
 }
 
-/// Update append jitter statistics for one chunk.
-///
-/// # Arguments
-///
-/// * `loop_state` - Loop state storing rolling append timing stats.
-/// * `length_in_seconds` - Duration of the chunk about to be appended.
-///
-/// # Returns
-///
-/// `(delay_ms, late)` for the current append interval.
+// Update append jitter statistics for one chunk.
+//
+// # Arguments
+//
+// * `loop_state` - Loop state storing rolling append timing stats.
+// * `length_in_seconds` - Duration of the chunk about to be appended.
+//
+// # Returns
+//
+// `(delay_ms, late)` for the current append interval.
 fn update_append_timing(loop_state: &LoopState, length_in_seconds: f64) -> (f64, bool) {
     let mut timing = loop_state.append_timing.lock().unwrap();
     let now = Instant::now();
@@ -543,14 +530,14 @@ fn update_append_timing(loop_state: &LoopState, length_in_seconds: f64) -> (f64,
     (delta_ms, late)
 }
 
-/// Append one chunk to the sink and update runtime telemetry/state.
-///
-/// # Arguments
-///
-/// * `ctx` - Shared worker context with sink, metrics, and control state.
-/// * `loop_state` - Mutable per-run timing/backpressure state.
-/// * `playback_id` - Generation ID used to guard stale worker output.
-/// * `chunk` - `(SamplesBuffer, duration_seconds)` emitted by the engine.
+// Append one chunk to the sink and update runtime telemetry/state.
+//
+// # Arguments
+//
+// * `ctx` - Shared worker context with sink, metrics, and control state.
+// * `loop_state` - Mutable per-run timing/backpressure state.
+// * `playback_id` - Generation ID used to guard stale worker output.
+// * `chunk` - `(SamplesBuffer, duration_seconds)` emitted by the engine.
 fn update_sink(
     ctx: &ThreadContext,
     loop_state: &mut LoopState,
@@ -571,7 +558,7 @@ fn update_sink(
     let now = now_ms();
     let prev_last_chunk_ms = ctx.last_chunk_ms.load(Ordering::Relaxed);
     if trace_ms > 0 && prev_last_chunk_ms < trace_ms {
-        info!(
+        debug!(
             "play trace: first sink append after command chunk_ms={:.2} delay_ms={:.2} late={} +{}ms",
             length_in_seconds * 1000.0,
             delay_ms,
@@ -588,17 +575,13 @@ fn update_sink(
     }
 
     {
-        let mut metrics = ctx.dsp_metrics_for_sink.lock().unwrap();
+        let mut metrics = ctx.dsp_metrics.lock().unwrap();
         metrics.late_append_count = loop_state.append_timing.lock().unwrap().2;
         metrics.late_append_active = late;
     }
 
     let sink = ctx.sink_mutex.lock().unwrap();
-    let append_jitter_log_ms = ctx
-        .buffer_settings_for_state
-        .lock()
-        .unwrap()
-        .append_jitter_log_ms;
+    let append_jitter_log_ms = ctx.buffer_settings.lock().unwrap().append_jitter_log_ms;
 
     if append_jitter_log_ms > 0.0 && (late || delay_ms > append_jitter_log_ms as f64) {
         let expected_ms = length_in_seconds * 1000.0;
@@ -634,12 +617,12 @@ fn play_trace_elapsed_ms(ctx: &ThreadContext) -> Option<u64> {
     }
 }
 
-/// Mark producer buffering complete and finalize expected drain duration.
-///
-/// # Arguments
-///
-/// * `ctx` - Shared worker context containing completion flags.
-/// * `loop_state` - Loop state with chunk/time accumulators.
+// Mark producer buffering complete and finalize expected drain duration.
+//
+// # Arguments
+//
+// * `ctx` - Shared worker context containing completion flags.
+// * `loop_state` - Loop state with chunk/time accumulators.
 fn mark_buffering_complete(ctx: &ThreadContext, loop_state: &LoopState) {
     loop_state.buffering_done.store(true, Ordering::Relaxed);
     ctx.buffer_done_thread_flag.store(true, Ordering::Relaxed);
@@ -652,17 +635,17 @@ fn mark_buffering_complete(ctx: &ThreadContext, loop_state: &LoopState) {
     }
 }
 
-/// Evaluate whether all buffered audio has drained from the sink.
-///
-/// # Arguments
-///
-/// * `ctx` - Shared worker context containing current playback time.
-/// * `loop_state` - Loop state containing computed final duration.
-/// * `engine` - Engine used to check producer completion status.
-///
-/// # Returns
-///
-/// `true` once playback time reaches the final expected duration.
+// Evaluate whether all buffered audio has drained from the sink.
+//
+// # Arguments
+//
+// * `ctx` - Shared worker context containing current playback time.
+// * `loop_state` - Loop state containing computed final duration.
+// * `engine` - Engine used to check producer completion status.
+//
+// # Returns
+//
+// `true` once playback time reaches the final expected duration.
 fn is_drain_complete(ctx: &ThreadContext, loop_state: &LoopState, engine: &PlayerEngine) -> bool {
     if !engine.finished_buffering() {
         return false;
@@ -688,7 +671,7 @@ fn is_drain_complete(ctx: &ThreadContext, loop_state: &LoopState, engine: &Playe
     false
 }
 
-/// Apply the configured transport action after a natural end-of-stream.
+// Apply the configured transport action after a natural end-of-stream.
 fn apply_end_of_stream_action(ctx: &ThreadContext, loop_state: &LoopState) {
     let action = *ctx.end_of_stream_action.lock().unwrap();
     let duration = *ctx.duration.lock().unwrap();
@@ -728,7 +711,7 @@ fn apply_end_of_stream_action(ctx: &ThreadContext, loop_state: &LoopState) {
 }
 
 #[cfg(feature = "debug")]
-/// Emit a debug snapshot when entering the drain loop.
+// Emit a debug snapshot when entering the drain loop.
 fn log_drain_loop_start(ctx: &ThreadContext, loop_state: &LoopState) {
     let sink = ctx.sink_mutex.lock().unwrap();
     let paused = sink.is_paused();

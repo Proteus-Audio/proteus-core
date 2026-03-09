@@ -3,6 +3,7 @@
 use matroska::Matroska;
 use rand::Rng;
 use std::collections::{BTreeSet, HashMap, HashSet};
+use std::panic::{catch_unwind, AssertUnwindSafe};
 
 use log::{error, info, warn};
 
@@ -69,9 +70,45 @@ pub struct Prot {
     effects: Option<Vec<AudioEffect>>,
 }
 
+/// Error returned when building a [`Prot`] container instance fails.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProtError {
+    Initialization(String),
+}
+
+impl std::fmt::Display for ProtError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Initialization(msg) => write!(f, "prot initialization failed: {}", msg),
+        }
+    }
+}
+
+impl std::error::Error for ProtError {}
+
 impl Prot {
     /// Load a single container file and resolve tracks.
     pub fn new(file_path: &str) -> Self {
+        Self::try_new(file_path).unwrap_or_else(|err| panic!("Prot::new failed: {}", err))
+    }
+
+    /// Fallible constructor for a single container file.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProtError`] when parsing or initialization panics.
+    pub fn try_new(file_path: &str) -> Result<Self, ProtError> {
+        catch_unwind(AssertUnwindSafe(|| Self::build_from_path(file_path))).map_err(|panic| {
+            let panic_msg = panic
+                .downcast_ref::<&str>()
+                .map(|msg| (*msg).to_string())
+                .or_else(|| panic.downcast_ref::<String>().cloned())
+                .unwrap_or_else(|| "unknown panic".to_string());
+            ProtError::Initialization(panic_msg)
+        })
+    }
+
+    fn build_from_path(file_path: &str) -> Self {
         let info = Info::new(file_path.to_string());
 
         println!("Info: {:?}", info);

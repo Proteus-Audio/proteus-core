@@ -2,7 +2,7 @@ use log::warn;
 use symphonia::core::audio::Channels;
 use symphonia::core::errors::Error;
 
-use crate::tools::tools::open_file;
+use crate::tools::decode::open_file;
 use crate::track::convert::for_each_channel_sample;
 
 use super::{PeakWindow, PeaksData, PeaksError};
@@ -60,7 +60,8 @@ pub(super) fn extract_peaks_from_audio(
     file_path: &str,
     limited: bool,
 ) -> Result<PeaksData, PeaksError> {
-    let (mut decoder, mut format) = open_file(file_path);
+    let (mut decoder, mut format) =
+        open_file(file_path).map_err(|err| PeaksError::Decode(err.to_string()))?;
 
     let track = format
         .tracks()

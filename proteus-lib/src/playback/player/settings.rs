@@ -5,19 +5,42 @@
 
 use std::sync::atomic::Ordering;
 
-use crate::playback::engine::InlineTrackMixUpdate;
+use crate::playback::engine::{InlineTrackMixUpdate, PlaybackBufferSettings};
 
 use super::{Player, PlayerState};
 
 impl Player {
+    /// Apply a cohesive in-place update to buffer settings under one lock.
+    ///
+    /// # Arguments
+    ///
+    /// * `update` - Closure that mutates [`PlaybackBufferSettings`].
+    pub fn update_buffer_settings<F>(&self, update: F)
+    where
+        F: FnOnce(&mut PlaybackBufferSettings),
+    {
+        let mut settings = self.buffer_settings.lock().unwrap();
+        update(&mut settings);
+    }
+
+    /// Replace all playback buffer settings in one operation.
+    ///
+    /// # Arguments
+    ///
+    /// * `settings` - Full playback buffer settings snapshot to apply.
+    pub fn set_buffer_settings(&self, settings: PlaybackBufferSettings) {
+        self.update_buffer_settings(|current| *current = settings);
+    }
+
     /// Configure the minimum buffered audio (ms) before playback starts.
     ///
     /// # Arguments
     ///
     /// * `start_buffer_ms` - Startup prebuffer target in milliseconds.
     pub fn set_start_buffer_ms(&self, start_buffer_ms: f32) {
-        let mut settings = self.buffer_settings.lock().unwrap();
-        settings.start_buffer_ms = start_buffer_ms.max(0.0);
+        self.update_buffer_settings(|settings| {
+            settings.start_buffer_ms = start_buffer_ms.max(0.0);
+        });
     }
 
     /// Configure heuristic end-of-track threshold for containers (ms).
@@ -26,64 +49,74 @@ impl Player {
     ///
     /// * `track_eos_ms` - End-of-track threshold in milliseconds.
     pub fn set_track_eos_ms(&self, track_eos_ms: f32) {
-        let mut settings = self.buffer_settings.lock().unwrap();
-        settings.track_eos_ms = track_eos_ms.max(0.0);
+        self.update_buffer_settings(|settings| {
+            settings.track_eos_ms = track_eos_ms.max(0.0);
+        });
     }
 
     /// Configure minimum sink chunks queued before playback starts/resumes.
     pub fn set_start_sink_chunks(&self, chunks: usize) {
-        let mut settings = self.buffer_settings.lock().unwrap();
-        settings.start_sink_chunks = chunks;
+        self.update_buffer_settings(|settings| {
+            settings.start_sink_chunks = chunks;
+        });
     }
 
     /// Configure the maximum sink chunks queued before producer backpressure.
     ///
     /// Set to `0` to disable this guard.
     pub fn set_max_sink_chunks(&self, chunks: usize) {
-        let mut settings = self.buffer_settings.lock().unwrap();
-        settings.max_sink_chunks = chunks;
+        self.update_buffer_settings(|settings| {
+            settings.max_sink_chunks = chunks;
+        });
     }
 
     /// Configure the startup silence pre-roll (ms).
     pub fn set_startup_silence_ms(&self, ms: f32) {
-        let mut settings = self.buffer_settings.lock().unwrap();
-        settings.startup_silence_ms = ms.max(0.0);
+        self.update_buffer_settings(|settings| {
+            settings.startup_silence_ms = ms.max(0.0);
+        });
     }
 
     /// Configure the startup fade-in length (ms).
     pub fn set_startup_fade_ms(&self, ms: f32) {
-        let mut settings = self.buffer_settings.lock().unwrap();
-        settings.startup_fade_ms = ms.max(0.0);
+        self.update_buffer_settings(|settings| {
+            settings.startup_fade_ms = ms.max(0.0);
+        });
     }
 
     /// Configure seek fade-out length (ms) before restarting playback.
     pub fn set_seek_fade_out_ms(&self, ms: f32) {
-        let mut settings = self.buffer_settings.lock().unwrap();
-        settings.seek_fade_out_ms = ms.max(0.0);
+        self.update_buffer_settings(|settings| {
+            settings.seek_fade_out_ms = ms.max(0.0);
+        });
     }
 
     /// Configure seek fade-in length (ms) after restarting playback.
     pub fn set_seek_fade_in_ms(&self, ms: f32) {
-        let mut settings = self.buffer_settings.lock().unwrap();
-        settings.seek_fade_in_ms = ms.max(0.0);
+        self.update_buffer_settings(|settings| {
+            settings.seek_fade_in_ms = ms.max(0.0);
+        });
     }
 
     /// Configure the append jitter logging threshold (ms). 0 disables logging.
     pub fn set_append_jitter_log_ms(&self, ms: f32) {
-        let mut settings = self.buffer_settings.lock().unwrap();
-        settings.append_jitter_log_ms = ms.max(0.0);
+        self.update_buffer_settings(|settings| {
+            settings.append_jitter_log_ms = ms.max(0.0);
+        });
     }
 
     /// Configure inline effects transition duration (ms) for `set_effects_inline`.
     pub fn set_inline_effects_transition_ms(&self, ms: f32) {
-        let mut settings = self.buffer_settings.lock().unwrap();
-        settings.inline_effects_transition_ms = ms.max(0.0);
+        self.update_buffer_settings(|settings| {
+            settings.inline_effects_transition_ms = ms.max(0.0);
+        });
     }
 
     /// Enable or disable per-effect boundary discontinuity logging.
     pub fn set_effect_boundary_log(&self, enabled: bool) {
-        let mut settings = self.buffer_settings.lock().unwrap();
-        settings.effect_boundary_log = enabled;
+        self.update_buffer_settings(|settings| {
+            settings.effect_boundary_log = enabled;
+        });
     }
 
     /// Update per-slot track level/pan without restarting playback.

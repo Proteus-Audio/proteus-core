@@ -25,15 +25,12 @@ pub(in crate::playback::player::runtime) struct ThreadContext {
     pub(in crate::playback::player::runtime) duration: Arc<Mutex<f64>>,
     pub(in crate::playback::player::runtime) prot: Arc<Mutex<Prot>>,
     pub(in crate::playback::player::runtime) buffer_settings: Arc<Mutex<PlaybackBufferSettings>>,
-    pub(in crate::playback::player::runtime) buffer_settings_for_state:
-        Arc<Mutex<PlaybackBufferSettings>>,
     pub(in crate::playback::player::runtime) effects: Arc<Mutex<Vec<AudioEffect>>>,
     pub(in crate::playback::player::runtime) inline_effects_update:
         Arc<Mutex<Option<InlineEffectsUpdate>>>,
     pub(in crate::playback::player::runtime) inline_track_mix_updates:
         Arc<Mutex<Vec<InlineTrackMixUpdate>>>,
     pub(in crate::playback::player::runtime) dsp_metrics: Arc<Mutex<DspChainMetrics>>,
-    pub(in crate::playback::player::runtime) dsp_metrics_for_sink: Arc<Mutex<DspChainMetrics>>,
     pub(in crate::playback::player::runtime) effects_reset: Arc<AtomicU64>,
     pub(in crate::playback::player::runtime) output_meter: Arc<Mutex<OutputMeter>>,
     pub(in crate::playback::player::runtime) audio_info: Info,

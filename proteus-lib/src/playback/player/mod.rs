@@ -70,6 +70,32 @@ impl Default for PlayerInitOptions {
     }
 }
 
+/// Error produced when building a [`Player`] from invalid source inputs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlayerInitError {
+    /// Neither container path nor standalone track paths were provided.
+    MissingSource,
+}
+
+impl std::fmt::Display for PlayerInitError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::MissingSource => write!(f, "player source input is required"),
+        }
+    }
+}
+
+impl std::error::Error for PlayerInitError {}
+
+/// Source input used to initialize a [`Player`].
+#[derive(Debug, Clone)]
+pub enum PlayerSource {
+    /// Playback from a `.prot`/`.mka` container path.
+    ContainerPath(String),
+    /// Playback from standalone grouped track paths.
+    FilePaths(Vec<PathsTrack>),
+}
+
 /// Snapshot of active reverb settings for UI consumers.
 ///
 /// Values are derived from the first matching reverb in the current effect
@@ -165,117 +191,33 @@ impl Clone for Player {
 }
 
 impl Player {
-    /// Create a new player for a single container path.
+    /// Create a new player from a typed input source.
     ///
     /// # Arguments
     ///
-    /// * `file_path` - Path to a `.prot`/`.mka` container file.
-    pub fn new(file_path: &String) -> Self {
-        Self::new_with_options(file_path, PlayerInitOptions::default())
+    /// * `source` - Typed source for player initialization.
+    pub fn from_source(source: PlayerSource) -> Self {
+        Self::from_source_with_options(source, PlayerInitOptions::default())
     }
 
-    /// Create a new player for a single container path with explicit options.
+    /// Create a new player from a typed input source and options.
     ///
     /// # Arguments
     ///
-    /// * `file_path` - Path to a `.prot`/`.mka` container file.
+    /// * `source` - Typed source for player initialization.
     /// * `options` - Player initialization options.
-    pub fn new_with_options(file_path: &String, options: PlayerInitOptions) -> Self {
-        Self::new_from_path_or_paths_with_options(Some(file_path), None, options)
-    }
-
-    /// Create a new player for a set of standalone file paths.
-    ///
-    /// # Arguments
-    ///
-    /// * `file_paths` - Pre-normalized track path groups.
-    pub fn new_from_file_paths(file_paths: Vec<PathsTrack>) -> Self {
-        Self::new_from_file_paths_with_options(file_paths, PlayerInitOptions::default())
-    }
-
-    /// Create a new player for standalone file paths with explicit options.
-    ///
-    /// # Arguments
-    ///
-    /// * `file_paths` - Pre-normalized track path groups.
-    /// * `options` - Player initialization options.
-    pub fn new_from_file_paths_with_options(
-        file_paths: Vec<PathsTrack>,
-        options: PlayerInitOptions,
-    ) -> Self {
-        Self::new_from_path_or_paths_with_options(None, Some(file_paths), options)
-    }
-
-    /// Create a new player for legacy standalone file-path groups.
-    ///
-    /// # Arguments
-    ///
-    /// * `file_paths` - Legacy track grouping shape where each inner vector is
-    ///   interpreted as one track candidate set.
-    pub fn new_from_file_paths_legacy(file_paths: Vec<Vec<String>>) -> Self {
-        Self::new_from_file_paths_legacy_with_options(file_paths, PlayerInitOptions::default())
-    }
-
-    /// Create a new player for legacy standalone file-path groups with options.
-    ///
-    /// # Arguments
-    ///
-    /// * `file_paths` - Legacy track grouping shape where each inner vector is
-    ///   interpreted as one track candidate set.
-    /// * `options` - Player initialization options.
-    pub fn new_from_file_paths_legacy_with_options(
-        file_paths: Vec<Vec<String>>,
-        options: PlayerInitOptions,
-    ) -> Self {
-        Self::new_from_path_or_paths_with_options(
-            None,
-            Some(
-                file_paths
-                    .into_iter()
-                    .map(PathsTrack::new_from_file_paths)
-                    .collect(),
-            ),
-            options,
-        )
-    }
-
-    /// Create a player from either a container path or standalone file paths.
-    ///
-    /// Exactly one input source is expected. `path` takes precedence when
-    /// provided; otherwise `paths` is used for file-based playback.
-    ///
-    /// # Arguments
-    ///
-    /// * `path` - Optional container path.
-    /// * `paths` - Optional standalone track path groups.
-    pub fn new_from_path_or_paths(path: Option<&String>, paths: Option<Vec<PathsTrack>>) -> Self {
-        Self::new_from_path_or_paths_with_options(path, paths, PlayerInitOptions::default())
-    }
-
-    /// Create a player from either a container path or standalone file paths
-    /// with explicit initialization options.
-    ///
-    /// # Arguments
-    ///
-    /// * `path` - Optional container path.
-    /// * `paths` - Optional standalone track path groups.
-    /// * `options` - Player initialization options.
-    pub fn new_from_path_or_paths_with_options(
-        path: Option<&String>,
-        paths: Option<Vec<PathsTrack>>,
-        options: PlayerInitOptions,
-    ) -> Self {
-        let (prot, info) = match path {
-            Some(path) => {
-                let prot = Arc::new(Mutex::new(Prot::new(path)));
+    pub fn from_source_with_options(source: PlayerSource, options: PlayerInitOptions) -> Self {
+        let (prot, info) = match source {
+            PlayerSource::ContainerPath(path) => {
+                let prot = Arc::new(Mutex::new(Prot::new(&path)));
                 let info = {
                     let locked_prot = prot.lock().unwrap();
                     locked_prot.info.clone()
                 };
                 (prot, info)
             }
-            None => {
-                let prot = Arc::new(Mutex::new(Prot::new_from_file_paths(paths.unwrap())));
+            PlayerSource::FilePaths(paths) => {
+                let prot = Arc::new(Mutex::new(Prot::new_from_file_paths(paths)));
                 let locked_prot = prot.lock().unwrap();
                 let info = Info::new_from_file_paths(locked_prot.get_file_paths_dictionary());
                 drop(locked_prot);
@@ -338,6 +280,140 @@ impl Player {
         this.initialize_thread(None);
 
         this
+    }
+
+    /// Create a new player for a single container path.
+    ///
+    /// # Arguments
+    ///
+    /// * `file_path` - Path to a `.prot`/`.mka` container file.
+    pub fn new(file_path: &str) -> Self {
+        Self::from_source(PlayerSource::ContainerPath(file_path.to_string()))
+    }
+
+    /// Create a new player for a single container path with explicit options.
+    ///
+    /// # Arguments
+    ///
+    /// * `file_path` - Path to a `.prot`/`.mka` container file.
+    /// * `options` - Player initialization options.
+    pub fn new_with_options(file_path: &str, options: PlayerInitOptions) -> Self {
+        Self::from_source_with_options(PlayerSource::ContainerPath(file_path.to_string()), options)
+    }
+
+    /// Create a new player for a set of standalone file paths.
+    ///
+    /// # Arguments
+    ///
+    /// * `file_paths` - Pre-normalized track path groups.
+    pub fn new_from_file_paths(file_paths: Vec<PathsTrack>) -> Self {
+        Self::from_source(PlayerSource::FilePaths(file_paths))
+    }
+
+    /// Create a new player for standalone file paths with explicit options.
+    ///
+    /// # Arguments
+    ///
+    /// * `file_paths` - Pre-normalized track path groups.
+    /// * `options` - Player initialization options.
+    pub fn new_from_file_paths_with_options(
+        file_paths: Vec<PathsTrack>,
+        options: PlayerInitOptions,
+    ) -> Self {
+        Self::from_source_with_options(PlayerSource::FilePaths(file_paths), options)
+    }
+
+    /// Create a new player for legacy standalone file-path groups.
+    ///
+    /// # Arguments
+    ///
+    /// * `file_paths` - Legacy track grouping shape where each inner vector is
+    ///   interpreted as one track candidate set.
+    pub fn new_from_file_paths_legacy(file_paths: Vec<Vec<String>>) -> Self {
+        Self::new_from_file_paths_legacy_with_options(file_paths, PlayerInitOptions::default())
+    }
+
+    /// Create a new player for legacy standalone file-path groups with options.
+    ///
+    /// # Arguments
+    ///
+    /// * `file_paths` - Legacy track grouping shape where each inner vector is
+    ///   interpreted as one track candidate set.
+    /// * `options` - Player initialization options.
+    pub fn new_from_file_paths_legacy_with_options(
+        file_paths: Vec<Vec<String>>,
+        options: PlayerInitOptions,
+    ) -> Self {
+        let tracks = file_paths
+            .into_iter()
+            .map(PathsTrack::new_from_file_paths)
+            .collect();
+        Self::from_source_with_options(PlayerSource::FilePaths(tracks), options)
+    }
+
+    /// Create a player from either a container path or standalone file paths.
+    ///
+    /// Exactly one input source is expected. `path` takes precedence when
+    /// provided; otherwise `paths` is used for file-based playback.
+    ///
+    /// # Arguments
+    ///
+    /// * `path` - Optional container path.
+    /// * `paths` - Optional standalone track path groups.
+    pub fn new_from_path_or_paths(path: Option<&str>, paths: Option<Vec<PathsTrack>>) -> Self {
+        Self::new_from_path_or_paths_with_options(path, paths, PlayerInitOptions::default())
+    }
+
+    /// Create a player from either a container path or standalone file paths
+    /// with explicit initialization options.
+    ///
+    /// For a fallible constructor that returns a typed error when no source is
+    /// provided, see [`Self::try_new_from_path_or_paths_with_options`].
+    ///
+    /// # Arguments
+    ///
+    /// * `path` - Optional container path.
+    /// * `paths` - Optional standalone track path groups.
+    /// * `options` - Player initialization options.
+    pub fn new_from_path_or_paths_with_options(
+        path: Option<&str>,
+        paths: Option<Vec<PathsTrack>>,
+        options: PlayerInitOptions,
+    ) -> Self {
+        Self::try_new_from_path_or_paths_with_options(path, paths, options).unwrap_or_else(|err| {
+            panic!("Player initialization failed: {}", err);
+        })
+    }
+
+    /// Fallible constructor from optional container/file-path inputs.
+    ///
+    /// # Arguments
+    ///
+    /// * `path` - Optional container path.
+    /// * `paths` - Optional standalone track path groups.
+    /// * `options` - Player initialization options.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PlayerInitError::MissingSource`] when both `path` and `paths`
+    /// are missing.
+    pub fn try_new_from_path_or_paths_with_options(
+        path: Option<&str>,
+        paths: Option<Vec<PathsTrack>>,
+        options: PlayerInitOptions,
+    ) -> Result<Self, PlayerInitError> {
+        if let Some(path) = path {
+            return Ok(Self::from_source_with_options(
+                PlayerSource::ContainerPath(path.to_string()),
+                options,
+            ));
+        }
+
+        let file_paths = paths.ok_or(PlayerInitError::MissingSource)?;
+        Ok(Self::from_source_with_options(
+            PlayerSource::FilePaths(file_paths),
+            options,
+        ))
     }
 }
 

@@ -40,6 +40,22 @@ pub struct SettingsTrack {
     pub shuffle_points: Vec<String>,
 }
 
+/// Shared payload used by versioned `play_settings.json` schemas.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PlaySettingsPayload {
+    #[serde(default)]
+    pub effects: Vec<EffectSettings>,
+    #[serde(default)]
+    pub tracks: Vec<SettingsTrack>,
+}
+
+/// Top-level wrapper shared by versioned settings files.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VersionedPlaySettingsFile<T> {
+    #[serde(flatten)]
+    pub settings: PlaySettingsContainer<T>,
+}
+
 fn default_selections_count() -> u32 {
     1
 }
@@ -233,5 +249,16 @@ mod tests {
             serde_json::from_str(r#"{"encoder_version": "99", "play_settings": {}}"#).unwrap();
         assert!(matches!(parsed, PlaySettingsFile::Unknown { .. }));
         assert_eq!(parsed.encoder_version(), Some("99"));
+    }
+
+    #[test]
+    fn versioned_payload_defaults_to_empty_lists() {
+        let v1: PlaySettingsV1 = serde_json::from_str("{}").unwrap();
+        let v2: PlaySettingsV2 = serde_json::from_str("{}").unwrap();
+        let v3: PlaySettingsV3 = serde_json::from_str("{}").unwrap();
+
+        assert!(v1.effects.is_empty() && v1.tracks.is_empty());
+        assert!(v2.effects.is_empty() && v2.tracks.is_empty());
+        assert!(v3.effects.is_empty() && v3.tracks.is_empty());
     }
 }

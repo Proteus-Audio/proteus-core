@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use log::{info, warn};
+use log::{debug, info, warn};
 
 use crate::diagnostics::reporter::{Report, Reporter};
 
@@ -24,7 +24,7 @@ impl Player {
         let trace_ms = current_ms();
         self.play_command_ms
             .store(trace_ms, std::sync::atomic::Ordering::Relaxed);
-        info!("play trace: play_at requested ts={:.3}", ts);
+        debug!("play trace: play_at requested ts={:.3}", ts);
         let mut timestamp = self.ts.lock().unwrap();
         *timestamp = ts;
         drop(timestamp);
@@ -32,18 +32,18 @@ impl Player {
         self.request_effects_reset();
         self.clear_inline_effects_update();
         self.kill_current();
-        info!(
+        debug!(
             "play trace: play_at after kill_current +{}ms",
             current_ms().saturating_sub(trace_ms)
         );
         self.initialize_thread(Some(ts));
-        info!(
+        debug!(
             "play trace: play_at after initialize_thread +{}ms",
             current_ms().saturating_sub(trace_ms)
         );
 
         self.resume();
-        info!(
+        debug!(
             "play trace: play_at after resume() request +{}ms",
             current_ms().saturating_sub(trace_ms)
         );
@@ -62,7 +62,7 @@ impl Player {
         let thread_exists = self
             .playback_thread_exists
             .load(std::sync::atomic::Ordering::SeqCst);
-        info!(
+        debug!(
             "play trace: play requested thread_exists={} state={:?}",
             thread_exists,
             *self.state.lock().unwrap()
@@ -70,14 +70,14 @@ impl Player {
 
         if !thread_exists {
             self.initialize_thread(None);
-            info!(
+            debug!(
                 "play trace: play after initialize_thread +{}ms",
                 current_ms().saturating_sub(trace_ms)
             );
         }
 
         self.resume();
-        info!(
+        debug!(
             "play trace: play after resume() request +{}ms",
             current_ms().saturating_sub(trace_ms)
         );
@@ -96,12 +96,12 @@ impl Player {
             .play_command_ms
             .load(std::sync::atomic::Ordering::Relaxed);
         if trace_ms > 0 {
-            info!(
+            debug!(
                 "play trace: resume requested +{}ms",
                 current_ms().saturating_sub(trace_ms)
             );
         } else {
-            info!("play trace: resume requested");
+            debug!("play trace: resume requested");
         }
         self.state
             .lock()
@@ -309,7 +309,7 @@ impl Player {
             .play_command_ms
             .load(std::sync::atomic::Ordering::Relaxed);
         if trace_ms > 0 {
-            info!(
+            debug!(
                 "play trace: wait_for_audio_heard start timeout_ms={} +{}ms",
                 timeout.as_millis(),
                 current_ms().saturating_sub(trace_ms)
@@ -319,7 +319,7 @@ impl Player {
         loop {
             if self.audio_heard.load(std::sync::atomic::Ordering::Relaxed) {
                 if trace_ms > 0 {
-                    info!(
+                    debug!(
                         "play trace: audio_heard observed +{}ms (waited {}ms)",
                         current_ms().saturating_sub(trace_ms),
                         start.elapsed().as_millis()

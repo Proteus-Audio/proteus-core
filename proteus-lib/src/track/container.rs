@@ -43,6 +43,21 @@ pub fn buffer_container_tracks(args: ContainerTrackArgs, abort: Arc<AtomicBool>)
         track_eos_ms,
     } = args;
 
+    let format = match crate::tools::decode::get_reader(&file_path) {
+        Ok(format) => format,
+        Err(err) => {
+            return thread::spawn(move || {
+                warn!("failed to open container '{}': {}", file_path, err);
+                for (track_key, _) in &track_entries {
+                    mark_track_as_finished(&mut finished_tracks.clone(), *track_key);
+                }
+                if let Some(notify) = buffer_notify.as_ref() {
+                    notify.notify_all();
+                }
+            });
+        }
+    };
+
     let (
         mut format,
         mut decoders,
@@ -52,7 +67,6 @@ pub fn buffer_container_tracks(args: ContainerTrackArgs, abort: Arc<AtomicBool>)
         keys_for_track,
         valid_entries,
     ) = {
-        let format = crate::tools::tools::get_reader(&file_path);
         let mut decoders: HashMap<u32, Box<dyn Decoder>> = HashMap::new();
         let mut durations: HashMap<u32, Option<u64>> = HashMap::new();
         let mut time_bases: HashMap<u32, Option<TimeBase>> = HashMap::new();

@@ -32,7 +32,24 @@ pub(crate) fn spawn_container_decode_worker(
         let startup_trace = Instant::now();
         let mut logged_first_ready = false;
         let mut logged_first_send = false;
-        let mut format = crate::tools::tools::get_reader(&file_path);
+        let mut format = match crate::tools::decode::get_reader(&file_path) {
+            Ok(format) => format,
+            Err(err) => {
+                error!(
+                    "container worker open failed: source={} err={}",
+                    file_path, err
+                );
+                for track_id in track_ids {
+                    let _ = sender.send(Some(DecodedPacket {
+                        source_key: SourceKey::TrackId(track_id),
+                        packet_ts: 0.0,
+                        samples: Vec::new(),
+                        eos_flag: true,
+                    }));
+                }
+                return;
+            }
+        };
         let mut decoders: HashMap<u32, Box<dyn Decoder>> = HashMap::new();
         let mut time_bases: HashMap<u32, Option<TimeBase>> = HashMap::new();
         let mut sample_rates: HashMap<u32, Option<u32>> = HashMap::new();

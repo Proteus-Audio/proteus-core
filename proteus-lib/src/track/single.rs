@@ -11,7 +11,7 @@ use symphonia::core::formats::{SeekMode, SeekTo};
 use symphonia::core::units::Time;
 
 use crate::audio::buffer::TrackBufferMap;
-use crate::tools::tools::open_file;
+use crate::tools::decode::open_file;
 
 use super::buffer::{add_samples_to_buffer_map, mark_track_as_finished};
 use super::convert::{decoded_format_label, process_channel};
@@ -45,9 +45,21 @@ pub fn buffer_track(args: TrackArgs, abort: Arc<AtomicBool>) -> JoinHandle<()> {
     let _track_weights = track_weights;
     // TODO: Apply `_track_weights` to scale per-track samples when weighting single-track buffers.
 
-    let (mut decoder, mut format) = open_file(&file_path);
+    let opened = open_file(&file_path);
 
     thread::spawn(move || {
+        let (mut decoder, mut format) = match opened {
+            Ok(opened) => opened,
+            Err(err) => {
+                warn!("failed to open track '{}': {}", file_path, err);
+                mark_track_as_finished(&mut finished_tracks.clone(), track_key);
+                if let Some(notify) = buffer_notify.as_ref() {
+                    notify.notify_all();
+                }
+                return;
+            }
+        };
+
         // Locate the track to decode. Use the requested track ID if present,
         // otherwise fall back to the first supported audio track.
         let found = match track_id {

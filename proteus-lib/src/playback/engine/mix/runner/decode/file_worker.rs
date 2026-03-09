@@ -13,7 +13,7 @@ use symphonia::core::errors::Error;
 use symphonia::core::formats::{SeekMode, SeekTo};
 use symphonia::core::units::Time;
 
-use crate::tools::tools::open_file;
+use crate::tools::decode::open_file;
 
 use super::super::super::buffer_mixer::{DecodeBackpressure, SourceKey};
 use super::super::super::decoder_events::DecodedPacket;
@@ -32,7 +32,19 @@ pub(crate) fn spawn_file_decode_worker(
         let startup_trace = Instant::now();
         let mut logged_first_ready = false;
         let mut logged_first_send = false;
-        let (mut decoder, mut format) = open_file(&file_path);
+        let (mut decoder, mut format) = match open_file(&file_path) {
+            Ok(opened) => opened,
+            Err(err) => {
+                debug!("file worker open failed: source={} err={}", file_path, err);
+                let _ = sender.send(Some(DecodedPacket {
+                    source_key: SourceKey::FilePath(file_path),
+                    packet_ts: 0.0,
+                    samples: Vec::new(),
+                    eos_flag: true,
+                }));
+                return;
+            }
+        };
         let Some(track) = format
             .tracks()
             .iter()

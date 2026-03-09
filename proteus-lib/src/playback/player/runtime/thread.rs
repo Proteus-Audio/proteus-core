@@ -3,7 +3,7 @@
 //! This module prepares shared state, resets per-run counters, and spawns the
 //! worker loop that performs decoding handoff and sink append operations.
 
-use log::info;
+use log::debug;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread;
@@ -23,13 +23,13 @@ impl Player {
         let trace_ms = self.play_command_ms.load(Ordering::Relaxed);
         let now = now_ms();
         if trace_ms > 0 {
-            info!(
+            debug!(
                 "play trace: initialize_thread start ts={:?} +{}ms",
                 ts,
                 now.saturating_sub(trace_ms)
             );
         } else {
-            info!("play trace: initialize_thread start ts={:?}", ts);
+            debug!("play trace: initialize_thread start ts={:?}", ts);
         }
         self.join_playback_thread();
 
@@ -66,9 +66,9 @@ impl Player {
         if trace_ms > 0 {
             let elapsed_ms = now_ms().saturating_sub(trace_ms);
             if opened_now {
-                info!("play trace: output stream opened +{}ms", elapsed_ms);
+                debug!("play trace: output stream opened +{}ms", elapsed_ms);
             } else {
-                info!("play trace: output stream reused +{}ms", elapsed_ms);
+                debug!("play trace: output stream reused +{}ms", elapsed_ms);
             }
         }
 
@@ -81,12 +81,10 @@ impl Player {
             duration: self.duration.clone(),
             prot: self.prot.clone(),
             buffer_settings: self.buffer_settings.clone(),
-            buffer_settings_for_state: self.buffer_settings.clone(),
             effects: self.effects.clone(),
             inline_effects_update: self.inline_effects_update.clone(),
             inline_track_mix_updates: self.inline_track_mix_updates.clone(),
             dsp_metrics: self.dsp_metrics.clone(),
-            dsp_metrics_for_sink: self.dsp_metrics.clone(),
             effects_reset: self.effects_reset.clone(),
             output_meter: self.output_meter.clone(),
             audio_info: self.info.clone(),
@@ -105,13 +103,13 @@ impl Player {
         let handle = thread::spawn(move || run_playback_thread(context, playback_id, ts));
         *self.playback_thread_handle.lock().unwrap() = Some(handle);
         if trace_ms > 0 {
-            info!(
+            debug!(
                 "play trace: initialize_thread spawned playback_id={} +{}ms",
                 playback_id,
                 now_ms().saturating_sub(trace_ms)
             );
         } else {
-            info!(
+            debug!(
                 "play trace: initialize_thread spawned playback_id={}",
                 playback_id
             );

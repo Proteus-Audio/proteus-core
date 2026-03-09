@@ -1,33 +1,8 @@
 //! `play_settings.json` version 1 schema.
 
-use serde::{Deserialize, Serialize};
-
-use super::{EffectSettings, PlaySettingsContainer, SettingsTrack};
-
-/// Top-level wrapper for V1 settings files.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PlaySettingsV1File {
-    #[serde(flatten)]
-    pub settings: PlaySettingsContainer<PlaySettingsV1>,
-}
+use super::{PlaySettingsPayload, VersionedPlaySettingsFile};
 
 /// Version 1 settings payload.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PlaySettingsV1 {
-    #[serde(default)]
-    pub effects: Vec<EffectSettings>,
-    #[serde(default)]
-    pub tracks: Vec<SettingsTrack>,
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn v1_defaults_to_empty_lists() {
-        let parsed: PlaySettingsV1 = serde_json::from_str("{}").unwrap();
-        assert!(parsed.effects.is_empty());
-        assert!(parsed.tracks.is_empty());
-    }
-}
+pub type PlaySettingsV1 = PlaySettingsPayload;
+/// Top-level wrapper for V1 settings files.
+pub type PlaySettingsV1File = VersionedPlaySettingsFile<PlaySettingsV1>;

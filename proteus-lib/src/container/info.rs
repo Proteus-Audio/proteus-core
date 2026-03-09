@@ -25,12 +25,16 @@ use symphonia::core::{
 #[derive(Debug)]
 pub enum InfoError {
     IncompatibleTracks(String),
+    ProbeFailed(String),
+    NoTracksFound,
 }
 
 impl std::fmt::Display for InfoError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::IncompatibleTracks(msg) => write!(f, "incompatible tracks: {}", msg),
+            Self::ProbeFailed(msg) => write!(f, "probe failed: {}", msg),
+            Self::NoTracksFound => write!(f, "no tracks found in media source"),
         }
     }
 }
@@ -122,10 +126,17 @@ fn probe_with_hint(
 ///
 /// For container files, this may be approximate if metadata is inaccurate.
 pub fn get_durations(file_path: &str) -> HashMap<u32, f64> {
-    let mut probed = match get_probe_result_from_string(file_path) {
-        Ok(probed) => probed,
-        Err(_) => return fallback_durations(file_path),
-    };
+    try_get_durations(file_path).unwrap_or_else(|_| fallback_durations(file_path))
+}
+
+/// Strict duration mapping per track using metadata or frame counts.
+///
+/// # Errors
+///
+/// Returns [`InfoError`] when probing fails or no tracks are available.
+pub fn try_get_durations(file_path: &str) -> Result<HashMap<u32, f64>, InfoError> {
+    let mut probed = get_probe_result_from_string(file_path)
+        .map_err(|err| InfoError::ProbeFailed(err.to_string()))?;
 
     let mut durations: Vec<f64> = Vec::new();
 
@@ -150,7 +161,7 @@ pub fn get_durations(file_path: &str) -> HashMap<u32, f64> {
     let mut duration_map: HashMap<u32, f64> = HashMap::new();
 
     if probed.format.tracks().is_empty() {
-        return fallback_durations(file_path);
+        return Err(InfoError::NoTracksFound);
     }
 
     for (index, track) in probed.format.tracks().iter().enumerate() {
@@ -164,7 +175,7 @@ pub fn get_durations(file_path: &str) -> HashMap<u32, f64> {
         duration_map.insert(track.id, duration);
     }
 
-    duration_map
+    Ok(duration_map)
 }
 
 fn get_durations_best_effort(file_path: &str) -> HashMap<u32, f64> {
@@ -179,12 +190,19 @@ fn get_durations_best_effort(file_path: &str) -> HashMap<u32, f64> {
 
 /// Scan all packets to compute per-track durations (accurate but slower).
 pub fn get_durations_by_scan(file_path: &str) -> HashMap<u32, f64> {
-    let mut probed = match get_probe_result_from_string(file_path) {
-        Ok(probed) => probed,
-        Err(_) => return fallback_durations(file_path),
-    };
+    try_get_durations_by_scan(file_path).unwrap_or_else(|_| fallback_durations(file_path))
+}
+
+/// Strict packet-scan duration mapping per track.
+///
+/// # Errors
+///
+/// Returns [`InfoError`] when probing fails or when no tracks are present.
+pub fn try_get_durations_by_scan(file_path: &str) -> Result<HashMap<u32, f64>, InfoError> {
+    let mut probed = get_probe_result_from_string(file_path)
+        .map_err(|err| InfoError::ProbeFailed(err.to_string()))?;
     if probed.format.tracks().is_empty() {
-        return fallback_durations(file_path);
+        return Err(InfoError::NoTracksFound);
     }
     let mut max_ts: HashMap<u32, u64> = HashMap::new();
     let mut time_bases: HashMap<u32, Option<TimeBase>> = HashMap::new();
@@ -216,7 +234,7 @@ pub fn get_durations_by_scan(file_path: &str) -> HashMap<u32, f64> {
         duration_map.insert(track_id, seconds);
     }
 
-    duration_map
+    Ok(duration_map)
 }
 
 /// Aggregate codec information for a track.

@@ -124,7 +124,7 @@ impl PlayerEngine {
         let keys = prot.get_keys();
         drop(prot);
         self.ready_buffer_map(&keys);
-        let receiver = self.get_receiver();
+        let receiver = self.spawn_mix_receiver();
 
         for (mixer, length_in_seconds) in receiver {
             f((mixer, length_in_seconds));
@@ -137,10 +137,10 @@ impl PlayerEngine {
         let keys = prot.get_keys();
         drop(prot);
         self.ready_buffer_map(&keys);
-        self.get_receiver()
+        self.spawn_mix_receiver()
     }
 
-    fn get_receiver(&mut self) -> Receiver<(SamplesBuffer, f64)> {
+    fn spawn_mix_receiver(&mut self) -> Receiver<(SamplesBuffer, f64)> {
         let prot = self.prot.lock().unwrap();
         let audio_info = prot.info.clone();
         drop(prot);
