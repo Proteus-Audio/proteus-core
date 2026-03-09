@@ -71,17 +71,8 @@ impl std::fmt::Debug for DelayReverbEffect {
     }
 }
 
-impl DelayReverbEffect {
-    /// Create a new delay reverb effect.
-    pub fn new(mix: f32) -> Self {
-        Self {
-            mix: mix.clamp(0.0, 1.0),
-            ..Default::default()
-        }
-    }
-
-    /// Process interleaved samples through a feedback delay line.
-    pub fn process(&mut self, samples: &[f32], context: &EffectContext, _drain: bool) -> Vec<f32> {
+impl crate::dsp::effects::core::DspEffect for DelayReverbEffect {
+    fn process(&mut self, samples: &[f32], context: &EffectContext, drain: bool) -> Vec<f32> {
         self.ensure_state(context);
         if !self.enabled || self.mix <= 0.0 {
             return samples.to_vec();
@@ -98,7 +89,7 @@ impl DelayReverbEffect {
         };
 
         if samples.is_empty() {
-            if _drain {
+            if drain {
                 return state.drain_tail(amplitude);
             }
             return Vec::new();
@@ -109,12 +100,21 @@ impl DelayReverbEffect {
         output
     }
 
-    /// Reset any internal state (none for delay reverb).
-    pub fn reset_state(&mut self) {
+    fn reset_state(&mut self) {
         if let Some(state) = self.state.as_mut() {
             state.reset();
         }
         self.state = None;
+    }
+}
+
+impl DelayReverbEffect {
+    /// Create a new delay reverb effect.
+    pub fn new(mix: f32) -> Self {
+        Self {
+            mix: mix.clamp(0.0, 1.0),
+            ..Default::default()
+        }
     }
 
     /// Mutable access to settings.
@@ -224,6 +224,7 @@ pub type BasicReverbEffect = DelayReverbEffect;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::dsp::effects::core::DspEffect;
 
     fn context() -> EffectContext {
         EffectContext {

@@ -54,17 +54,8 @@ impl std::fmt::Debug for HighPassFilterEffect {
     }
 }
 
-impl HighPassFilterEffect {
-    /// Process interleaved samples through the high-pass filter.
-    ///
-    /// # Arguments
-    /// - `samples`: Interleaved input samples.
-    /// - `context`: Environment details (sample rate, channels, etc.).
-    /// - `drain`: Unused for this effect.
-    ///
-    /// # Returns
-    /// Processed interleaved samples.
-    pub fn process(&mut self, samples: &[f32], context: &EffectContext, _drain: bool) -> Vec<f32> {
+impl super::core::DspEffect for HighPassFilterEffect {
+    fn process(&mut self, samples: &[f32], context: &EffectContext, _drain: bool) -> Vec<f32> {
         if !self.enabled {
             return samples.to_vec();
         }
@@ -77,14 +68,15 @@ impl HighPassFilterEffect {
         state.process(samples)
     }
 
-    /// Reset any internal state held by the filter.
-    pub fn reset_state(&mut self) {
+    fn reset_state(&mut self) {
         if let Some(state) = self.state.as_mut() {
             state.reset();
         }
         self.state = None;
     }
+}
 
+impl HighPassFilterEffect {
     fn ensure_state(&mut self, context: &EffectContext) {
         let needs_reset = self
             .state
@@ -114,6 +106,7 @@ impl HighPassFilterEffect {
 
 #[cfg(test)]
 mod tests {
+    use super::super::core::DspEffect;
     use super::*;
 
     fn context() -> EffectContext {

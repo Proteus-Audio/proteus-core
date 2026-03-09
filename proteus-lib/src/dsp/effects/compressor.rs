@@ -86,17 +86,8 @@ impl std::fmt::Debug for CompressorEffect {
     }
 }
 
-impl CompressorEffect {
-    /// Process interleaved samples through the compressor.
-    ///
-    /// # Arguments
-    /// - `samples`: Interleaved input samples.
-    /// - `context`: Environment details (sample rate, channels, etc.).
-    /// - `drain`: Unused for this effect.
-    ///
-    /// # Returns
-    /// Processed interleaved samples.
-    pub fn process(&mut self, samples: &[f32], context: &EffectContext, _drain: bool) -> Vec<f32> {
+impl super::core::DspEffect for CompressorEffect {
+    fn process(&mut self, samples: &[f32], context: &EffectContext, _drain: bool) -> Vec<f32> {
         if !self.enabled {
             return samples.to_vec();
         }
@@ -132,14 +123,15 @@ impl CompressorEffect {
         output
     }
 
-    /// Reset any internal state held by the compressor.
-    pub fn reset_state(&mut self) {
+    fn reset_state(&mut self) {
         if let Some(state) = self.state.as_mut() {
             state.reset();
         }
         self.state = None;
     }
+}
 
+impl CompressorEffect {
     fn ensure_state(&mut self, context: &EffectContext) {
         let threshold_db = sanitize_threshold_db(self.settings.threshold_db);
         let ratio = sanitize_ratio(self.settings.ratio);
@@ -281,6 +273,7 @@ fn sanitize_makeup_db(value: f32) -> f32 {
 
 #[cfg(test)]
 mod tests {
+    use super::super::core::DspEffect;
     use super::*;
 
     fn context(channels: usize) -> EffectContext {

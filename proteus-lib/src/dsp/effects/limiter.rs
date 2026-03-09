@@ -79,17 +79,8 @@ impl std::fmt::Debug for LimiterEffect {
     }
 }
 
-impl LimiterEffect {
-    /// Process interleaved samples through the limiter.
-    ///
-    /// # Arguments
-    /// - `samples`: Interleaved input samples.
-    /// - `context`: Environment details (sample rate, channels, etc.).
-    /// - `drain`: Unused for this effect.
-    ///
-    /// # Returns
-    /// Processed interleaved samples.
-    pub fn process(&mut self, samples: &[f32], context: &EffectContext, _drain: bool) -> Vec<f32> {
+impl super::core::DspEffect for LimiterEffect {
+    fn process(&mut self, samples: &[f32], context: &EffectContext, _drain: bool) -> Vec<f32> {
         if !self.enabled {
             return samples.to_vec();
         }
@@ -106,14 +97,15 @@ impl LimiterEffect {
         state.process(samples)
     }
 
-    /// Reset any internal state held by the limiter.
-    pub fn reset_state(&mut self) {
+    fn reset_state(&mut self) {
         if let Some(state) = self.state.as_mut() {
             state.reset();
         }
         self.state = None;
     }
+}
 
+impl LimiterEffect {
     fn ensure_state(&mut self, context: &EffectContext) {
         let settings = sanitize_settings(&self.settings);
         let channels = context.channels.max(1);
@@ -280,6 +272,7 @@ fn sanitize_time_ms(value: f32, fallback: f32) -> f32 {
 
 #[cfg(test)]
 mod tests {
+    use super::super::core::DspEffect;
     use super::*;
 
     fn context(channels: usize) -> EffectContext {

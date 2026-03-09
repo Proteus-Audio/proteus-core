@@ -164,35 +164,8 @@ impl std::fmt::Debug for DiffusionReverbEffect {
     }
 }
 
-impl DiffusionReverbEffect {
-    /// Create a new diffusion reverb effect with default settings.
-    ///
-    /// # Arguments
-    /// - `mix`: Wet/dry mix in the range `[0.0, 1.0]`.
-    ///
-    /// # Returns
-    /// The configured diffusion reverb effect.
-    pub fn new(mix: f32) -> Self {
-        Self {
-            mix: mix.clamp(0.0, 1.0),
-            ..Default::default()
-        }
-    }
-
-    /// Process interleaved samples through the diffusion reverb.
-    ///
-    /// # Arguments
-    /// - `samples`: Interleaved input samples.
-    /// - `context`: Environment details (sample rate, channels, etc.).
-    /// - `drain`: When true and `samples` is empty, flush buffered tail data.
-    ///
-    /// # Returns
-    /// Processed interleaved samples.
-    ///
-    /// # Notes
-    /// - Input is treated as interleaved frames using `context.channels`.
-    /// - If the buffer length is not frame-aligned, trailing samples are passed through unchanged.
-    pub fn process(&mut self, samples: &[f32], context: &EffectContext, drain: bool) -> Vec<f32> {
+impl crate::dsp::effects::core::DspEffect for DiffusionReverbEffect {
+    fn process(&mut self, samples: &[f32], context: &EffectContext, drain: bool) -> Vec<f32> {
         self.ensure_state(context);
         if !self.enabled || self.mix <= 0.0 {
             return samples.to_vec();
@@ -237,16 +210,28 @@ impl DiffusionReverbEffect {
         output
     }
 
-    /// Reset all internal delay/filter buffers and drop the current state.
-    ///
-    /// # Returns
-    /// Nothing.
-    pub fn reset_state(&mut self) {
+    fn reset_state(&mut self) {
         if let Some(state) = self.state.as_mut() {
             state.reset();
         }
         self.state = None;
         self.tail_drained = false;
+    }
+}
+
+impl DiffusionReverbEffect {
+    /// Create a new diffusion reverb effect with default settings.
+    ///
+    /// # Arguments
+    /// - `mix`: Wet/dry mix in the range `[0.0, 1.0]`.
+    ///
+    /// # Returns
+    /// The configured diffusion reverb effect.
+    pub fn new(mix: f32) -> Self {
+        Self {
+            mix: mix.clamp(0.0, 1.0),
+            ..Default::default()
+        }
     }
 
     /// Mutable access to the diffusion reverb settings.
@@ -712,6 +697,7 @@ fn delay_samples(sample_rate: u32, duration_ms: u64) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::dsp::effects::core::DspEffect;
 
     fn context() -> EffectContext {
         EffectContext {

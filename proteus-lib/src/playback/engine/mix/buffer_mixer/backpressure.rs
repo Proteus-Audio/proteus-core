@@ -23,7 +23,7 @@ struct DecodeBackpressureState {
     source_to_instances: HashMap<SourceKey, Vec<usize>>,
 }
 
-    /// Shared gate used by decode workers to avoid overrunning per-instance buffers.
+/// Shared gate used by decode workers to avoid overrunning per-instance buffers.
 #[derive(Debug, Default)]
 pub(crate) struct DecodeBackpressure {
     state: Mutex<DecodeBackpressureState>,

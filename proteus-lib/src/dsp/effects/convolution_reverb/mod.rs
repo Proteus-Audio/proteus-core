@@ -93,6 +93,34 @@ impl Default for ConvolutionReverbEffect {
     }
 }
 
+impl crate::dsp::effects::core::DspEffect for ConvolutionReverbEffect {
+    fn process(&mut self, samples: &[f32], context: &EffectContext, drain: bool) -> Vec<f32> {
+        self.ensure_state(context);
+        if !self.enabled || self.dry_wet <= 0.0 {
+            return samples.to_vec();
+        }
+
+        let Some(state) = self.state.as_mut() else {
+            return samples.to_vec();
+        };
+
+        state.reverb.set_dry_wet(self.dry_wet);
+        state.process(samples, drain)
+    }
+
+    fn reset_state(&mut self) {
+        if let Some(state) = self.state.as_mut() {
+            state.reset();
+        }
+        self.state = None;
+        self.resolved_config = None;
+    }
+
+    fn warm_up(&mut self, context: &EffectContext) {
+        let _ = self.process(&[], context, false);
+    }
+}
+
 impl ConvolutionReverbEffect {
     /// Create a new convolution reverb effect.
     pub fn new(dry_wet: f32) -> Self {
@@ -110,41 +138,6 @@ impl ConvolutionReverbEffect {
     /// Mutable access to the stored impulse response settings.
     pub fn settings_mut(&mut self) -> &mut ConvolutionReverbSettings {
         &mut self.settings
-    }
-
-    /// Process interleaved samples through the reverb.
-    ///
-    /// # Arguments
-    /// - `samples`: Interleaved input samples.
-    /// - `context`: Environment details (sample rate, channels, etc.).
-    /// - `drain`: When true, flush buffered tail data if present.
-    ///
-    /// # Returns
-    /// Processed interleaved samples.
-    pub fn process(&mut self, samples: &[f32], context: &EffectContext, drain: bool) -> Vec<f32> {
-        self.ensure_state(context);
-        if !self.enabled || self.dry_wet <= 0.0 {
-            return samples.to_vec();
-        }
-
-        let Some(state) = self.state.as_mut() else {
-            return samples.to_vec();
-        };
-
-        state.reverb.set_dry_wet(self.dry_wet);
-        state.process(samples, drain)
-    }
-
-    /// Clear all internal buffers and convolution history.
-    ///
-    /// # Returns
-    /// Nothing.
-    pub fn reset_state(&mut self) {
-        if let Some(state) = self.state.as_mut() {
-            state.reset();
-        }
-        self.state = None;
-        self.resolved_config = None;
     }
 
     fn ensure_state(&mut self, context: &EffectContext) {
@@ -582,6 +575,7 @@ impl ConvolutionReverbSettings {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::dsp::effects::core::DspEffect;
 
     #[test]
     fn resolve_impulse_response_path_uses_container_parent_for_relative_paths() {

@@ -46,17 +46,8 @@ impl std::fmt::Debug for GainEffect {
     }
 }
 
-impl GainEffect {
-    /// Process interleaved samples through the gain effect.
-    ///
-    /// # Arguments
-    /// - `samples`: Interleaved input samples.
-    /// - `context`: Environment details (unused for this effect).
-    /// - `drain`: Unused for this effect.
-    ///
-    /// # Returns
-    /// Processed interleaved samples.
-    pub fn process(&mut self, samples: &[f32], _context: &EffectContext, _drain: bool) -> Vec<f32> {
+impl super::core::DspEffect for GainEffect {
+    fn process(&mut self, samples: &[f32], _context: &EffectContext, _drain: bool) -> Vec<f32> {
         if !self.enabled {
             return samples.to_vec();
         }
@@ -74,13 +65,13 @@ impl GainEffect {
         out
     }
 
-    /// Reset any internal state (none for gain).
-    pub fn reset_state(&mut self) {}
+    fn reset_state(&mut self) {}
 }
 
 #[cfg(test)]
 mod tests {
     use super::super::core::level::db_to_linear;
+    use super::super::core::DspEffect;
     use super::*;
 
     fn context() -> EffectContext {
