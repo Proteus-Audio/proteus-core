@@ -10,3 +10,19 @@ mod playback_runner;
 pub mod runner;
 pub mod ui;
 pub mod verify;
+
+#[cfg(test)]
+mod tests {
+    use super::args::build_cli;
+
+    #[test]
+    fn cli_root_registers_expected_subcommands() {
+        let command = build_cli();
+        for name in ["bench", "verify", "info", "peaks", "init", "create"] {
+            assert!(
+                command.get_subcommands().any(|sub| sub.get_name() == name),
+                "missing subcommand: {name}"
+            );
+        }
+    }
+}

@@ -85,3 +85,14 @@ impl Drop for RawModeGuard {
         let _ = terminal::disable_raw_mode();
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::run_info;
+
+    #[test]
+    fn info_print_mode_returns_success() {
+        let code = run_info("/definitely/missing/audio.file", true);
+        assert_eq!(code, 0);
+    }
+}

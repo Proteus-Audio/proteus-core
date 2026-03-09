@@ -328,3 +328,44 @@ impl Drop for RawModeGuard {
         let _ = terminal::disable_raw_mode();
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        collections::VecDeque,
+        sync::{Arc, Mutex},
+    };
+
+    use clap::{Arg, ArgAction, Command};
+
+    use super::{maybe_print_durations, run_playback};
+    use crate::logging::LogLine;
+
+    #[test]
+    fn maybe_print_durations_returns_none_without_duration_flags() {
+        let args = Command::new("prot")
+            .arg(
+                Arg::new("scan-durations")
+                    .long("scan-durations")
+                    .action(ArgAction::SetTrue),
+            )
+            .arg(
+                Arg::new("read-durations")
+                    .long("read-durations")
+                    .action(ArgAction::SetTrue),
+            )
+            .get_matches_from(["prot"]);
+        assert_eq!(maybe_print_durations(&args, "ignored"), None);
+    }
+
+    #[test]
+    fn run_playback_without_input_returns_error_code() {
+        let args = Command::new("prot")
+            .arg(Arg::new("INPUT").required(false))
+            .get_matches_from(["prot"]);
+        let logs = Arc::new(Mutex::new(VecDeque::<LogLine>::new()));
+
+        let code = run_playback(&args, logs).expect("runner should return result");
+        assert_eq!(code, -1);
+    }
+}

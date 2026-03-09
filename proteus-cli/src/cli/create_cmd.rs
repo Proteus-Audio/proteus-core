@@ -18,3 +18,14 @@ pub(crate) fn run_create_effects_json() -> i32 {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::run_create_effects_json;
+
+    #[test]
+    fn create_effects_json_returns_success() {
+        let code = run_create_effects_json();
+        assert_eq!(code, 0);
+    }
+}

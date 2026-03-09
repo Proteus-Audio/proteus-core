@@ -78,3 +78,40 @@ fn run_init(args: &ArgMatches) -> i32 {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        collections::VecDeque,
+        sync::{Arc, Mutex},
+    };
+
+    use clap::Command;
+
+    use super::run;
+    use crate::{cli::args::build_cli, logging::LogLine};
+
+    fn empty_log_buffer() -> Arc<Mutex<VecDeque<LogLine>>> {
+        Arc::new(Mutex::new(VecDeque::new()))
+    }
+
+    #[test]
+    fn verify_without_nested_subcommand_returns_error_code() {
+        let args = Command::new("prot")
+            .subcommand(Command::new("verify"))
+            .get_matches_from(["prot", "verify"]);
+
+        let code = run(&args, empty_log_buffer()).expect("runner should return result");
+        assert_eq!(code, -1);
+    }
+
+    #[test]
+    fn init_with_missing_directory_returns_error_code() {
+        let args = build_cli()
+            .try_get_matches_from(["prot", "init", "/definitely/missing/dir"])
+            .expect("cli should parse");
+
+        let code = run(&args, empty_log_buffer()).expect("runner should return result");
+        assert_eq!(code, -1);
+    }
+}
