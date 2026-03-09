@@ -173,22 +173,40 @@ pub(in crate::playback::player::runtime) fn run_playback_thread(
 // `Some(OutputStream)` on success, otherwise `None` after all retries fail.
 pub(in crate::playback::player::runtime) fn open_output_stream_with_retry() -> Option<OutputStream>
 {
-    for attempt in 1..=OUTPUT_STREAM_OPEN_RETRIES {
-        match OutputStreamBuilder::open_default_stream() {
+    open_output_stream_with_retry_hooks(
+        OUTPUT_STREAM_OPEN_RETRIES,
+        OUTPUT_STREAM_OPEN_RETRY_MS,
+        OutputStreamBuilder::open_default_stream,
+        |duration| thread::sleep(duration),
+    )
+}
+
+fn open_output_stream_with_retry_hooks<Open, Sleep>(
+    retries: usize,
+    retry_ms: u64,
+    mut open_fn: Open,
+    mut sleep_fn: Sleep,
+) -> Option<OutputStream>
+where
+    Open: FnMut() -> Result<OutputStream, rodio::StreamError>,
+    Sleep: FnMut(Duration),
+{
+    for attempt in 1..=retries {
+        match open_fn() {
             Ok(stream) => return Some(stream),
             Err(err) => {
-                if attempt == OUTPUT_STREAM_OPEN_RETRIES {
+                if attempt == retries {
                     error!(
                         "failed to open default output stream after {} attempts: {}",
-                        OUTPUT_STREAM_OPEN_RETRIES, err
+                        retries, err
                     );
                     return None;
                 }
                 warn!(
                     "open_default_stream attempt {}/{} failed: {}",
-                    attempt, OUTPUT_STREAM_OPEN_RETRIES, err
+                    attempt, retries, err
                 );
-                thread::sleep(Duration::from_millis(OUTPUT_STREAM_OPEN_RETRY_MS));
+                sleep_fn(Duration::from_millis(retry_ms));
             }
         }
     }
@@ -790,9 +808,9 @@ fn log_drain_loop_start(ctx: &ThreadContext, loop_state: &LoopState) {
 
 #[cfg(test)]
 mod tests {
-    use super::{update_append_timing, LoopState};
-    use std::thread;
+    use super::{open_output_stream_with_retry_hooks, update_append_timing, LoopState};
     use std::time::Duration;
+    use std::{sync::atomic::AtomicUsize, sync::atomic::Ordering, sync::Arc};
 
     #[test]
     fn loop_state_initializes_with_start_time() {
@@ -824,12 +842,39 @@ mod tests {
     fn update_append_timing_tracks_average_without_late_increment() {
         let state = LoopState::new(0.0);
         let _ = update_append_timing(&state, 0.5);
-        thread::sleep(Duration::from_millis(5));
+        {
+            let mut timing = state.append_timing.lock().unwrap();
+            timing.0 = std::time::Instant::now() - Duration::from_millis(12);
+        }
         let (_, late) = update_append_timing(&state, 0.5);
         assert!(!late);
         let timing = state.append_timing.lock().unwrap();
         assert!(timing.1 > 0.0);
         assert_eq!(timing.2, 0);
         assert!(timing.3 >= timing.1);
+    }
+
+    #[test]
+    fn open_output_stream_retry_hooks_exhaust_retries_without_sleeping_real_time() {
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let sleep_calls = Arc::new(AtomicUsize::new(0));
+        let attempts_ref = attempts.clone();
+        let sleep_ref = sleep_calls.clone();
+
+        let stream = open_output_stream_with_retry_hooks(
+            3,
+            10,
+            move || {
+                attempts_ref.fetch_add(1, Ordering::Relaxed);
+                Err(rodio::StreamError::NoDevice)
+            },
+            move |_| {
+                sleep_ref.fetch_add(1, Ordering::Relaxed);
+            },
+        );
+
+        assert!(stream.is_none());
+        assert_eq!(attempts.load(Ordering::Relaxed), 3);
+        assert_eq!(sleep_calls.load(Ordering::Relaxed), 2);
     }
 }

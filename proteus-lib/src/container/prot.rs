@@ -55,9 +55,7 @@ pub(crate) struct RuntimeInstancePlan {
 #[derive(Debug, Clone)]
 pub struct Prot {
     pub info: Info,
-    file_path: Option<String>,
-    file_paths: Option<Vec<PathsTrack>>,
-    file_paths_dictionary: Option<Vec<String>>,
+    source: ProtSource,
     track_ids: Option<Vec<u32>>,
     track_paths: Option<Vec<String>>,
     duration: f64,
@@ -66,6 +64,17 @@ pub struct Prot {
     impulse_response_spec: Option<ImpulseResponseSpec>,
     impulse_response_tail_db: Option<f32>,
     effects: Option<Vec<AudioEffect>>,
+}
+
+#[derive(Debug, Clone)]
+enum ProtSource {
+    Container {
+        file_path: String,
+    },
+    Paths {
+        file_paths: Vec<PathsTrack>,
+        file_paths_dictionary: Vec<String>,
+    },
 }
 
 /// Error returned when building a [`Prot`] container instance fails.
@@ -113,9 +122,9 @@ impl Prot {
 
         let mut this = Self {
             info,
-            file_path: Some(file_path.to_string()),
-            file_paths: None,
-            file_paths_dictionary: None,
+            source: ProtSource::Container {
+                file_path: file_path.to_string(),
+            },
             track_ids: None,
             track_paths: None,
             duration: 0.0,
@@ -149,9 +158,10 @@ impl Prot {
 
         let mut this = Self {
             info,
-            file_path: None,
-            file_paths: Some(file_paths),
-            file_paths_dictionary: Some(file_paths_dictionary),
+            source: ProtSource::Paths {
+                file_paths,
+                file_paths_dictionary,
+            },
             track_ids: None,
             track_paths: None,
             duration: 0.0,
@@ -188,12 +198,13 @@ impl Prot {
         self.shuffle_schedule.clear();
         self.duration = 0.0;
 
-        if let Some(file_paths) = &self.file_paths {
-            let (schedule, longest_duration) = build_paths_shuffle_schedule(
-                file_paths,
-                &self.info,
-                self.file_paths_dictionary.as_deref().unwrap_or(&[]),
-            );
+        if let ProtSource::Paths {
+            file_paths,
+            file_paths_dictionary,
+        } = &self.source
+        {
+            let (schedule, longest_duration) =
+                build_paths_shuffle_schedule(file_paths, &self.info, file_paths_dictionary);
             self.shuffle_schedule = schedule;
             self.duration = longest_duration;
 
@@ -201,10 +212,6 @@ impl Prot {
                 self.track_paths = Some(sources_to_track_paths(&entry.sources));
             }
 
-            return;
-        }
-
-        if self.file_path.is_none() {
             return;
         }
 
@@ -257,7 +264,7 @@ impl Prot {
     }
 
     fn load_play_settings(&mut self) {
-        let Some(file_path) = self.file_path.as_ref() else {
+        let ProtSource::Container { file_path } = &self.source else {
             return;
         };
 
@@ -293,7 +300,10 @@ impl Prot {
 
     /// Return the container path if this is a `.prot`/`.mka` file.
     pub fn get_container_path(&self) -> Option<String> {
-        self.file_path.clone()
+        match &self.source {
+            ProtSource::Container { file_path } => Some(file_path.clone()),
+            ProtSource::Paths { .. } => None,
+        }
     }
 
     /// Override the impulse response spec at runtime.
@@ -372,19 +382,25 @@ impl Prot {
         let mut list: Vec<(u16, String, Option<u32>)> = Vec::new();
         if let Some(track_paths) = &self.track_paths {
             for (index, file_path) in track_paths.iter().enumerate() {
-                list.push((index as u16, String::from(file_path), None));
+                let Ok(key) = u16::try_from(index) else {
+                    warn!("skipping track index {} that exceeds u16 key range", index);
+                    continue;
+                };
+                list.push((key, String::from(file_path), None));
             }
 
             return list;
         }
 
-        if let Some(track_ids) = &self.track_ids {
+        if let (Some(track_ids), ProtSource::Container { file_path }) =
+            (&self.track_ids, &self.source)
+        {
             for (index, track_id) in track_ids.iter().enumerate() {
-                list.push((
-                    index as u16,
-                    String::from(self.file_path.as_ref().unwrap()),
-                    Some(*track_id),
-                ));
+                let Ok(key) = u16::try_from(index) else {
+                    warn!("skipping track index {} that exceeds u16 key range", index);
+                    continue;
+                };
+                list.push((key, file_path.clone(), Some(*track_id)));
             }
 
             return list;
@@ -395,11 +411,18 @@ impl Prot {
 
     /// Return container track entries for shared container streaming.
     pub fn container_track_entries(&self) -> Option<(String, Vec<(u16, u32)>)> {
-        let file_path = self.file_path.as_ref()?;
+        let file_path = match &self.source {
+            ProtSource::Container { file_path } => file_path,
+            ProtSource::Paths { .. } => return None,
+        };
         let track_ids = self.track_ids.as_ref()?;
         let mut entries = Vec::new();
         for (index, track_id) in track_ids.iter().enumerate() {
-            entries.push((index as u16, *track_id));
+            let Ok(key) = u16::try_from(index) else {
+                warn!("skipping track index {} that exceeds u16 key range", index);
+                continue;
+            };
+            entries.push((key, *track_id));
         }
         Some((file_path.clone(), entries))
     }
@@ -567,7 +590,7 @@ impl Prot {
     pub fn get_track_mix_settings(&self) -> HashMap<u16, (f32, f32)> {
         let mut settings = HashMap::new();
 
-        if let Some(file_paths) = self.file_paths.as_ref() {
+        if let ProtSource::Paths { file_paths, .. } = &self.source {
             let mut slot_index: u16 = 0;
             for track in file_paths {
                 let selections = track.selections_count.max(1);
@@ -602,7 +625,7 @@ impl Prot {
         let level = sanitize_level(level);
         let pan = sanitize_pan(pan);
 
-        if let Some(file_paths) = self.file_paths.as_mut() {
+        if let ProtSource::Paths { file_paths, .. } = &mut self.source {
             if let Some(track) = get_paths_track_for_slot_mut(file_paths, slot_index) {
                 track.level = level;
                 track.pan = pan;
@@ -620,7 +643,7 @@ impl Prot {
 
     /// Return all slot indices that share the same track settings as `slot_index`.
     pub fn linked_slot_indices(&self, slot_index: usize) -> Option<Vec<usize>> {
-        if let Some(file_paths) = self.file_paths.as_ref() {
+        if let ProtSource::Paths { file_paths, .. } = &self.source {
             return linked_paths_slots(file_paths, slot_index);
         }
 
@@ -635,7 +658,7 @@ impl Prot {
             return track_paths.len();
         }
 
-        if let Some(file_paths) = &self.file_paths {
+        if let ProtSource::Paths { file_paths, .. } = &self.source {
             return file_paths.len();
         }
 
@@ -648,7 +671,7 @@ impl Prot {
 
     /// Return the number of possible unique selections based on track settings.
     pub fn count_possible_combinations(&self) -> Option<u128> {
-        if let Some(file_paths) = &self.file_paths {
+        if let ProtSource::Paths { file_paths, .. } = &self.source {
             return count_paths_track_combinations(file_paths);
         }
 
@@ -666,14 +689,17 @@ impl Prot {
 
     /// Return the unique file paths used for a multi-file container.
     pub fn get_file_paths_dictionary(&self) -> Vec<String> {
-        match &self.file_paths_dictionary {
-            Some(dictionary) => dictionary.to_vec(),
-            None => Vec::new(),
+        match &self.source {
+            ProtSource::Paths {
+                file_paths_dictionary,
+                ..
+            } => file_paths_dictionary.clone(),
+            ProtSource::Container { .. } => Vec::new(),
         }
     }
 
     fn logical_track_slot_spans(&self) -> Vec<usize> {
-        if let Some(file_paths) = self.file_paths.as_ref() {
+        if let ProtSource::Paths { file_paths, .. } = &self.source {
             return file_paths
                 .iter()
                 .filter_map(|track| {
@@ -1283,6 +1309,41 @@ mod tests {
         }
     }
 
+    fn prot_from_paths(file_paths: Vec<PathsTrack>, dictionary: Vec<String>) -> Prot {
+        Prot {
+            info: test_info(),
+            source: ProtSource::Paths {
+                file_paths,
+                file_paths_dictionary: dictionary,
+            },
+            track_ids: None,
+            track_paths: None,
+            duration: 0.0,
+            shuffle_schedule: Vec::new(),
+            play_settings: None,
+            impulse_response_spec: None,
+            impulse_response_tail_db: None,
+            effects: None,
+        }
+    }
+
+    fn prot_from_container(file_path: &str) -> Prot {
+        Prot {
+            info: test_info(),
+            source: ProtSource::Container {
+                file_path: file_path.to_string(),
+            },
+            track_ids: None,
+            track_paths: None,
+            duration: 0.0,
+            shuffle_schedule: Vec::new(),
+            play_settings: None,
+            impulse_response_spec: None,
+            impulse_response_tail_db: None,
+            effects: None,
+        }
+    }
+
     #[test]
     fn count_settings_combinations_without_shuffle_points() {
         let tracks = vec![settings_track(vec![1, 2, 3], 2, vec![])];
@@ -1319,26 +1380,16 @@ mod tests {
 
     #[test]
     fn get_track_mix_settings_repeats_by_selections_count_for_paths_tracks() {
-        let prot = Prot {
-            info: test_info(),
-            file_path: None,
-            file_paths: Some(vec![PathsTrack {
+        let prot = prot_from_paths(
+            vec![PathsTrack {
                 file_paths: vec!["a.wav".to_string()],
                 level: 0.7,
                 pan: -0.3,
                 selections_count: 2,
                 shuffle_points: vec![],
-            }]),
-            file_paths_dictionary: Some(vec!["a.wav".to_string()]),
-            track_ids: None,
-            track_paths: None,
-            duration: 0.0,
-            shuffle_schedule: Vec::new(),
-            play_settings: None,
-            impulse_response_spec: None,
-            impulse_response_tail_db: None,
-            effects: None,
-        };
+            }],
+            vec!["a.wav".to_string()],
+        );
 
         let settings = prot.get_track_mix_settings();
         assert_eq!(settings.get(&0), Some(&(0.7, -0.3)));
@@ -1347,26 +1398,16 @@ mod tests {
 
     #[test]
     fn set_slot_mix_settings_updates_paths_track() {
-        let mut prot = Prot {
-            info: test_info(),
-            file_path: None,
-            file_paths: Some(vec![PathsTrack {
+        let mut prot = prot_from_paths(
+            vec![PathsTrack {
                 file_paths: vec!["a.wav".to_string()],
                 level: 1.0,
                 pan: 0.0,
                 selections_count: 2,
                 shuffle_points: vec![],
-            }]),
-            file_paths_dictionary: Some(vec!["a.wav".to_string()]),
-            track_ids: None,
-            track_paths: None,
-            duration: 0.0,
-            shuffle_schedule: Vec::new(),
-            play_settings: None,
-            impulse_response_spec: None,
-            impulse_response_tail_db: None,
-            effects: None,
-        };
+            }],
+            vec!["a.wav".to_string()],
+        );
 
         assert!(prot.set_slot_mix_settings(1, 0.4, 0.6));
         let settings = prot.get_track_mix_settings();
@@ -1397,9 +1438,9 @@ mod tests {
 
         let prot = Prot {
             info: test_info(),
-            file_path: Some("dummy.prot".to_string()),
-            file_paths: None,
-            file_paths_dictionary: None,
+            source: ProtSource::Container {
+                file_path: "dummy.prot".to_string(),
+            },
             track_ids: Some(vec![1, 1]),
             track_paths: None,
             duration: 0.0,
@@ -1417,10 +1458,8 @@ mod tests {
 
     #[test]
     fn linked_slot_indices_returns_all_slots_for_same_track() {
-        let prot = Prot {
-            info: test_info(),
-            file_path: None,
-            file_paths: Some(vec![
+        let prot = prot_from_paths(
+            vec![
                 PathsTrack {
                     file_paths: vec!["a.wav".to_string()],
                     level: 1.0,
@@ -1435,17 +1474,9 @@ mod tests {
                     selections_count: 1,
                     shuffle_points: vec![],
                 },
-            ]),
-            file_paths_dictionary: Some(vec!["a.wav".to_string(), "b.wav".to_string()]),
-            track_ids: None,
-            track_paths: None,
-            duration: 0.0,
-            shuffle_schedule: Vec::new(),
-            play_settings: None,
-            impulse_response_spec: None,
-            impulse_response_tail_db: None,
-            effects: None,
-        };
+            ],
+            vec!["a.wav".to_string(), "b.wav".to_string()],
+        );
 
         assert_eq!(prot.linked_slot_indices(0), Some(vec![0, 1]));
         assert_eq!(prot.linked_slot_indices(1), Some(vec![0, 1]));
@@ -1476,10 +1507,8 @@ mod tests {
 
     #[test]
     fn get_shuffle_schedule_groups_by_paths_track_selections_count() {
-        let prot = Prot {
-            info: test_info(),
-            file_path: None,
-            file_paths: Some(vec![
+        let mut prot = prot_from_paths(
+            vec![
                 PathsTrack {
                     file_paths: vec!["a.wav".to_string(), "b.wav".to_string()],
                     level: 1.0,
@@ -1494,28 +1523,21 @@ mod tests {
                     selections_count: 1,
                     shuffle_points: vec![],
                 },
-            ]),
-            file_paths_dictionary: Some(vec![
+            ],
+            vec![
                 "a.wav".to_string(),
                 "b.wav".to_string(),
                 "c.wav".to_string(),
-            ]),
-            track_ids: None,
-            track_paths: None,
-            duration: 0.0,
-            shuffle_schedule: vec![ShuffleScheduleEntry {
-                at_ms: 0,
-                sources: vec![
-                    ShuffleSource::FilePath("a.wav".to_string()),
-                    ShuffleSource::FilePath("b.wav".to_string()),
-                    ShuffleSource::FilePath("c.wav".to_string()),
-                ],
-            }],
-            play_settings: None,
-            impulse_response_spec: None,
-            impulse_response_tail_db: None,
-            effects: None,
-        };
+            ],
+        );
+        prot.shuffle_schedule = vec![ShuffleScheduleEntry {
+            at_ms: 0,
+            sources: vec![
+                ShuffleSource::FilePath("a.wav".to_string()),
+                ShuffleSource::FilePath("b.wav".to_string()),
+                ShuffleSource::FilePath("c.wav".to_string()),
+            ],
+        }];
 
         let schedule = prot.get_shuffle_schedule();
         assert_eq!(schedule.len(), 1);
@@ -1530,65 +1552,54 @@ mod tests {
 
     #[test]
     fn build_runtime_instance_plan_keeps_duplicate_instances() {
-        let prot = Prot {
-            info: test_info(),
-            file_path: Some("demo.prot".to_string()),
-            file_paths: None,
-            file_paths_dictionary: None,
-            track_ids: None,
-            track_paths: None,
-            duration: 0.0,
-            shuffle_schedule: vec![
-                ShuffleScheduleEntry {
-                    at_ms: 0,
-                    sources: vec![
-                        ShuffleSource::TrackId(1),
-                        ShuffleSource::TrackId(2),
-                        ShuffleSource::TrackId(3),
-                    ],
-                },
-                ShuffleScheduleEntry {
-                    at_ms: 14_604,
-                    sources: vec![
-                        ShuffleSource::TrackId(2),
-                        ShuffleSource::TrackId(2),
-                        ShuffleSource::TrackId(2),
-                    ],
-                },
-            ],
-            play_settings: Some(PlaySettingsFile::V1(
-                crate::container::play_settings::PlaySettingsV1File {
-                    settings: crate::container::play_settings::PlaySettingsContainer::Flat(
-                        crate::container::play_settings::PlaySettingsV1 {
-                            effects: Vec::new(),
-                            tracks: vec![
-                                SettingsTrack {
-                                    level: 1.0,
-                                    pan: 0.0,
-                                    ids: vec![1, 2],
-                                    name: "A".to_string(),
-                                    safe_name: "a".to_string(),
-                                    selections_count: 2,
-                                    shuffle_points: vec!["0:14.604".to_string()],
-                                },
-                                SettingsTrack {
-                                    level: 1.0,
-                                    pan: 0.0,
-                                    ids: vec![2, 3],
-                                    name: "B".to_string(),
-                                    safe_name: "b".to_string(),
-                                    selections_count: 1,
-                                    shuffle_points: vec!["0:14.604".to_string()],
-                                },
-                            ],
-                        },
-                    ),
-                },
-            )),
-            impulse_response_spec: None,
-            impulse_response_tail_db: None,
-            effects: None,
-        };
+        let mut prot = prot_from_container("demo.prot");
+        prot.shuffle_schedule = vec![
+            ShuffleScheduleEntry {
+                at_ms: 0,
+                sources: vec![
+                    ShuffleSource::TrackId(1),
+                    ShuffleSource::TrackId(2),
+                    ShuffleSource::TrackId(3),
+                ],
+            },
+            ShuffleScheduleEntry {
+                at_ms: 14_604,
+                sources: vec![
+                    ShuffleSource::TrackId(2),
+                    ShuffleSource::TrackId(2),
+                    ShuffleSource::TrackId(2),
+                ],
+            },
+        ];
+        prot.play_settings = Some(PlaySettingsFile::V1(
+            crate::container::play_settings::PlaySettingsV1File {
+                settings: crate::container::play_settings::PlaySettingsContainer::Flat(
+                    crate::container::play_settings::PlaySettingsV1 {
+                        effects: Vec::new(),
+                        tracks: vec![
+                            SettingsTrack {
+                                level: 1.0,
+                                pan: 0.0,
+                                ids: vec![1, 2],
+                                name: "A".to_string(),
+                                safe_name: "a".to_string(),
+                                selections_count: 2,
+                                shuffle_points: vec!["0:14.604".to_string()],
+                            },
+                            SettingsTrack {
+                                level: 1.0,
+                                pan: 0.0,
+                                ids: vec![2, 3],
+                                name: "B".to_string(),
+                                safe_name: "b".to_string(),
+                                selections_count: 1,
+                                shuffle_points: vec!["0:14.604".to_string()],
+                            },
+                        ],
+                    },
+                ),
+            },
+        ));
 
         let plan = prot.build_runtime_instance_plan(0.0);
         assert_eq!(plan.logical_track_count, 2);
@@ -1610,29 +1621,18 @@ mod tests {
 
     #[test]
     fn build_runtime_instance_plan_clips_windows_to_start_time() {
-        let prot = Prot {
-            info: test_info(),
-            file_path: Some("demo.prot".to_string()),
-            file_paths: None,
-            file_paths_dictionary: None,
-            track_ids: Some(vec![1]),
-            track_paths: None,
-            duration: 0.0,
-            shuffle_schedule: vec![
-                ShuffleScheduleEntry {
-                    at_ms: 0,
-                    sources: vec![ShuffleSource::TrackId(1)],
-                },
-                ShuffleScheduleEntry {
-                    at_ms: 10_000,
-                    sources: vec![ShuffleSource::TrackId(2)],
-                },
-            ],
-            play_settings: None,
-            impulse_response_spec: None,
-            impulse_response_tail_db: None,
-            effects: None,
-        };
+        let mut prot = prot_from_container("demo.prot");
+        prot.track_ids = Some(vec![1]);
+        prot.shuffle_schedule = vec![
+            ShuffleScheduleEntry {
+                at_ms: 0,
+                sources: vec![ShuffleSource::TrackId(1)],
+            },
+            ShuffleScheduleEntry {
+                at_ms: 10_000,
+                sources: vec![ShuffleSource::TrackId(2)],
+            },
+        ];
 
         let plan = prot.build_runtime_instance_plan(5.0);
         assert_eq!(plan.event_boundaries_ms, vec![5_000]);

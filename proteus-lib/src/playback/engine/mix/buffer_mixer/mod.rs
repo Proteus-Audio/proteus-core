@@ -2,7 +2,7 @@
 
 mod aligned_buffer;
 mod backpressure;
-mod helpers;
+mod routing_helpers;
 
 use log::{debug, info, warn};
 use std::collections::{HashMap, HashSet};
@@ -11,23 +11,23 @@ use std::sync::Arc;
 use crate::dsp::utils::fade_interleaved_per_frame;
 #[cfg(feature = "buffer-map")]
 use crate::logging::clear_logfile;
-use crate::playback::engine::mix::utils::TransitionDirection;
+use crate::playback::engine::mix::cover_map::TransitionDirection;
 use crate::{
     container::prot::{RuntimeInstanceMeta, RuntimeInstancePlan, ShuffleSource},
-    playback::engine::mix::utils::{map_cover, Cover},
+    playback::engine::mix::cover_map::{map_cover, Cover},
 };
 
 use super::track_stage::{apply_track_gain_pan, combine_tracks_equal_weight};
 use aligned_buffer::AlignedSampleBuffer;
 pub(crate) use backpressure::DecodeBackpressure;
 #[cfg(any(test, feature = "debug"))]
-use helpers::aggregate_fill_state;
-use helpers::{
+use routing_helpers::aggregate_fill_state;
+use routing_helpers::{
     instance_fully_past_window, instance_needs_data, instance_past_window_ts,
     packet_overlap_samples, push_owned_slice, push_slice, push_zeros, samples_to_ms,
 };
 #[cfg(feature = "buffer-map")]
-use helpers::{log_buffer, log_buffer_header};
+use routing_helpers::{log_buffer, log_buffer_header};
 
 /// Source identifier used by decode workers.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -267,6 +267,7 @@ impl BufferMixer {
         decision
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn route_cover_section(
         section: Cover,
         samples: &[f32],

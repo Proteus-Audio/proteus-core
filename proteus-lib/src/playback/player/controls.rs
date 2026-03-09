@@ -10,9 +10,8 @@ use std::time::{Duration, Instant};
 
 use log::{debug, info, warn};
 
-use crate::diagnostics::reporter::{Report, Reporter};
-
 use super::{EndOfStreamAction, Player, PlayerState};
+use crate::diagnostics::reporter::{Report, Reporter};
 
 impl Player {
     /// Start playback from a specific timestamp (seconds).
@@ -221,7 +220,7 @@ impl Player {
         drop(timestamp);
 
         let state = *self.state.lock().unwrap();
-        let was_active = matches!(state, PlayerState::Playing | PlayerState::Resuming);
+        let was_active = seek_should_resume(state);
         let (seek_fade_out_ms, seek_fade_in_ms) = {
             let settings = self.buffer_settings.lock().unwrap();
             (settings.seek_fade_out_ms, settings.seek_fade_in_ms)
@@ -418,6 +417,10 @@ impl Player {
     }
 }
 
+fn seek_should_resume(state: PlayerState) -> bool {
+    matches!(state, PlayerState::Playing | PlayerState::Resuming)
+}
+
 fn current_ms() -> u64 {
     use std::time::SystemTime;
 
@@ -429,10 +432,63 @@ fn current_ms() -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use super::current_ms;
+    use super::{current_ms, seek_should_resume, EndOfStreamAction, Player, PlayerState};
+    use crate::container::prot::PathsTrack;
+    use std::sync::atomic::Ordering;
 
     #[test]
     fn current_ms_returns_non_zero_epoch_time() {
         assert!(current_ms() > 0);
+    }
+
+    #[test]
+    fn seek_should_resume_only_for_active_states() {
+        assert!(seek_should_resume(PlayerState::Playing));
+        assert!(seek_should_resume(PlayerState::Resuming));
+        assert!(!seek_should_resume(PlayerState::Paused));
+        assert!(!seek_should_resume(PlayerState::Stopped));
+        assert!(!seek_should_resume(PlayerState::Stopping));
+        assert!(!seek_should_resume(PlayerState::Pausing));
+    }
+
+    #[test]
+    fn pause_and_resume_update_player_state() {
+        let player = lifecycle_test_player();
+        player.pause();
+        assert_eq!(*player.state.lock().unwrap(), PlayerState::Pausing);
+        player.resume();
+        assert_eq!(*player.state.lock().unwrap(), PlayerState::Resuming);
+    }
+
+    #[test]
+    fn stop_resets_timestamp_and_marks_stopped_when_thread_already_finished() {
+        let player = lifecycle_test_player();
+        *player.ts.lock().unwrap() = 12.5;
+        player.stop();
+        assert_eq!(player.get_time(), 0.0);
+        assert_eq!(*player.state.lock().unwrap(), PlayerState::Stopped);
+        assert!(player.abort.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn end_of_stream_action_round_trip() {
+        let player = lifecycle_test_player();
+        player.set_end_of_stream_action(EndOfStreamAction::Pause);
+        assert_eq!(player.get_end_of_stream_action(), EndOfStreamAction::Pause);
+        player.set_end_of_stream_action(EndOfStreamAction::Stop);
+        assert_eq!(player.get_end_of_stream_action(), EndOfStreamAction::Stop);
+    }
+
+    fn lifecycle_test_player() -> Player {
+        let mut player = Player::new_from_file_paths(vec![PathsTrack::new_from_file_paths(vec![
+            "/tmp/nonexistent.wav".to_string(),
+        ])]);
+        // Avoid waiting for runtime thread work in unit tests.
+        player.playback_thread_exists.store(false, Ordering::SeqCst);
+        player.abort.store(true, Ordering::SeqCst);
+        *player.playback_thread_handle.lock().unwrap() = None;
+        *player.state.lock().unwrap() = PlayerState::Stopped;
+        player.reporter = None;
+        player
     }
 }

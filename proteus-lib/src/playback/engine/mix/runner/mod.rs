@@ -639,6 +639,7 @@ fn apply_inline_track_mix_updates(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn apply_effect_runtime_updates(
     effects_reset: &Arc<std::sync::atomic::AtomicU64>,
     last_effects_reset: &mut u64,

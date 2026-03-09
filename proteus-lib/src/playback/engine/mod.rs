@@ -1,6 +1,7 @@
 //! Playback mixing engine and buffer coordination.
 
 use dasp_ring_buffer::Bounded;
+use log::warn;
 use rodio::buffer::SamplesBuffer;
 use std::collections::HashMap;
 use std::sync::atomic::AtomicBool;
@@ -179,7 +180,7 @@ impl PlayerEngine {
         *prot.get_duration()
     }
 
-    fn ready_buffer_map(&mut self, keys: &Vec<u32>) {
+    fn ready_buffer_map(&mut self, keys: &[u32]) {
         self.buffer_map = init_buffer_map();
         self.track_weights.lock().unwrap().clear();
         self.track_channel_gains.lock().unwrap().clear();
@@ -194,6 +195,13 @@ impl PlayerEngine {
         let buffer_size = (sample_rate as usize * 10).max(start_samples * 2);
 
         for key in keys {
+            let Some(track_key) = u16::try_from(*key).ok() else {
+                warn!(
+                    "skipping track key {} because it exceeds engine key width (u16)",
+                    key
+                );
+                continue;
+            };
             let ring_buffer = Arc::new(Mutex::new(dasp_ring_buffer::Bounded::from(vec![
                     0.0;
                     buffer_size
@@ -201,17 +209,17 @@ impl PlayerEngine {
             self.buffer_map
                 .lock()
                 .unwrap()
-                .insert(*key as u16, ring_buffer);
-            self.track_weights.lock().unwrap().insert(*key as u16, 1.0);
+                .insert(track_key, ring_buffer);
+            self.track_weights.lock().unwrap().insert(track_key, 1.0);
             let (level, pan) = track_mix_settings
-                .get(&(*key as u16))
+                .get(&track_key)
                 .copied()
                 .unwrap_or((1.0, 0.0));
             let gains = compute_track_channel_gains(level, pan, channels);
             self.track_channel_gains
                 .lock()
                 .unwrap()
-                .insert(*key as u16, gains);
+                .insert(track_key, gains);
         }
     }
 
@@ -223,7 +231,14 @@ impl PlayerEngine {
         drop(prot);
 
         for key in keys {
-            if !finished_tracks.contains(&(key as u16)) {
+            let Some(track_key) = u16::try_from(key).ok() else {
+                warn!(
+                    "treating track key {} as unfinished because it exceeds engine key width (u16)",
+                    key
+                );
+                return false;
+            };
+            if !finished_tracks.contains(&track_key) {
                 return false;
             }
         }

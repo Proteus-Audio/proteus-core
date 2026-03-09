@@ -75,6 +75,8 @@ impl Default for PlayerInitOptions {
 pub enum PlayerInitError {
     /// Neither container path nor standalone track paths were provided.
     MissingSource,
+    /// Both container path and standalone track paths were provided.
+    AmbiguousSource,
     /// Failed to initialize the underlying `.prot` container.
     ProtInitialization(ProtError),
 }
@@ -83,6 +85,12 @@ impl std::fmt::Display for PlayerInitError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::MissingSource => write!(f, "player source input is required"),
+            Self::AmbiguousSource => {
+                write!(
+                    f,
+                    "player source input must be exactly one of path or file paths"
+                )
+            }
             Self::ProtInitialization(err) => write!(f, "player source init failed: {}", err),
         }
     }
@@ -193,6 +201,11 @@ impl Clone for Player {
     }
 }
 
+#[allow(clippy::arc_with_non_send_sync)]
+fn default_output_stream_handle() -> Arc<Mutex<Option<OutputStream>>> {
+    Arc::new(Mutex::new(None))
+}
+
 impl Player {
     /// Create a new player from a typed input source.
     ///
@@ -271,7 +284,7 @@ impl Player {
             play_command_ms: Arc::new(AtomicU64::new(0)),
             volume: Arc::new(Mutex::new(0.8)),
             sink,
-            output_stream: Arc::new(Mutex::new(None)),
+            output_stream: default_output_stream_handle(),
             prot,
             reporter: None,
             buffer_settings: Arc::new(Mutex::new(PlaybackBufferSettings::new(20.0))),
@@ -415,21 +428,24 @@ impl Player {
     /// # Errors
     ///
     /// Returns [`PlayerInitError::MissingSource`] when both `path` and `paths`
-    /// are missing.
+    /// are missing, or [`PlayerInitError::AmbiguousSource`] when both are
+    /// provided.
     pub fn try_new_from_path_or_paths_with_options(
         path: Option<&str>,
         paths: Option<Vec<PathsTrack>>,
         options: PlayerInitOptions,
     ) -> Result<Self, PlayerInitError> {
-        if let Some(path) = path {
-            return Self::try_from_source_with_options(
+        match (path, paths) {
+            (Some(path), None) => Self::try_from_source_with_options(
                 PlayerSource::ContainerPath(path.to_string()),
                 options,
-            );
+            ),
+            (None, Some(file_paths)) => {
+                Self::try_from_source_with_options(PlayerSource::FilePaths(file_paths), options)
+            }
+            (None, None) => Err(PlayerInitError::MissingSource),
+            (Some(_), Some(_)) => Err(PlayerInitError::AmbiguousSource),
         }
-
-        let file_paths = paths.ok_or(PlayerInitError::MissingSource)?;
-        Self::try_from_source_with_options(PlayerSource::FilePaths(file_paths), options)
     }
 }
 
@@ -513,6 +529,8 @@ impl Drop for Player {
 
 #[cfg(test)]
 mod tests {
+    use crate::container::prot::PathsTrack;
+
     use super::{Player, PlayerInitError, PlayerInitOptions};
 
     #[test]
@@ -520,6 +538,10 @@ mod tests {
         assert_eq!(
             PlayerInitError::MissingSource.to_string(),
             "player source input is required"
+        );
+        assert_eq!(
+            PlayerInitError::AmbiguousSource.to_string(),
+            "player source input must be exactly one of path or file paths"
         );
     }
 
@@ -531,5 +553,17 @@ mod tests {
             PlayerInitOptions::default(),
         );
         assert!(matches!(result, Err(PlayerInitError::MissingSource)));
+    }
+
+    #[test]
+    fn try_new_from_path_or_paths_rejects_ambiguous_inputs() {
+        let result = Player::try_new_from_path_or_paths_with_options(
+            Some("/tmp/example.prot"),
+            Some(vec![PathsTrack::new_from_file_paths(vec![
+                "/tmp/a.wav".to_string()
+            ])]),
+            PlayerInitOptions::default(),
+        );
+        assert!(matches!(result, Err(PlayerInitError::AmbiguousSource)));
     }
 }

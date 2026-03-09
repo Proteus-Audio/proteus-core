@@ -9,6 +9,7 @@
 //! - `track_stage` / `output_stage`: staged helpers used by the runner.
 
 mod buffer_mixer;
+mod cover_map;
 mod debug;
 mod decoder_events;
 mod effects;
@@ -16,7 +17,6 @@ mod output_stage;
 mod runner;
 mod track_stage;
 mod types;
-mod utils;
 
 pub use runner::spawn_mix_thread;
 pub use types::MixThreadArgs;

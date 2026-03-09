@@ -303,8 +303,12 @@ mod real_fft {
                     *sample /= norm;
                 }
 
-                for i in 0..segment_size {
-                    time_domain[i] += self.previous_tail[i];
+                for (sample, tail) in time_domain
+                    .iter_mut()
+                    .take(segment_size)
+                    .zip(self.previous_tail.iter().take(segment_size))
+                {
+                    *sample += *tail;
                 }
 
                 self.previous_tail = time_domain[segment_size..self.fft_size].to_vec();

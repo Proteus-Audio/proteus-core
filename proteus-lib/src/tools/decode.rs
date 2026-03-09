@@ -44,12 +44,13 @@ impl From<std::io::Error> for DecoderOpenError {
     }
 }
 
+/// Shared opened decoder state for one media file.
+pub type OpenedDecoder = (Box<dyn Decoder>, Box<dyn FormatReader>);
+
 /// Open a file and return a decoder plus format reader.
 ///
 /// This is a convenience wrapper around [`get_reader`] and [`get_decoder`].
-pub fn open_file(
-    file_path: &str,
-) -> Result<(Box<dyn Decoder>, Box<dyn FormatReader>), DecoderOpenError> {
+pub fn open_file(file_path: &str) -> Result<OpenedDecoder, DecoderOpenError> {
     let format = get_reader(file_path)?;
     let decoder = get_decoder(format.as_ref())?;
 

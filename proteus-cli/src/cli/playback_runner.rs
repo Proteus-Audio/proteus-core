@@ -114,7 +114,7 @@ fn build_player_from_args(
     let is_container = file_path.ends_with(".prot") || file_path.ends_with(".mka");
     let is_directory = input_path.is_dir();
     let player = if is_container {
-        player::Player::new_with_options(&file_path, cli_player_options)
+        player::Player::new_with_options(file_path, cli_player_options)
     } else if is_directory {
         let config = project_files::load_directory_playback_config(input_path).map_err(|err| {
             error!("{}", err);
