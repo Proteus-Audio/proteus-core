@@ -2,30 +2,30 @@
 pub mod pivot_buffer_trace;
 
 #[cfg(feature = "buffer-map")]
+use std::io;
+
+#[cfg(feature = "buffer-map")]
 use std::{
     fs::{File, OpenOptions},
     io::{BufWriter, Write},
 };
 
 #[cfg(feature = "buffer-map")]
-fn append_to_log(message: &str) {
-    let filepath = std::env::current_dir().expect("Failed to get current directory");
+fn append_to_log(message: &str) -> io::Result<()> {
+    let filepath = std::env::current_dir()?;
     let log_path = filepath.join("log.txt");
 
     let file = OpenOptions::new()
         .append(true)
         .create(true)
-        .open(log_path)
-        .expect("Failed to open log file");
+        .open(log_path)?;
 
     let mut writer = BufWriter::new(file);
-    writer
-        .write_all(message.as_bytes())
-        .expect("Failed to write to log file");
+    writer.write_all(message.as_bytes())
 }
 
 #[cfg(feature = "buffer-map")]
-use std::io::{self, Read, Seek, SeekFrom};
+use std::io::{Read, Seek, SeekFrom};
 
 #[cfg(feature = "buffer-map")]
 pub fn append_on_line(file: &mut File, message: &str, line_number: usize) -> io::Result<()> {
@@ -61,31 +61,28 @@ pub fn append_on_line(file: &mut File, message: &str, line_number: usize) -> io:
 }
 
 #[cfg(feature = "buffer-map")]
-pub fn log(message: &str) {
-    append_to_log(message);
+pub fn log(message: &str) -> io::Result<()> {
+    append_to_log(message)
 }
 
 #[cfg(feature = "buffer-map")]
-pub fn clear_logfile() {
-    let filepath = std::env::current_dir().expect("Failed to get current directory");
+pub fn clear_logfile() -> io::Result<()> {
+    let filepath = std::env::current_dir()?;
     let log_path = filepath.join("log.txt");
 
     let file = OpenOptions::new()
         .write(true)
         .truncate(true)
         .create(true)
-        .open(log_path)
-        .expect("Failed to open log file");
+        .open(log_path)?;
 
     let mut writer = BufWriter::new(file);
-    writer
-        .write_all("".as_bytes())
-        .expect("Failed to write to log file");
+    writer.write_all("".as_bytes())
 }
 
 #[cfg(feature = "buffer-map")]
 pub fn log_on_line(message: &str, line_number: usize) -> io::Result<()> {
-    let filepath = std::env::current_dir().expect("Failed to get current directory");
+    let filepath = std::env::current_dir()?;
     let log_path = filepath.join("log.txt");
 
     let mut file = OpenOptions::new()
@@ -93,8 +90,7 @@ pub fn log_on_line(message: &str, line_number: usize) -> io::Result<()> {
         .read(true)
         .truncate(true)
         .create(true)
-        .open(log_path)
-        .expect("Failed to open log file");
+        .open(log_path)?;
 
     append_on_line(&mut file, message, line_number)
 }

@@ -23,7 +23,7 @@ struct DecodeBackpressureState {
     source_to_instances: HashMap<SourceKey, Vec<usize>>,
 }
 
-/// Shared gate used by decode workers to avoid overrunning per-instance buffers.
+    /// Shared gate used by decode workers to avoid overrunning per-instance buffers.
 #[derive(Debug, Default)]
 pub(crate) struct DecodeBackpressure {
     state: Mutex<DecodeBackpressureState>,
@@ -31,7 +31,6 @@ pub(crate) struct DecodeBackpressure {
 }
 
 impl DecodeBackpressure {
-    /// Build backpressure state from the mixer's per-instance buffers.
     /// Build backpressure state from the mixer's per-instance buffers.
     pub(super) fn from_instances(instances: &[BufferInstance]) -> Self {
         let mut state = DecodeBackpressureState::default();
@@ -56,7 +55,6 @@ impl DecodeBackpressure {
         }
     }
 
-    /// Block a decode worker until every routed instance for `source` has room.
     /// Block until the given source can atomically reserve room across all routed instances.
     pub(crate) fn wait_for_source_room(
         &self,
@@ -81,7 +79,12 @@ impl DecodeBackpressure {
                 );
                 return false;
             }
-            let status = source_room_status(&guard, source, required_samples);
+            let status = source_room_status(
+                &guard,
+                source,
+                required_samples,
+                log::log_enabled!(log::Level::Debug),
+            );
             if status.allowed {
                 reserve_source_room(&mut guard, source, required_samples);
                 if wait_count > 0 {
@@ -120,7 +123,6 @@ impl DecodeBackpressure {
         }
     }
 
-    /// Account for a routed write attempt and wake any waiting decode workers.
     /// Reconcile reserved room with actual routed writes and notify waiting workers.
     pub(super) fn on_samples_pushed(
         &self,
@@ -156,7 +158,6 @@ impl DecodeBackpressure {
         }
     }
 
-    /// Account for samples consumed by the mixer and wake waiting decode workers.
     /// Record samples consumed from an instance buffer and notify waiting workers.
     pub(super) fn on_samples_popped(&self, instance_index: usize, popped_samples: usize) {
         if popped_samples == 0 {
@@ -178,7 +179,6 @@ impl DecodeBackpressure {
         self.cv.notify_all();
     }
 
-    /// Mark an instance as finished so it stops participating in backpressure checks.
     /// Mark an instance finished so it no longer blocks backpressure checks.
     pub(super) fn on_finished(&self, instance_index: usize) {
         let mut guard = self.state.lock().unwrap();
@@ -198,7 +198,6 @@ impl DecodeBackpressure {
         }
     }
 
-    /// Release all waiting decode workers during teardown.
     /// Wake all waiters and force future room checks to fail.
     pub(crate) fn shutdown(&self) {
         let mut guard = self.state.lock().unwrap();
@@ -207,13 +206,11 @@ impl DecodeBackpressure {
         self.cv.notify_all();
     }
 
-    /// Return true if any decode worker is currently waiting on room.
     /// Return true when any decode worker is blocked waiting for room.
     pub(crate) fn has_waiters(&self) -> bool {
         self.state.lock().unwrap().waiting_threads > 0
     }
 
-    /// Enable startup fairness so lagging sources are prioritized until the start gate passes.
     /// Enable startup fairness mode with a per-instance target occupancy.
     pub(crate) fn enable_startup_priority(&self, target_samples: usize) {
         let mut guard = self.state.lock().unwrap();
@@ -221,7 +218,6 @@ impl DecodeBackpressure {
         self.cv.notify_all();
     }
 
-    /// Disable startup fairness and resume steady-state backpressure behavior.
     /// Disable startup fairness mode and resume steady-state buffering behavior.
     pub(crate) fn disable_startup_priority(&self) {
         let mut guard = self.state.lock().unwrap();
@@ -242,11 +238,16 @@ fn source_room_status(
     state: &DecodeBackpressureState,
     source: &SourceKey,
     required_samples: usize,
+    include_details: bool,
 ) -> SourceRoomStatus {
     let Some(instance_indices) = state.source_to_instances.get(source) else {
         return SourceRoomStatus {
             allowed: true,
-            summary: "no_instances".to_string(),
+            summary: if include_details {
+                "no_instances".to_string()
+            } else {
+                String::new()
+            },
         };
     };
 
@@ -254,14 +255,16 @@ fn source_room_status(
     let mut all_have_target_room = true;
     let startup_target = state.startup_priority_target_samples;
     let mut source_has_startup_deficit = false;
-    let mut parts = Vec::new();
+    let mut parts = include_details.then(Vec::new);
 
     for instance_index in instance_indices {
         let Some(instance) = state.instances.get(*instance_index) else {
             continue;
         };
         if instance.finished {
-            parts.push(format!("i{}:finished", instance_index));
+            if let Some(parts) = parts.as_mut() {
+                parts.push(format!("i{}:finished", instance_index));
+            }
             continue;
         }
         saw_unfinished = true;
@@ -282,21 +285,26 @@ fn source_room_status(
         // is impossible in that case. Clamp the target to preserve liveness.
         let target_room = required_samples.min(instance.capacity_samples.max(1));
         all_have_target_room &= free >= target_room;
-        parts.push(format!(
-            "i{}:buf={} res={} /{} free={} target={}",
-            instance_index,
-            instance.buffered_samples,
-            instance.reserved_samples,
-            instance.capacity_samples,
-            free,
-            target_room
-        ));
+        if let Some(parts) = parts.as_mut() {
+            parts.push(format!(
+                "i{}:buf={} res={} /{} free={} target={}",
+                instance_index,
+                instance.buffered_samples,
+                instance.reserved_samples,
+                instance.capacity_samples,
+                free,
+                target_room
+            ));
+        }
     }
 
     if !saw_unfinished {
         return SourceRoomStatus {
             allowed: true,
-            summary: format!("all_finished [{}]", parts.join(", ")),
+            summary: parts
+                .as_ref()
+                .map(|parts| format!("all_finished [{}]", parts.join(", ")))
+                .unwrap_or_default(),
         };
     }
 
@@ -320,14 +328,18 @@ fn source_room_status(
     let allowed = all_have_target_room && startup_fairness_allows;
     SourceRoomStatus {
         allowed,
-        summary: format!(
-            "allowed={} all_target={} startup_deficit_global={} startup_deficit_source={} [{}]",
-            allowed,
-            all_have_target_room,
-            global_startup_deficit_exists,
-            source_has_startup_deficit,
-            parts.join(", ")
-        ),
+        summary: if let Some(parts) = parts.as_ref() {
+            format!(
+                "allowed={} all_target={} startup_deficit_global={} startup_deficit_source={} [{}]",
+                allowed,
+                all_have_target_room,
+                global_startup_deficit_exists,
+                source_has_startup_deficit,
+                parts.join(", ")
+            )
+        } else {
+            String::new()
+        },
     }
 }
 
@@ -378,7 +390,7 @@ mod tests {
     #[test]
     fn source_room_status_disallows_when_target_not_available() {
         let state = state_with_one_source(9, 10);
-        let status = source_room_status(&state, &SourceKey::TrackId(1), 4);
+        let status = source_room_status(&state, &SourceKey::TrackId(1), 4, true);
         assert!(!status.allowed);
     }
 

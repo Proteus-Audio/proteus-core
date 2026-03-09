@@ -23,7 +23,6 @@ impl Player {
         let trace_ms = current_ms();
         self.play_command_ms
             .store(trace_ms, std::sync::atomic::Ordering::Relaxed);
-        debug!("play trace: play_at requested ts={:.3}", ts);
         let mut timestamp = self.ts.lock().unwrap();
         *timestamp = ts;
         drop(timestamp);
@@ -31,21 +30,9 @@ impl Player {
         self.request_effects_reset();
         self.clear_inline_effects_update();
         self.stop_and_join_playback_thread();
-        debug!(
-            "play trace: play_at after stop_and_join_playback_thread +{}ms",
-            current_ms().saturating_sub(trace_ms)
-        );
         self.initialize_thread(Some(ts));
-        debug!(
-            "play trace: play_at after initialize_thread +{}ms",
-            current_ms().saturating_sub(trace_ms)
-        );
 
         self.resume();
-        debug!(
-            "play trace: play_at after resume() request +{}ms",
-            current_ms().saturating_sub(trace_ms)
-        );
 
         self.wait_for_audio_heard(Duration::from_secs(5));
     }
@@ -69,17 +56,9 @@ impl Player {
 
         if !thread_exists {
             self.initialize_thread(None);
-            debug!(
-                "play trace: play after initialize_thread +{}ms",
-                current_ms().saturating_sub(trace_ms)
-            );
         }
 
         self.resume();
-        debug!(
-            "play trace: play after resume() request +{}ms",
-            current_ms().saturating_sub(trace_ms)
-        );
 
         self.wait_for_audio_heard(Duration::from_secs(5));
     }
@@ -95,11 +74,6 @@ impl Player {
             .play_command_ms
             .load(std::sync::atomic::Ordering::Relaxed);
         if trace_ms > 0 {
-            debug!(
-                "play trace: resume requested +{}ms",
-                current_ms().saturating_sub(trace_ms)
-            );
-        } else {
             debug!("play trace: resume requested");
         }
         self.state
@@ -185,7 +159,10 @@ impl Player {
         !playback_thread_exists
     }
 
-    /// Return true if playback has reached the end.
+    /// Return `true` when no playback worker thread is alive.
+    ///
+    /// This reflects runtime lifecycle state, not end-of-stream semantics.
+    /// Use playback state and timestamp/duration checks for stricter EOS logic.
     pub fn is_finished(&self) -> bool {
         self.thread_finished()
     }
@@ -249,15 +226,20 @@ impl Player {
     fn fade_current_sink_out(&self, fade_ms: f32) {
         let steps = ((fade_ms / 5.0).ceil() as u32).max(1);
         let step_ms = (fade_ms / steps as f32).max(1.0) as u64;
-        let sink = self.sink.lock().unwrap();
-        let start_volume = sink.volume().max(0.0);
+        let start_volume = {
+            let sink = self.sink.lock().unwrap();
+            sink.volume().max(0.0)
+        };
         if start_volume <= 0.0 {
             return;
         }
         for step in 1..=steps {
             let t = step as f32 / steps as f32;
             let gain = start_volume * (1.0 - t);
-            sink.set_volume(gain.max(0.0));
+            {
+                let sink = self.sink.lock().unwrap();
+                sink.set_volume(gain.max(0.0));
+            }
             thread::sleep(Duration::from_millis(step_ms));
         }
     }
@@ -317,13 +299,6 @@ impl Player {
         let start = Instant::now();
         loop {
             if self.audio_heard.load(std::sync::atomic::Ordering::Relaxed) {
-                if trace_ms > 0 {
-                    debug!(
-                        "play trace: audio_heard observed +{}ms (waited {}ms)",
-                        current_ms().saturating_sub(trace_ms),
-                        start.elapsed().as_millis()
-                    );
-                }
                 return true;
             }
             if self.thread_finished() {

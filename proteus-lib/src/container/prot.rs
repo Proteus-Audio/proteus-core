@@ -1009,7 +1009,7 @@ fn parse_shuffle_points(points: &[String]) -> Vec<u64> {
 
 fn parse_timestamp_ms(value: &str) -> Option<u64> {
     let parts: Vec<&str> = value.trim().split(':').collect();
-    if parts.is_empty() || parts.len() > 3 {
+    if parts.len() > 3 {
         return None;
     }
 

@@ -212,6 +212,11 @@ impl Player {
     /// # Arguments
     ///
     /// * `source` - Typed source for player initialization.
+    ///
+    /// # Panics
+    ///
+    /// Panics if player initialization fails. Prefer
+    /// [`Self::try_from_source_with_options`] for fallible construction.
     pub fn from_source(source: PlayerSource) -> Self {
         Self::from_source_with_options(source, PlayerInitOptions::default())
     }
@@ -222,6 +227,11 @@ impl Player {
     ///
     /// * `source` - Typed source for player initialization.
     /// * `options` - Player initialization options.
+    ///
+    /// # Panics
+    ///
+    /// Panics if player initialization fails. Prefer
+    /// [`Self::try_from_source_with_options`] for fallible construction.
     pub fn from_source_with_options(source: PlayerSource, options: PlayerInitOptions) -> Self {
         Self::try_from_source_with_options(source, options)
             .unwrap_or_else(|err| panic!("Player initialization failed: {}", err))
@@ -319,6 +329,11 @@ impl Player {
     /// # Arguments
     ///
     /// * `file_path` - Path to a `.prot`/`.mka` container file.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the container cannot be opened or parsed. Prefer
+    /// [`Self::try_from_source_with_options`] for fallible construction.
     pub fn new(file_path: &str) -> Self {
         Self::from_source(PlayerSource::ContainerPath(file_path.to_string()))
     }
@@ -329,6 +344,11 @@ impl Player {
     ///
     /// * `file_path` - Path to a `.prot`/`.mka` container file.
     /// * `options` - Player initialization options.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the container cannot be opened or parsed. Prefer
+    /// [`Self::try_from_source_with_options`] for fallible construction.
     pub fn new_with_options(file_path: &str, options: PlayerInitOptions) -> Self {
         Self::from_source_with_options(PlayerSource::ContainerPath(file_path.to_string()), options)
     }
@@ -338,6 +358,10 @@ impl Player {
     /// # Arguments
     ///
     /// * `file_paths` - Pre-normalized track path groups.
+    ///
+    /// # Panics
+    ///
+    /// Panics if runtime initialization fails.
     pub fn new_from_file_paths(file_paths: Vec<PathsTrack>) -> Self {
         Self::from_source(PlayerSource::FilePaths(file_paths))
     }
@@ -348,6 +372,10 @@ impl Player {
     ///
     /// * `file_paths` - Pre-normalized track path groups.
     /// * `options` - Player initialization options.
+    ///
+    /// # Panics
+    ///
+    /// Panics if runtime initialization fails.
     pub fn new_from_file_paths_with_options(
         file_paths: Vec<PathsTrack>,
         options: PlayerInitOptions,
@@ -361,6 +389,10 @@ impl Player {
     ///
     /// * `file_paths` - Legacy track grouping shape where each inner vector is
     ///   interpreted as one track candidate set.
+    ///
+    /// # Panics
+    ///
+    /// Panics if runtime initialization fails.
     pub fn new_from_file_paths_legacy(file_paths: Vec<Vec<String>>) -> Self {
         Self::new_from_file_paths_legacy_with_options(file_paths, PlayerInitOptions::default())
     }
@@ -372,6 +404,10 @@ impl Player {
     /// * `file_paths` - Legacy track grouping shape where each inner vector is
     ///   interpreted as one track candidate set.
     /// * `options` - Player initialization options.
+    ///
+    /// # Panics
+    ///
+    /// Panics if runtime initialization fails.
     pub fn new_from_file_paths_legacy_with_options(
         file_paths: Vec<Vec<String>>,
         options: PlayerInitOptions,
@@ -392,6 +428,12 @@ impl Player {
     ///
     /// * `path` - Optional container path.
     /// * `paths` - Optional standalone track path groups.
+    ///
+    /// # Panics
+    ///
+    /// Panics when source selection is invalid or initialization fails.
+    /// Prefer [`Self::try_new_from_path_or_paths_with_options`] for fallible
+    /// construction.
     pub fn new_from_path_or_paths(path: Option<&str>, paths: Option<Vec<PathsTrack>>) -> Self {
         Self::new_from_path_or_paths_with_options(path, paths, PlayerInitOptions::default())
     }
@@ -407,6 +449,12 @@ impl Player {
     /// * `path` - Optional container path.
     /// * `paths` - Optional standalone track path groups.
     /// * `options` - Player initialization options.
+    ///
+    /// # Panics
+    ///
+    /// Panics when source selection is invalid or initialization fails.
+    /// Prefer [`Self::try_new_from_path_or_paths_with_options`] for fallible
+    /// construction.
     pub fn new_from_path_or_paths_with_options(
         path: Option<&str>,
         paths: Option<Vec<PathsTrack>>,

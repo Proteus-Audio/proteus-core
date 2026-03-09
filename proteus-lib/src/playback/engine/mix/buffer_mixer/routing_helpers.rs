@@ -190,14 +190,18 @@ pub(super) fn log_buffer_header(
     consumed_samples: usize,
 ) {
     let consumed_ms = samples_to_ms(consumed_samples, sample_rate, channels);
-    log(&format!("T{:?}\n{}\n", logical_track_index, consumed_ms));
+    if let Err(err) = log(&format!("T{:?}\n{}\n", logical_track_index, consumed_ms)) {
+        log::warn!("failed to write buffer-map header: {}", err);
+    }
 }
 
 #[cfg(feature = "buffer-map")]
 /// Emit a buffer-map occupancy line for one instance.
 pub(super) fn log_buffer(instance: &BufferInstance, map: Vec<&str>) {
     let instance_id = instance.meta.instance_id;
-    log(&format!("[{}] <- i{}\n", map.join(""), instance_id));
+    if let Err(err) = log(&format!("[{}] <- i{}\n", map.join(""), instance_id)) {
+        log::warn!("failed to write buffer-map line: {}", err);
+    }
 }
 
 /// Convert the final active-window end of an instance into interleaved sample offset.
