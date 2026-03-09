@@ -7,7 +7,7 @@ use std::sync::atomic::Ordering;
 
 use crate::dsp::effects::convolution_reverb::{parse_impulse_response_string, ImpulseResponseSpec};
 use crate::{
-    dsp::effects::AudioEffect,
+    dsp::effects::{normalize_legacy_effect_aliases, AudioEffect},
     playback::engine::{DspChainMetrics, InlineEffectsUpdate},
 };
 
@@ -131,25 +131,11 @@ impl Player {
     /// Snapshot the active effect chain names.
     ///
     /// This is primarily intended for diagnostics and UI display.
-    #[allow(deprecated)]
     pub fn get_effect_names(&self) -> Vec<String> {
         let effects = self.effects.lock().unwrap();
         effects
             .iter()
-            .map(|effect| match effect {
-                AudioEffect::DelayReverb(_) => "DelayReverb".to_string(),
-                AudioEffect::BasicReverb(_) => "DelayReverb".to_string(),
-                AudioEffect::DiffusionReverb(_) => "DiffusionReverb".to_string(),
-                AudioEffect::ConvolutionReverb(_) => "ConvolutionReverb".to_string(),
-                AudioEffect::LowPassFilter(_) => "LowPassFilter".to_string(),
-                AudioEffect::HighPassFilter(_) => "HighPassFilter".to_string(),
-                AudioEffect::Distortion(_) => "Distortion".to_string(),
-                AudioEffect::Gain(_) => "Gain".to_string(),
-                AudioEffect::Compressor(_) => "Compressor".to_string(),
-                AudioEffect::Limiter(_) => "Limiter".to_string(),
-                AudioEffect::MultibandEq(_) => "MultibandEq".to_string(),
-                AudioEffect::Pan(_) => "Pan".to_string(),
-            })
+            .map(|effect| effect.display_name().to_string())
             .collect()
     }
 
@@ -248,8 +234,9 @@ impl Player {
     /// Replace the currently active effect vector atomically.
     fn replace_effects_chain(&self, effects: Vec<AudioEffect>) {
         let mut guard = self.effects.lock().unwrap();
-        log::info!("updated effects chain: {} effect(s)", effects.len());
-        *guard = effects;
+        let normalized = normalize_legacy_effect_aliases(effects);
+        log::info!("updated effects chain: {} effect(s)", normalized.len());
+        *guard = normalized;
     }
 }
 

@@ -2,6 +2,7 @@
 
 use rodio::buffer::SamplesBuffer;
 use rodio::{OutputStream, OutputStreamBuilder, Sink};
+use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc::RecvTimeoutError, Arc, Mutex};
 use std::thread;
@@ -23,7 +24,7 @@ use super::guard::PlaybackThreadGuard;
 struct LoopState {
     start_time: f64,
     startup_fade_pending: bool,
-    chunk_lengths: Arc<Mutex<Vec<f64>>>,
+    chunk_lengths: Arc<Mutex<VecDeque<f64>>>,
     time_chunks_passed: Arc<Mutex<f64>>,
     timer: Arc<Mutex<timer::Timer>>,
     buffering_done: Arc<AtomicBool>,
@@ -48,7 +49,7 @@ impl LoopState {
         Self {
             start_time,
             startup_fade_pending: true,
-            chunk_lengths: Arc::new(Mutex::new(Vec::new())),
+            chunk_lengths: Arc::new(Mutex::new(VecDeque::new())),
             time_chunks_passed: Arc::new(Mutex::new(start_time)),
             timer,
             buffering_done: Arc::new(AtomicBool::new(false)),
@@ -335,10 +336,7 @@ fn resume_sink(ctx: &ThreadContext, sink: &Sink, fade_seconds: f32) {
 //
 // `false` when the worker should terminate, otherwise `true`.
 fn check_runtime_state(ctx: &ThreadContext, loop_state: &mut LoopState) -> bool {
-    if ctx.abort.load(Ordering::SeqCst) {
-        let sink = ctx.sink_mutex.lock().unwrap();
-        pause_sink(ctx, loop_state, &sink, 0.1);
-        sink.clear();
+    if handle_abort(ctx, loop_state) {
         return false;
     }
 
@@ -350,63 +348,106 @@ fn check_runtime_state(ctx: &ThreadContext, loop_state: &mut LoopState) -> bool 
     let sink = ctx.sink_mutex.lock().unwrap();
 
     // Gate startup/resume until enough chunks are queued to reduce underflow.
-    if state == PlayerState::Resuming && start_sink_chunks > 0 && sink.len() < start_sink_chunks {
-        if loop_state.resuming_gate_started_at.is_none() {
-            loop_state.resuming_gate_started_at = Some(Instant::now());
-        }
-        sink.pause();
+    if handle_resuming_gate(state, start_sink_chunks, &sink, loop_state) {
         return true;
     }
 
-    if state == PlayerState::Pausing {
-        pause_sink(ctx, loop_state, &sink, 0.1);
-        drop(sink);
-        ctx.play_state
-            .lock()
-            .unwrap()
-            .clone_from(&PlayerState::Paused);
+    if handle_pausing(ctx, loop_state, state, &sink) {
         return true;
     }
 
-    if state == PlayerState::Resuming {
-        let resume_gate_wait_ms = loop_state
-            .resuming_gate_started_at
-            .take()
-            .map(|start| start.elapsed().as_millis())
-            .unwrap_or(0);
-        if let Some(elapsed_ms) = play_trace_elapsed_ms(ctx) {
-            debug!(
-                "play trace: resuming gate passed sink_len={} start_sink_chunks={} gate_wait_ms={} +{}ms",
-                sink.len(),
-                start_sink_chunks,
-                resume_gate_wait_ms,
-                elapsed_ms
-            );
-        }
-        let fade_length = if loop_state.startup_fade_pending {
-            loop_state.startup_fade_pending = false;
-            if let Some(ms) = ctx.next_resume_fade_ms.lock().unwrap().take() {
-                (ms / 1000.0).max(0.0)
-            } else {
-                (ctx.buffer_settings.lock().unwrap().startup_fade_ms / 1000.0).max(0.0)
-            }
-        } else {
-            0.1
-        };
-
-        resume_sink(ctx, &sink, fade_length);
-        drop(sink);
-        ctx.play_state
-            .lock()
-            .unwrap()
-            .clone_from(&PlayerState::Playing);
+    if handle_resuming_commit(ctx, loop_state, state, start_sink_chunks, &sink) {
         return true;
     }
 
+    loop_state.resuming_gate_started_at = None;
+
+    true
+}
+
+fn handle_abort(ctx: &ThreadContext, loop_state: &mut LoopState) -> bool {
+    if !ctx.abort.load(Ordering::SeqCst) {
+        return false;
+    }
+    let sink = ctx.sink_mutex.lock().unwrap();
+    pause_sink(ctx, loop_state, &sink, 0.1);
+    sink.clear();
+    true
+}
+
+fn handle_resuming_gate(
+    state: PlayerState,
+    start_sink_chunks: usize,
+    sink: &Sink,
+    loop_state: &mut LoopState,
+) -> bool {
+    if state != PlayerState::Resuming || start_sink_chunks == 0 || sink.len() >= start_sink_chunks {
+        return false;
+    }
+    if loop_state.resuming_gate_started_at.is_none() {
+        loop_state.resuming_gate_started_at = Some(Instant::now());
+    }
+    sink.pause();
+    true
+}
+
+fn handle_pausing(
+    ctx: &ThreadContext,
+    loop_state: &mut LoopState,
+    state: PlayerState,
+    sink: &Sink,
+) -> bool {
+    if state != PlayerState::Pausing {
+        return false;
+    }
+    pause_sink(ctx, loop_state, sink, 0.1);
+    ctx.play_state
+        .lock()
+        .unwrap()
+        .clone_from(&PlayerState::Paused);
+    true
+}
+
+fn handle_resuming_commit(
+    ctx: &ThreadContext,
+    loop_state: &mut LoopState,
+    state: PlayerState,
+    start_sink_chunks: usize,
+    sink: &Sink,
+) -> bool {
     if state != PlayerState::Resuming {
-        loop_state.resuming_gate_started_at = None;
+        return false;
     }
+    let resume_gate_wait_ms = loop_state
+        .resuming_gate_started_at
+        .take()
+        .map(|start| start.elapsed().as_millis())
+        .unwrap_or(0);
+    if let Some(elapsed_ms) = play_trace_elapsed_ms(ctx) {
+        debug!(
+            "play trace: resuming gate passed sink_len={} start_sink_chunks={} gate_wait_ms={} +{}ms",
+            sink.len(),
+            start_sink_chunks,
+            resume_gate_wait_ms,
+            elapsed_ms
+        );
+    }
+    let fade_length = if loop_state.startup_fade_pending {
+        loop_state.startup_fade_pending = false;
+        if let Some(ms) = ctx.next_resume_fade_ms.lock().unwrap().take() {
+            (ms / 1000.0).max(0.0)
+        } else {
+            (ctx.buffer_settings.lock().unwrap().startup_fade_ms / 1000.0).max(0.0)
+        }
+    } else {
+        0.1
+    };
 
+    resume_sink(ctx, sink, fade_length);
+    ctx.play_state
+        .lock()
+        .unwrap()
+        .clone_from(&PlayerState::Playing);
     true
 }
 
@@ -432,11 +473,12 @@ fn update_chunk_lengths(ctx: &ThreadContext, loop_state: &mut LoopState) {
     // Infer consumed chunks from sink queue depth for the entire run, including
     // the post-buffering drain phase, so the playback clock keeps advancing.
     let chunks_played = chunk_lengths.len().saturating_sub(sink.len());
-    for _ in 0..chunks_played {
-        timer.reset();
-        timer.start();
-        *time_chunks_passed += chunk_lengths.remove(0);
-    }
+    advance_playback_clock(
+        chunks_played,
+        &mut chunk_lengths,
+        &mut time_chunks_passed,
+        &mut timer,
+    );
 
     if sink.is_paused() {
         timer.pause();
@@ -454,6 +496,21 @@ fn update_chunk_lengths(ctx: &ThreadContext, loop_state: &mut LoopState) {
     }
 
     *time_passed_unlocked = current_audio_time;
+}
+
+fn advance_playback_clock(
+    chunks_played: usize,
+    chunk_lengths: &mut VecDeque<f64>,
+    time_chunks_passed: &mut f64,
+    timer: &mut timer::Timer,
+) {
+    for _ in 0..chunks_played {
+        timer.reset();
+        timer.start();
+        if let Some(length) = chunk_lengths.pop_front() {
+            *time_chunks_passed += length;
+        }
+    }
 }
 
 // Block append path until sink queue depth is below configured maximum.
@@ -601,7 +658,7 @@ fn update_sink(
         .chunk_lengths
         .lock()
         .unwrap()
-        .push(length_in_seconds);
+        .push_back(length_in_seconds);
 
     // Keep UI time and state responsive on every append.
     update_chunk_lengths(ctx, loop_state);

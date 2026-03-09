@@ -1,6 +1,7 @@
 //! Convolution reverb effect wrapper for the DSP chain.
 
 use std::collections::HashMap;
+use std::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 
@@ -14,7 +15,6 @@ pub mod impulse_response;
 pub mod reverb;
 mod spec;
 
-pub(crate) use spec::{parse_impulse_response_spec, parse_impulse_response_tail_db};
 pub use spec::{parse_impulse_response_string, ImpulseResponseSpec};
 
 const DEFAULT_DRY_WET: f32 = 0.000001;
@@ -29,6 +29,16 @@ type ImpulseResponseCacheMap =
 static IMPULSE_RESPONSE_CACHE: OnceLock<Mutex<ImpulseResponseCacheMap>> = OnceLock::new();
 type ReverbKernelCacheMap = HashMap<ReverbKernelCacheKey, Arc<reverb::Reverb>>;
 static REVERB_KERNEL_CACHE: OnceLock<Mutex<ReverbKernelCacheMap>> = OnceLock::new();
+
+/// Clear process-wide convolution caches for test/session isolation.
+pub fn clear_global_caches() {
+    if let Some(cache) = IMPULSE_RESPONSE_CACHE.get() {
+        cache.lock().unwrap().clear();
+    }
+    if let Some(cache) = REVERB_KERNEL_CACHE.get() {
+        cache.lock().unwrap().clear();
+    }
+}
 
 /// Preferred processing batch size in interleaved samples for the reverb.
 pub fn preferred_batch_samples(channels: usize) -> usize {
@@ -376,12 +386,39 @@ fn build_reverb_with_impulse_response(
 
     use self::impulse_response::{
         load_impulse_response_from_file_with_tail,
-        load_impulse_response_from_prot_attachment_with_tail,
+        load_impulse_response_from_prot_attachment_with_tail, ImpulseResponseError,
     };
+
+    #[derive(Debug)]
+    enum ReverbLoadError {
+        MissingContainerPath,
+        PathNotFound(PathBuf),
+        AttachmentLoad(ImpulseResponseError),
+        FileLoad(ImpulseResponseError),
+    }
+
+    impl fmt::Display for ReverbLoadError {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            match self {
+                Self::MissingContainerPath => {
+                    write!(f, "missing container path for attachment")
+                }
+                Self::PathNotFound(path) => {
+                    write!(f, "impulse response path not found: {}", path.display())
+                }
+                Self::AttachmentLoad(err) => {
+                    write!(f, "failed to load attachment impulse response: {}", err)
+                }
+                Self::FileLoad(err) => write!(f, "failed to load file impulse response: {}", err),
+            }
+        }
+    }
+
+    impl std::error::Error for ReverbLoadError {}
 
     let result = match impulse_spec {
         ImpulseResponseSpec::Attachment(name) => container_path
-            .ok_or_else(|| "missing container path for attachment".to_string())
+            .ok_or(ReverbLoadError::MissingContainerPath)
             .and_then(|path| {
                 let cache_key = ImpulseResponseCacheKey {
                     source: ImpulseResponseCacheSource::Attachment {
@@ -392,7 +429,7 @@ fn build_reverb_with_impulse_response(
                 };
                 let impulse_response = load_cached_impulse_response(cache_key.clone(), || {
                     load_impulse_response_from_prot_attachment_with_tail(path, &name, Some(tail_db))
-                        .map_err(|err| err.to_string())
+                        .map_err(ReverbLoadError::AttachmentLoad)
                 })?;
                 Ok((cache_key, impulse_response))
             }),
@@ -407,7 +444,7 @@ fn build_reverb_with_impulse_response(
                 };
                 load_cached_impulse_response(cache_key.clone(), || {
                     load_impulse_response_from_file_with_tail(&resolved_path, Some(tail_db))
-                        .map_err(|err| err.to_string())
+                        .map_err(ReverbLoadError::FileLoad)
                 })
                 .map(|impulse_response| (cache_key, impulse_response))
             } else {
@@ -431,20 +468,14 @@ fn build_reverb_with_impulse_response(
                                     &fallback_name,
                                     Some(tail_db),
                                 )
-                                .map_err(|err| err.to_string())
+                                .map_err(ReverbLoadError::AttachmentLoad)
                             })
                             .map(|impulse_response| (cache_key, impulse_response))
                         } else {
-                            Err(format!(
-                                "impulse response path not found: {}",
-                                resolved_path.display()
-                            ))
+                            Err(ReverbLoadError::PathNotFound(resolved_path))
                         }
                     }
-                    None => Err(format!(
-                        "impulse response path not found: {}",
-                        resolved_path.display()
-                    )),
+                    None => Err(ReverbLoadError::PathNotFound(resolved_path)),
                 }
             }
         }
@@ -503,12 +534,12 @@ fn build_cached_reverb(
     reverb
 }
 
-fn load_cached_impulse_response<F>(
+fn load_cached_impulse_response<F, E>(
     cache_key: ImpulseResponseCacheKey,
     loader: F,
-) -> Result<Arc<impulse_response::ImpulseResponse>, String>
+) -> Result<Arc<impulse_response::ImpulseResponse>, E>
 where
-    F: FnOnce() -> Result<impulse_response::ImpulseResponse, String>,
+    F: FnOnce() -> Result<impulse_response::ImpulseResponse, E>,
 {
     let cache = IMPULSE_RESPONSE_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
     if let Some(cached) = cache.lock().unwrap().get(&cache_key).cloned() {
@@ -582,5 +613,11 @@ mod tests {
         };
         let output = effect.process(&input, &context, false);
         assert_eq!(output, input);
+    }
+
+    #[test]
+    fn clear_global_caches_is_idempotent() {
+        clear_global_caches();
+        clear_global_caches();
     }
 }

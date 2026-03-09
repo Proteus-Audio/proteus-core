@@ -126,7 +126,16 @@ fn probe_with_hint(
 ///
 /// For container files, this may be approximate if metadata is inaccurate.
 pub fn get_durations(file_path: &str) -> HashMap<u32, f64> {
-    try_get_durations(file_path).unwrap_or_else(|_| fallback_durations(file_path))
+    match try_get_durations(file_path) {
+        Ok(durations) => durations,
+        Err(err) => {
+            warn!(
+                "duration probe failed for '{}': {}; using fallback duration mapping",
+                file_path, err
+            );
+            fallback_durations(file_path)
+        }
+    }
 }
 
 /// Strict duration mapping per track using metadata or frame counts.
@@ -190,7 +199,16 @@ fn get_durations_best_effort(file_path: &str) -> HashMap<u32, f64> {
 
 /// Scan all packets to compute per-track durations (accurate but slower).
 pub fn get_durations_by_scan(file_path: &str) -> HashMap<u32, f64> {
-    try_get_durations_by_scan(file_path).unwrap_or_else(|_| fallback_durations(file_path))
+    match try_get_durations_by_scan(file_path) {
+        Ok(durations) => durations,
+        Err(err) => {
+            warn!(
+                "duration scan failed for '{}': {}; using fallback duration mapping",
+                file_path, err
+            );
+            fallback_durations(file_path)
+        }
+    }
 }
 
 /// Strict packet-scan duration mapping per track.

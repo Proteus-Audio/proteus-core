@@ -11,9 +11,9 @@ mod project_files;
 
 /// Entry point for the CLI binary.
 fn main() {
+    dotenv().ok();
     let args = cli::args::build_cli().get_matches();
     let log_buffer = logging::init();
-    dotenv().ok();
 
     let code = match cli::runner::run(&args, log_buffer) {
         Ok(code) => code,

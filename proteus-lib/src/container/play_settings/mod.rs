@@ -3,16 +3,6 @@
 use log::{info, warn};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-use crate::dsp::effects::AudioEffect;
-#[allow(deprecated)]
-#[deprecated(note = "Use DelayReverbSettings instead.")]
-pub use crate::dsp::effects::BasicReverbSettings;
-pub use crate::dsp::effects::{
-    CompressorSettings, ConvolutionReverbSettings, DelayReverbSettings, DistortionSettings,
-    EqPointSettings, HighEdgeFilterSettings, HighPassFilterSettings, LimiterSettings,
-    LowEdgeFilterSettings, LowPassFilterSettings, MultibandEqSettings,
-};
-
 pub mod legacy;
 pub mod v1;
 pub mod v2;
@@ -24,7 +14,7 @@ pub use v2::{PlaySettingsV2, PlaySettingsV2File};
 pub use v3::{PlaySettingsV3, PlaySettingsV3File};
 
 /// Effect settings variants that can appear in the settings file.
-pub type EffectSettings = AudioEffect;
+pub type EffectSettings = serde_json::Value;
 
 /// Track-level configuration shared by newer settings versions.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -112,6 +102,80 @@ impl PlaySettingsFile {
             } => encoder_version.as_deref(),
         }
     }
+
+    /// Return normalized modern payload for V1/V2/V3 settings.
+    pub fn versioned_payload(&self) -> Option<&PlaySettingsPayload> {
+        match self {
+            PlaySettingsFile::V1(file) => Some(file.settings.inner()),
+            PlaySettingsFile::V2(file) => Some(file.settings.inner()),
+            PlaySettingsFile::V3(file) => Some(file.settings.inner()),
+            _ => None,
+        }
+    }
+
+    /// Return mutable normalized modern payload for V1/V2/V3 settings.
+    pub fn versioned_payload_mut(&mut self) -> Option<&mut PlaySettingsPayload> {
+        match self {
+            PlaySettingsFile::V1(file) => Some(file.settings.inner_mut()),
+            PlaySettingsFile::V2(file) => Some(file.settings.inner_mut()),
+            PlaySettingsFile::V3(file) => Some(file.settings.inner_mut()),
+            _ => None,
+        }
+    }
+}
+
+/// Return raw effect entries for versioned settings files.
+pub fn effects(play_settings: &PlaySettingsFile) -> Option<&[EffectSettings]> {
+    play_settings
+        .versioned_payload()
+        .map(|payload| payload.effects.as_slice())
+}
+
+/// Return the first convolution-reverb effect payload object, if present.
+pub fn first_convolution_reverb_settings(
+    play_settings: &PlaySettingsFile,
+) -> Option<&serde_json::Map<String, serde_json::Value>> {
+    let effects = effects(play_settings)?;
+    effects.iter().find_map(|effect| {
+        let wrapper = effect.as_object()?;
+        wrapper
+            .get("ConvolutionReverbSettings")
+            .and_then(serde_json::Value::as_object)
+    })
+}
+
+/// Extract raw impulse-response setting text from play settings.
+pub fn extract_impulse_response_text(play_settings: &PlaySettingsFile) -> Option<String> {
+    let settings = first_convolution_reverb_settings(play_settings)?;
+    settings
+        .get("impulse_response")
+        .and_then(serde_json::Value::as_str)
+        .or_else(|| {
+            settings
+                .get("impulse_response_attachment")
+                .and_then(serde_json::Value::as_str)
+        })
+        .or_else(|| {
+            settings
+                .get("impulse_response_path")
+                .and_then(serde_json::Value::as_str)
+        })
+        .map(ToString::to_string)
+}
+
+/// Extract configured convolution-reverb tail dB from play settings.
+pub fn extract_impulse_response_tail_db(play_settings: &PlaySettingsFile) -> Option<f32> {
+    let settings = first_convolution_reverb_settings(play_settings)?;
+    settings
+        .get("impulse_response_tail_db")
+        .and_then(serde_json::Value::as_f64)
+        .map(|value| value as f32)
+        .or_else(|| {
+            settings
+                .get("impulse_response_tail")
+                .and_then(serde_json::Value::as_f64)
+                .map(|value| value as f32)
+        })
 }
 
 impl<'de> Deserialize<'de> for PlaySettingsFile {

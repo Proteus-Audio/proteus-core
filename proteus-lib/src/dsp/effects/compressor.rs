@@ -2,7 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::level::{db_to_linear, deserialize_db_gain, linear_to_db};
+use super::core::level::{db_to_linear, deserialize_db_gain, linear_to_db};
 use super::EffectContext;
 
 const DEFAULT_THRESHOLD_DB: f32 = -18.0;

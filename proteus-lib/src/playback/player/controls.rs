@@ -31,9 +31,9 @@ impl Player {
 
         self.request_effects_reset();
         self.clear_inline_effects_update();
-        self.kill_current();
+        self.stop_and_join_playback_thread();
         debug!(
-            "play trace: play_at after kill_current +{}ms",
+            "play trace: play_at after stop_and_join_playback_thread +{}ms",
             current_ms().saturating_sub(trace_ms)
         );
         self.initialize_thread(Some(ts));
@@ -112,7 +112,7 @@ impl Player {
     /// Stop the current playback thread and wait for it to exit.
     ///
     /// Internal state is moved through `Stopping` and finalized as `Stopped`.
-    pub fn kill_current(&self) {
+    pub fn stop_and_join_playback_thread(&self) {
         self.state
             .lock()
             .unwrap()
@@ -142,7 +142,7 @@ impl Player {
 
     /// Stop playback and reset timing state.
     pub fn stop(&self) {
-        self.kill_current();
+        self.stop_and_join_playback_thread();
         self.ts.lock().unwrap().clone_from(&0.0);
     }
 
@@ -232,7 +232,7 @@ impl Player {
         self.request_effects_reset();
         self.clear_inline_effects_update();
 
-        self.kill_current();
+        self.stop_and_join_playback_thread();
         self.initialize_thread(Some(ts));
         if was_active {
             *self.next_resume_fade_ms.lock().unwrap() = Some(seek_fade_in_ms);

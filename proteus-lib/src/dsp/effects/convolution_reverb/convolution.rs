@@ -122,12 +122,27 @@ mod complex_fft {
             let mut convolved = vec![Complex { re: 0.0, im: 0.0 }; self.fft_size];
 
             for i in 0..self.ir_segments.len() {
-                add_frames(
+                multiply_accumulate(
                     &mut convolved,
-                    mult_frames(&self.previous_frame_q[i], &self.ir_segments[i]),
+                    &self.previous_frame_q[i],
+                    &self.ir_segments[i],
                 );
             }
             convolved
+        }
+    }
+
+    /// In-place complex multiply-accumulate: `acc += lhs * rhs`.
+    pub fn multiply_accumulate(
+        acc: &mut [Complex<f32>],
+        lhs: &[Complex<f32>],
+        rhs: &[Complex<f32>],
+    ) {
+        for ((acc_sample, lhs_sample), rhs_sample) in acc.iter_mut().zip(lhs).zip(rhs) {
+            let re = (lhs_sample.re * rhs_sample.re) - (lhs_sample.im * rhs_sample.im);
+            let im = (lhs_sample.im * rhs_sample.re) + (lhs_sample.re * rhs_sample.im);
+            acc_sample.re += re;
+            acc_sample.im += im;
         }
     }
 
@@ -276,7 +291,7 @@ mod real_fft {
 
                 let mut convolved = vec![Complex { re: 0.0, im: 0.0 }; spectrum_len];
                 for (prev, ir) in self.previous_frame_q.iter().zip(self.ir_segments.iter()) {
-                    add_frames(&mut convolved, mult_frames(prev, ir));
+                    multiply_accumulate(&mut convolved, prev, ir);
                 }
 
                 let mut time_domain = vec![0.0_f32; self.fft_size];
@@ -324,22 +339,13 @@ mod real_fft {
         }
     }
 
-    fn add_frames(f1: &mut [Complex<f32>], f2: Vec<Complex<f32>>) {
-        for (sample1, sample2) in f1.iter_mut().zip(f2) {
-            sample1.re += sample2.re;
-            sample1.im += sample2.im;
+    fn multiply_accumulate(acc: &mut [Complex<f32>], lhs: &[Complex<f32>], rhs: &[Complex<f32>]) {
+        for ((acc_sample, lhs_sample), rhs_sample) in acc.iter_mut().zip(lhs).zip(rhs) {
+            let re = (lhs_sample.re * rhs_sample.re) - (lhs_sample.im * rhs_sample.im);
+            let im = (lhs_sample.im * rhs_sample.re) + (lhs_sample.re * rhs_sample.im);
+            acc_sample.re += re;
+            acc_sample.im += im;
         }
-    }
-
-    fn mult_frames(f1: &[Complex<f32>], f2: &[Complex<f32>]) -> Vec<Complex<f32>> {
-        let mut out: Vec<Complex<f32>> = Vec::with_capacity(f1.len());
-        for (sample1, sample2) in f1.iter().zip(f2) {
-            out.push(Complex {
-                re: (sample1.re * sample2.re) - (sample1.im * sample2.im),
-                im: (sample1.im * sample2.re) + (sample1.re * sample2.im),
-            });
-        }
-        out
     }
 
     fn init_previous_tail(size: usize) -> Vec<f32> {

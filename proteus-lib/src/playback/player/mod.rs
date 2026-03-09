@@ -18,7 +18,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 
-use crate::container::prot::{PathsTrack, Prot};
+use crate::container::prot::{PathsTrack, Prot, ProtError};
 use crate::diagnostics::reporter::Reporter;
 use crate::dsp::effects::convolution_reverb::ImpulseResponseSpec;
 use crate::playback::output_meter::OutputMeter;
@@ -71,16 +71,19 @@ impl Default for PlayerInitOptions {
 }
 
 /// Error produced when building a [`Player`] from invalid source inputs.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PlayerInitError {
     /// Neither container path nor standalone track paths were provided.
     MissingSource,
+    /// Failed to initialize the underlying `.prot` container.
+    ProtInitialization(ProtError),
 }
 
 impl std::fmt::Display for PlayerInitError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::MissingSource => write!(f, "player source input is required"),
+            Self::ProtInitialization(err) => write!(f, "player source init failed: {}", err),
         }
     }
 }
@@ -207,9 +210,25 @@ impl Player {
     /// * `source` - Typed source for player initialization.
     /// * `options` - Player initialization options.
     pub fn from_source_with_options(source: PlayerSource, options: PlayerInitOptions) -> Self {
+        Self::try_from_source_with_options(source, options)
+            .unwrap_or_else(|err| panic!("Player initialization failed: {}", err))
+    }
+
+    /// Fallible constructor from a typed source and options.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PlayerInitError::ProtInitialization`] when opening/parsing a
+    /// container path fails.
+    pub fn try_from_source_with_options(
+        source: PlayerSource,
+        options: PlayerInitOptions,
+    ) -> Result<Self, PlayerInitError> {
         let (prot, info) = match source {
             PlayerSource::ContainerPath(path) => {
-                let prot = Arc::new(Mutex::new(Prot::new(&path)));
+                let prot = Arc::new(Mutex::new(
+                    Prot::try_new(&path).map_err(PlayerInitError::ProtInitialization)?,
+                ));
                 let info = {
                     let locked_prot = prot.lock().unwrap();
                     locked_prot.info.clone()
@@ -279,7 +298,7 @@ impl Player {
 
         this.initialize_thread(None);
 
-        this
+        Ok(this)
     }
 
     /// Create a new player for a single container path.
@@ -403,17 +422,14 @@ impl Player {
         options: PlayerInitOptions,
     ) -> Result<Self, PlayerInitError> {
         if let Some(path) = path {
-            return Ok(Self::from_source_with_options(
+            return Self::try_from_source_with_options(
                 PlayerSource::ContainerPath(path.to_string()),
                 options,
-            ));
+            );
         }
 
         let file_paths = paths.ok_or(PlayerInitError::MissingSource)?;
-        Ok(Self::from_source_with_options(
-            PlayerSource::FilePaths(file_paths),
-            options,
-        ))
+        Self::try_from_source_with_options(PlayerSource::FilePaths(file_paths), options)
     }
 }
 
@@ -436,7 +452,7 @@ impl Drop for Player {
             .playback_thread_exists
             .load(std::sync::atomic::Ordering::SeqCst)
         {
-            self.kill_current();
+            self.stop_and_join_playback_thread();
         } else {
             self.abort.store(true, Ordering::SeqCst);
             self.join_playback_thread();

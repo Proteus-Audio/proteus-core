@@ -3,7 +3,7 @@
 use std::f32::consts::PI;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum BiquadKind {
+pub(crate) enum BiquadKind {
     LowPass,
     HighPass,
 }
@@ -18,7 +18,7 @@ pub(super) struct BiquadCoefficients {
 }
 
 #[derive(Clone, Debug)]
-pub(super) struct BiquadState {
+pub(crate) struct BiquadState {
     kind: BiquadKind,
     sample_rate: u32,
     channels: usize,
@@ -32,7 +32,7 @@ pub(super) struct BiquadState {
 }
 
 impl BiquadState {
-    pub(super) fn new(
+    pub(crate) fn new(
         kind: BiquadKind,
         sample_rate: u32,
         channels: usize,
@@ -57,7 +57,7 @@ impl BiquadState {
         }
     }
 
-    pub(super) fn matches(
+    pub(crate) fn matches(
         &self,
         kind: BiquadKind,
         sample_rate: u32,
@@ -74,7 +74,7 @@ impl BiquadState {
             && (self.q - q).abs() < f32::EPSILON
     }
 
-    pub(super) fn process(&mut self, samples: &[f32]) -> Vec<f32> {
+    pub(crate) fn process(&mut self, samples: &[f32]) -> Vec<f32> {
         if samples.is_empty() {
             return Vec::new();
         }
@@ -100,7 +100,7 @@ impl BiquadState {
         out
     }
 
-    pub(super) fn reset(&mut self) {
+    pub(crate) fn reset(&mut self) {
         self.x_n1.fill(0.0);
         self.x_n2.fill(0.0);
         self.y_n1.fill(0.0);

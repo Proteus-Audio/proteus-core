@@ -17,14 +17,13 @@ use serde::{Deserialize, Serialize};
 use crate::dsp::effects::convolution_reverb::ImpulseResponseSpec;
 
 pub mod basic_reverb;
-mod biquad;
 pub mod compressor;
 pub mod convolution_reverb;
+mod core;
 pub mod diffusion_reverb;
 pub mod distortion;
 pub mod gain;
 pub mod high_pass;
-mod level;
 pub mod limiter;
 pub mod low_pass;
 pub mod multiband_eq;
@@ -92,6 +91,33 @@ pub enum AudioEffect {
 }
 
 impl AudioEffect {
+    /// Convert deprecated aliases to the canonical runtime variant.
+    #[allow(deprecated)]
+    pub fn normalize_legacy_alias(self) -> Self {
+        match self {
+            AudioEffect::BasicReverb(effect) => AudioEffect::DelayReverb(effect),
+            effect => effect,
+        }
+    }
+
+    /// Canonical display label shared across CLI and runtime debug surfaces.
+    #[allow(deprecated)]
+    pub fn display_name(&self) -> &'static str {
+        match self {
+            AudioEffect::DelayReverb(_) | AudioEffect::BasicReverb(_) => "DelayReverb",
+            AudioEffect::DiffusionReverb(_) => "DiffusionReverb",
+            AudioEffect::ConvolutionReverb(_) => "ConvolutionReverb",
+            AudioEffect::LowPassFilter(_) => "LowPassFilter",
+            AudioEffect::HighPassFilter(_) => "HighPassFilter",
+            AudioEffect::Distortion(_) => "Distortion",
+            AudioEffect::Gain(_) => "Gain",
+            AudioEffect::Compressor(_) => "Compressor",
+            AudioEffect::Limiter(_) => "Limiter",
+            AudioEffect::MultibandEq(_) => "MultibandEq",
+            AudioEffect::Pan(_) => "Pan",
+        }
+    }
+
     /// Process the provided samples through the effect.
     ///
     /// # Arguments
@@ -224,6 +250,14 @@ impl AudioEffect {
     pub fn as_basic_reverb(&self) -> Option<&BasicReverbEffect> {
         self.as_delay_reverb()
     }
+}
+
+/// Normalize deprecated effect aliases for runtime processing.
+pub fn normalize_legacy_effect_aliases(effects: Vec<AudioEffect>) -> Vec<AudioEffect> {
+    effects
+        .into_iter()
+        .map(AudioEffect::normalize_legacy_alias)
+        .collect()
 }
 
 #[cfg(test)]

@@ -1,6 +1,5 @@
 //! Container model and play settings parsing for `.prot`/`.mka`.
 
-use matroska::Matroska;
 use rand::Rng;
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::panic::{catch_unwind, AssertUnwindSafe};
@@ -9,9 +8,8 @@ use log::{error, info, warn};
 
 use crate::container::info::*;
 use crate::container::play_settings::{PlaySettingsFile, PlaySettingsLegacy, SettingsTrack};
-use crate::dsp::effects::convolution_reverb::{
-    parse_impulse_response_spec, parse_impulse_response_tail_db, ImpulseResponseSpec,
-};
+use crate::container::prot_settings::{derive_runtime_settings, load_play_settings_from_container};
+use crate::dsp::effects::convolution_reverb::ImpulseResponseSpec;
 use crate::dsp::effects::AudioEffect;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -231,26 +229,16 @@ impl Prot {
                             .collect(),
                     }];
                 }
-                PlaySettingsFile::V1(file) => {
-                    let (schedule, longest_duration) =
-                        build_id_shuffle_schedule(&file.settings.inner().tracks, &self.info);
-                    self.shuffle_schedule = schedule;
-                    self.duration = longest_duration;
-                }
-                PlaySettingsFile::V2(file) => {
-                    let (schedule, longest_duration) =
-                        build_id_shuffle_schedule(&file.settings.inner().tracks, &self.info);
-                    self.shuffle_schedule = schedule;
-                    self.duration = longest_duration;
-                }
-                PlaySettingsFile::V3(file) => {
-                    let (schedule, longest_duration) =
-                        build_id_shuffle_schedule(&file.settings.inner().tracks, &self.info);
-                    self.shuffle_schedule = schedule;
-                    self.duration = longest_duration;
-                }
                 PlaySettingsFile::Unknown { .. } => {
                     error!("Unknown file format");
+                }
+                _ => {
+                    if let Some(tracks) = versioned_tracks(play_settings) {
+                        let (schedule, longest_duration) =
+                            build_id_shuffle_schedule(tracks, &self.info);
+                        self.shuffle_schedule = schedule;
+                        self.duration = longest_duration;
+                    }
                 }
             },
             None => {
@@ -269,51 +257,18 @@ impl Prot {
     }
 
     fn load_play_settings(&mut self) {
-        println!("Loading play settings...");
         let Some(file_path) = self.file_path.as_ref() else {
             return;
         };
 
-        let file = std::fs::File::open(file_path).unwrap();
-        let mka: Matroska = Matroska::open(file).expect("Could not open file");
-
-        let mut parsed = None;
-
-        for attachment in &mka.attachments {
-            if attachment.name == "play_settings.json" {
-                match serde_json::from_slice::<PlaySettingsFile>(&attachment.data) {
-                    Ok(play_settings) => {
-                        parsed = Some(play_settings);
-                        break;
-                    }
-                    Err(err) => {
-                        error!("Failed to parse play_settings.json: {}", err);
-                    }
-                }
-            }
-        }
-
-        let Some(play_settings) = parsed else {
+        let Some(play_settings) = load_play_settings_from_container(file_path) else {
             return;
         };
 
-        info!("Parsed play_settings.json");
-
-        self.impulse_response_spec = parse_impulse_response_spec(&play_settings);
-        self.impulse_response_tail_db = parse_impulse_response_tail_db(&play_settings);
-
-        match &play_settings {
-            PlaySettingsFile::V1(file) => {
-                self.effects = Some(file.settings.inner().effects.clone());
-            }
-            PlaySettingsFile::V2(file) => {
-                self.effects = Some(file.settings.inner().effects.clone());
-            }
-            PlaySettingsFile::V3(file) => {
-                self.effects = Some(file.settings.inner().effects.clone());
-            }
-            _ => {}
-        }
+        let runtime = derive_runtime_settings(&play_settings);
+        self.impulse_response_spec = runtime.impulse_response_spec;
+        self.impulse_response_tail_db = runtime.impulse_response_tail_db;
+        self.effects = runtime.effects;
 
         if let Some(effects) = self.effects.as_ref() {
             info!(
@@ -624,12 +579,7 @@ impl Prot {
             return settings;
         }
 
-        let tracks = match self.play_settings.as_ref() {
-            Some(PlaySettingsFile::V1(file)) => Some(&file.settings.inner().tracks),
-            Some(PlaySettingsFile::V2(file)) => Some(&file.settings.inner().tracks),
-            Some(PlaySettingsFile::V3(file)) => Some(&file.settings.inner().tracks),
-            _ => None,
-        };
+        let tracks = self.play_settings.as_ref().and_then(versioned_tracks);
 
         if let Some(tracks) = tracks {
             let mut slot_index: u16 = 0;
@@ -661,27 +611,11 @@ impl Prot {
             return false;
         }
 
-        match self.play_settings.as_mut() {
-            Some(PlaySettingsFile::V1(file)) => update_settings_track_slot(
-                file.settings.inner_mut().tracks.as_mut_slice(),
-                slot_index,
-                level,
-                pan,
-            ),
-            Some(PlaySettingsFile::V2(file)) => update_settings_track_slot(
-                file.settings.inner_mut().tracks.as_mut_slice(),
-                slot_index,
-                level,
-                pan,
-            ),
-            Some(PlaySettingsFile::V3(file)) => update_settings_track_slot(
-                file.settings.inner_mut().tracks.as_mut_slice(),
-                slot_index,
-                level,
-                pan,
-            ),
-            _ => false,
-        }
+        self.play_settings
+            .as_mut()
+            .and_then(versioned_tracks_mut)
+            .map(|tracks| update_settings_track_slot(tracks.as_mut_slice(), slot_index, level, pan))
+            .unwrap_or(false)
     }
 
     /// Return all slot indices that share the same track settings as `slot_index`.
@@ -690,12 +624,7 @@ impl Prot {
             return linked_paths_slots(file_paths, slot_index);
         }
 
-        let tracks = match self.play_settings.as_ref() {
-            Some(PlaySettingsFile::V1(file)) => Some(&file.settings.inner().tracks),
-            Some(PlaySettingsFile::V2(file)) => Some(&file.settings.inner().tracks),
-            Some(PlaySettingsFile::V3(file)) => Some(&file.settings.inner().tracks),
-            _ => None,
-        }?;
+        let tracks = self.play_settings.as_ref().and_then(versioned_tracks)?;
 
         linked_settings_slots(tracks, slot_index)
     }
@@ -728,14 +657,8 @@ impl Prot {
             PlaySettingsFile::Legacy(file) => {
                 count_legacy_track_combinations(file.settings.inner())
             }
-            PlaySettingsFile::V1(file) => {
-                count_settings_track_combinations(&file.settings.inner().tracks)
-            }
-            PlaySettingsFile::V2(file) => {
-                count_settings_track_combinations(&file.settings.inner().tracks)
-            }
-            PlaySettingsFile::V3(file) => {
-                count_settings_track_combinations(&file.settings.inner().tracks)
+            PlaySettingsFile::V1(_) | PlaySettingsFile::V2(_) | PlaySettingsFile::V3(_) => {
+                count_settings_track_combinations(versioned_tracks(play_settings).unwrap_or(&[]))
             }
             PlaySettingsFile::Unknown { .. } => None,
         }
@@ -768,57 +691,23 @@ impl Prot {
         }
 
         match self.play_settings.as_ref() {
-            Some(PlaySettingsFile::V1(file)) => file
-                .settings
-                .inner()
-                .tracks
-                .iter()
-                .filter_map(|track| {
-                    if track.ids.is_empty() {
-                        return None;
-                    }
-                    let span = track.selections_count as usize;
-                    if span == 0 {
-                        None
-                    } else {
-                        Some(span)
-                    }
-                })
-                .collect(),
-            Some(PlaySettingsFile::V2(file)) => file
-                .settings
-                .inner()
-                .tracks
-                .iter()
-                .filter_map(|track| {
-                    if track.ids.is_empty() {
-                        return None;
-                    }
-                    let span = track.selections_count as usize;
-                    if span == 0 {
-                        None
-                    } else {
-                        Some(span)
-                    }
-                })
-                .collect(),
-            Some(PlaySettingsFile::V3(file)) => file
-                .settings
-                .inner()
-                .tracks
-                .iter()
-                .filter_map(|track| {
-                    if track.ids.is_empty() {
-                        return None;
-                    }
-                    let span = track.selections_count as usize;
-                    if span == 0 {
-                        None
-                    } else {
-                        Some(span)
-                    }
-                })
-                .collect(),
+            Some(play_settings) if versioned_tracks(play_settings).is_some() => {
+                versioned_tracks(play_settings)
+                    .unwrap_or(&[])
+                    .iter()
+                    .filter_map(|track| {
+                        if track.ids.is_empty() {
+                            return None;
+                        }
+                        let span = track.selections_count as usize;
+                        if span == 0 {
+                            None
+                        } else {
+                            Some(span)
+                        }
+                    })
+                    .collect()
+            }
             Some(PlaySettingsFile::Legacy(file)) => file
                 .settings
                 .inner()
@@ -830,6 +719,18 @@ impl Prot {
             _ => Vec::new(),
         }
     }
+}
+
+fn versioned_tracks(play_settings: &PlaySettingsFile) -> Option<&[SettingsTrack]> {
+    play_settings
+        .versioned_payload()
+        .map(|payload| payload.tracks.as_slice())
+}
+
+fn versioned_tracks_mut(play_settings: &mut PlaySettingsFile) -> Option<&mut Vec<SettingsTrack>> {
+    play_settings
+        .versioned_payload_mut()
+        .map(|payload| &mut payload.tracks)
 }
 
 /// Standalone file-path track configuration.

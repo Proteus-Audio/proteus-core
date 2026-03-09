@@ -6,7 +6,7 @@ use std::time::Duration;
 use rodio::source::{Limit, LimitSettings, SeekError, Source};
 use serde::{Deserialize, Serialize};
 
-use super::level::deserialize_db_gain;
+use super::core::level::deserialize_db_gain;
 use super::EffectContext;
 
 const DEFAULT_THRESHOLD_DB: f32 = -1.0;

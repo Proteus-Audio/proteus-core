@@ -5,8 +5,8 @@
 //! - `types`: argument and transition structs.
 //! - `effects`: effect-chain processing helpers.
 //! - `debug`: debug-only naming helpers.
-//! - `runner`: thin public entrypoint wrapper.
-//! - `loop_core`: long-running mix loop implementation.
+//! - `runner`: long-running mix loop and public entrypoint wrapper.
+//! - `track_stage` / `output_stage`: staged helpers used by the runner.
 
 mod buffer_mixer;
 mod debug;

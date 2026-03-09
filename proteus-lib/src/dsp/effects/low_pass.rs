@@ -2,7 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::biquad::{BiquadKind, BiquadState};
+use super::core::biquad::{BiquadKind, BiquadState};
 use super::EffectContext;
 
 const DEFAULT_FREQ_HZ: u32 = 1000;

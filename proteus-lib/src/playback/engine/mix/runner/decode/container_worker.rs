@@ -15,7 +15,7 @@ use symphonia::core::formats::{SeekMode, SeekTo};
 use symphonia::core::units::{Time, TimeBase};
 
 use super::super::super::buffer_mixer::{DecodeBackpressure, SourceKey};
-use super::super::super::decoder_events::DecodedPacket;
+use super::super::super::decoder_events::{DecodeWorkerEvent, DecodedPacket};
 use super::{interleaved_samples, packet_ts_seconds};
 
 /// Spawn a single demux decode worker that services multiple container track ids.
@@ -24,7 +24,7 @@ pub(crate) fn spawn_container_decode_worker(
     track_ids: Vec<u32>,
     start_time: f64,
     channels: u8,
-    sender: mpsc::SyncSender<Option<DecodedPacket>>,
+    sender: mpsc::SyncSender<DecodeWorkerEvent>,
     abort: Arc<std::sync::atomic::AtomicBool>,
     decode_backpressure: Arc<DecodeBackpressure>,
 ) -> JoinHandle<()> {
@@ -40,12 +40,13 @@ pub(crate) fn spawn_container_decode_worker(
                     file_path, err
                 );
                 for track_id in track_ids {
-                    let _ = sender.send(Some(DecodedPacket {
-                        source_key: SourceKey::TrackId(track_id),
-                        packet_ts: 0.0,
-                        samples: Vec::new(),
-                        eos_flag: true,
-                    }));
+                    let source_key = SourceKey::TrackId(track_id);
+                    let _ = sender.send(DecodeWorkerEvent::SourceError {
+                        source_key: source_key.clone(),
+                        recoverable: false,
+                        message: err.to_string(),
+                    });
+                    let _ = sender.send(DecodeWorkerEvent::SourceFinished { source_key });
                 }
                 return;
             }
@@ -71,12 +72,13 @@ pub(crate) fn spawn_container_decode_worker(
 
         if decoders.is_empty() {
             for track_id in wanted {
-                let _ = sender.send(Some(DecodedPacket {
-                    source_key: SourceKey::TrackId(track_id),
-                    packet_ts: 0.0,
-                    samples: Vec::new(),
-                    eos_flag: true,
-                }));
+                let source_key = SourceKey::TrackId(track_id);
+                let _ = sender.send(DecodeWorkerEvent::SourceError {
+                    source_key: source_key.clone(),
+                    recoverable: false,
+                    message: "no decoders initialized for requested tracks".to_string(),
+                });
+                let _ = sender.send(DecodeWorkerEvent::SourceFinished { source_key });
             }
             return;
         }
@@ -102,8 +104,7 @@ pub(crate) fn spawn_container_decode_worker(
             let packet = match format.next_packet() {
                 Ok(packet) => packet,
                 Err(_) => {
-                    let _ = sender.send(None);
-                    error!("No packet received! End?");
+                    let _ = sender.send(DecodeWorkerEvent::StreamExhausted);
                     break;
                 }
             };
@@ -161,15 +162,13 @@ pub(crate) fn spawn_container_decode_worker(
                         samples.len()
                     );
                     if sender
-                        .send(Some(DecodedPacket {
+                        .send(DecodeWorkerEvent::Packet(DecodedPacket {
                             source_key,
                             packet_ts,
                             samples,
-                            eos_flag: false,
                         }))
                         .is_err()
                     {
-                        error!("Breaking! End?");
                         break;
                     } else if !logged_first_send {
                         logged_first_send = true;
@@ -180,23 +179,28 @@ pub(crate) fn spawn_container_decode_worker(
                         );
                     }
                 }
-                Err(Error::DecodeError(_)) => {
-                    error!("Failed to decode packet");
+                Err(Error::DecodeError(err)) => {
+                    let _ = sender.send(DecodeWorkerEvent::SourceError {
+                        source_key: SourceKey::TrackId(track_id),
+                        recoverable: true,
+                        message: err.to_string(),
+                    });
                 }
-                Err(_) => {
-                    error!("No packet received. End?");
+                Err(err) => {
+                    let _ = sender.send(DecodeWorkerEvent::SourceError {
+                        source_key: SourceKey::TrackId(track_id),
+                        recoverable: false,
+                        message: err.to_string(),
+                    });
                     break;
                 }
             }
         }
 
         for track_id in wanted {
-            let _ = sender.send(Some(DecodedPacket {
+            let _ = sender.send(DecodeWorkerEvent::SourceFinished {
                 source_key: SourceKey::TrackId(track_id),
-                packet_ts: 0.0,
-                samples: Vec::new(),
-                eos_flag: true,
-            }));
+            });
         }
     })
 }

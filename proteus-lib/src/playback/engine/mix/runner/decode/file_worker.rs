@@ -16,7 +16,7 @@ use symphonia::core::units::Time;
 use crate::tools::decode::open_file;
 
 use super::super::super::buffer_mixer::{DecodeBackpressure, SourceKey};
-use super::super::super::decoder_events::DecodedPacket;
+use super::super::super::decoder_events::{DecodeWorkerEvent, DecodedPacket};
 use super::{interleaved_samples, packet_ts_seconds};
 
 /// Spawn a decode worker for one standalone audio file source.
@@ -24,7 +24,7 @@ pub(crate) fn spawn_file_decode_worker(
     file_path: String,
     start_time: f64,
     channels: u8,
-    sender: mpsc::SyncSender<Option<DecodedPacket>>,
+    sender: mpsc::SyncSender<DecodeWorkerEvent>,
     abort: Arc<std::sync::atomic::AtomicBool>,
     decode_backpressure: Arc<DecodeBackpressure>,
 ) -> JoinHandle<()> {
@@ -32,16 +32,17 @@ pub(crate) fn spawn_file_decode_worker(
         let startup_trace = Instant::now();
         let mut logged_first_ready = false;
         let mut logged_first_send = false;
+        let source_key = SourceKey::FilePath(file_path.clone());
         let (mut decoder, mut format) = match open_file(&file_path) {
             Ok(opened) => opened,
             Err(err) => {
                 debug!("file worker open failed: source={} err={}", file_path, err);
-                let _ = sender.send(Some(DecodedPacket {
-                    source_key: SourceKey::FilePath(file_path),
-                    packet_ts: 0.0,
-                    samples: Vec::new(),
-                    eos_flag: true,
-                }));
+                let _ = sender.send(DecodeWorkerEvent::SourceError {
+                    source_key: source_key.clone(),
+                    recoverable: false,
+                    message: err.to_string(),
+                });
+                let _ = sender.send(DecodeWorkerEvent::SourceFinished { source_key });
                 return;
             }
         };
@@ -51,12 +52,12 @@ pub(crate) fn spawn_file_decode_worker(
             .find(|track| track.codec_params.codec != CODEC_TYPE_NULL)
             .cloned()
         else {
-            let _ = sender.send(Some(DecodedPacket {
-                source_key: SourceKey::FilePath(file_path),
-                packet_ts: 0.0,
-                samples: Vec::new(),
-                eos_flag: true,
-            }));
+            let _ = sender.send(DecodeWorkerEvent::SourceError {
+                source_key: source_key.clone(),
+                recoverable: false,
+                message: "no decodable audio track".to_string(),
+            });
+            let _ = sender.send(DecodeWorkerEvent::SourceFinished { source_key });
             return;
         };
 
@@ -73,8 +74,6 @@ pub(crate) fn spawn_file_decode_worker(
 
         let time_base = track.codec_params.time_base;
         let sample_rate = track.codec_params.sample_rate;
-        let source_key = SourceKey::FilePath(file_path.clone());
-
         loop {
             if abort.load(Ordering::Relaxed) {
                 break;
@@ -131,11 +130,10 @@ pub(crate) fn spawn_file_decode_worker(
                         samples.len()
                     );
                     if sender
-                        .send(Some(DecodedPacket {
+                        .send(DecodeWorkerEvent::Packet(DecodedPacket {
                             source_key: source_key.clone(),
                             packet_ts,
                             samples,
-                            eos_flag: false,
                         }))
                         .is_err()
                     {
@@ -149,17 +147,25 @@ pub(crate) fn spawn_file_decode_worker(
                         );
                     }
                 }
-                Err(Error::DecodeError(_)) => {}
-                Err(_) => break,
+                Err(Error::DecodeError(err)) => {
+                    let _ = sender.send(DecodeWorkerEvent::SourceError {
+                        source_key: source_key.clone(),
+                        recoverable: true,
+                        message: err.to_string(),
+                    });
+                }
+                Err(err) => {
+                    let _ = sender.send(DecodeWorkerEvent::SourceError {
+                        source_key: source_key.clone(),
+                        recoverable: false,
+                        message: err.to_string(),
+                    });
+                    break;
+                }
             }
         }
 
-        let _ = sender.send(Some(DecodedPacket {
-            source_key,
-            packet_ts: 0.0,
-            samples: Vec::new(),
-            eos_flag: true,
-        }));
+        let _ = sender.send(DecodeWorkerEvent::SourceFinished { source_key });
     })
 }
 

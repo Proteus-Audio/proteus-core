@@ -2,7 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::level::deserialize_linear_gain;
+use super::core::level::deserialize_linear_gain;
 use super::EffectContext;
 
 const DEFAULT_GAIN: f32 = 1.0;
@@ -80,7 +80,7 @@ impl GainEffect {
 
 #[cfg(test)]
 mod tests {
-    use super::super::level::db_to_linear;
+    use super::super::core::level::db_to_linear;
     use super::*;
 
     fn context() -> EffectContext {

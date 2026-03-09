@@ -118,8 +118,8 @@ impl PlayerEngine {
         }
     }
 
-    /// Start the mixing loop and invoke `f` for each mixed chunk.
-    pub fn reception_loop(&mut self, f: &dyn Fn((SamplesBuffer, f64))) {
+    /// Start the output loop and invoke `f` for each mixed chunk.
+    pub fn run_output_loop(&mut self, f: &dyn Fn((SamplesBuffer, f64))) {
         let prot = self.prot.lock().unwrap();
         let keys = prot.get_keys();
         drop(prot);
@@ -129,6 +129,12 @@ impl PlayerEngine {
         for (mixer, length_in_seconds) in receiver {
             f((mixer, length_in_seconds));
         }
+    }
+
+    /// Legacy alias for [`Self::run_output_loop`].
+    #[deprecated(note = "Use run_output_loop instead.")]
+    pub fn reception_loop(&mut self, f: &dyn Fn((SamplesBuffer, f64))) {
+        self.run_output_loop(f);
     }
 
     /// Start mixing and return a receiver for `(buffer, duration)` chunks.

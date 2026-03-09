@@ -75,8 +75,8 @@ pub fn status_text(args: StatusArgs) -> StatusSnapshot {
     } else {
         "⏸ Paused"
     };
-    let current = format_time(args.time * 1000.0);
-    let total = format_time(args.duration * 1000.0);
+    let current = format_millis_hhmmss(args.time * 1000.0);
+    let total = format_millis_hhmmss(args.duration * 1000.0);
     let percent = if args.duration > 0.0 {
         (args.time / args.duration * 100.0).min(100.0)
     } else {
@@ -199,8 +199,8 @@ pub fn handle_key_event(player: &mut player::Player) -> bool {
     true
 }
 
-/// Format a duration in seconds as `MM:SS`.
-fn format_time(time: f64) -> String {
+/// Format a duration in milliseconds as `HH:MM:SS`.
+fn format_millis_hhmmss(time: f64) -> String {
     // Format milliseconds into HH:MM:SS.
     let seconds = (time / 1000.0).ceil() as u32;
     let minutes = seconds / 60;
@@ -213,7 +213,7 @@ fn format_time(time: f64) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{format_time, status_text, StatusArgs};
+    use super::{format_millis_hhmmss, status_text, StatusArgs};
 
     #[test]
     fn status_text_includes_effects() {
@@ -276,8 +276,8 @@ mod tests {
 
     #[test]
     fn format_time_formats_hms_from_millis_input() {
-        assert_eq!(format_time(0.0), "00:00:00");
-        assert_eq!(format_time(1_000.0), "00:00:01");
-        assert_eq!(format_time(3_661_000.0), "01:01:01");
+        assert_eq!(format_millis_hhmmss(0.0), "00:00:00");
+        assert_eq!(format_millis_hhmmss(1_000.0), "00:00:01");
+        assert_eq!(format_millis_hhmmss(3_661_000.0), "01:01:01");
     }
 }
