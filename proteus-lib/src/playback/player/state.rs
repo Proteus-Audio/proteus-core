@@ -1,0 +1,64 @@
+//! Read-only player state helpers.
+
+use std::thread;
+use std::time::Duration;
+
+use super::{Player, PlayerState};
+
+impl Player {
+    /// Return true if playback is currently active.
+    pub fn is_playing(&self) -> bool {
+        *self.state.lock().unwrap() == PlayerState::Playing
+    }
+
+    /// Return true if playback is currently paused.
+    pub fn is_paused(&self) -> bool {
+        *self.state.lock().unwrap() == PlayerState::Paused
+    }
+
+    /// Get the current playback time in seconds.
+    pub fn get_time(&self) -> f64 {
+        *self.ts.lock().unwrap()
+    }
+
+    /// Return `true` when no playback worker thread is alive.
+    pub(super) fn thread_finished(&self) -> bool {
+        !self
+            .playback_thread_exists
+            .load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// Return `true` when no playback worker thread is alive.
+    ///
+    /// This reflects runtime lifecycle state, not end-of-stream semantics.
+    /// Use playback state and timestamp/duration checks for stricter EOS logic.
+    pub fn is_finished(&self) -> bool {
+        self.thread_finished()
+    }
+
+    /// Block the current thread until playback finishes.
+    pub fn sleep_until_end(&self) {
+        while !self.thread_finished() {
+            thread::sleep(Duration::from_millis(100));
+        }
+    }
+
+    /// Get the total duration (seconds) of the active selection.
+    pub fn get_duration(&self) -> f64 {
+        *self.duration.lock().unwrap()
+    }
+
+    /// Get the track identifiers used for display.
+    pub fn get_ids(&self) -> Vec<String> {
+        self.prot.lock().unwrap().get_ids()
+    }
+
+    /// Get the full timestamped shuffle schedule used by playback.
+    ///
+    /// Each entry is `(time_seconds, grouped_selected_ids_or_paths)`, where the
+    /// inner groups map to logical tracks and contain all selections for each
+    /// track (for example when `selections_count > 1`).
+    pub fn get_shuffle_schedule(&self) -> Vec<(f64, Vec<Vec<String>>)> {
+        self.prot.lock().unwrap().get_shuffle_schedule()
+    }
+}

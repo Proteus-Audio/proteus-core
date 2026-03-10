@@ -5,11 +5,11 @@
 //! reporting hooks, and schedule inspection).
 
 use std::sync::{Arc, Mutex};
-use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
-use log::{debug, info, warn};
+use log::{debug, info};
 
+use super::lifecycle::current_ms;
 use super::{EndOfStreamAction, Player, PlayerState};
 use crate::diagnostics::reporter::{Report, Reporter};
 
@@ -82,37 +82,6 @@ impl Player {
             .clone_from(&PlayerState::Resuming);
     }
 
-    /// Stop the current playback thread and wait for it to exit.
-    ///
-    /// Internal state is moved through `Stopping` and finalized as `Stopped`.
-    pub fn stop_and_join_playback_thread(&self) {
-        self.state
-            .lock()
-            .unwrap()
-            .clone_from(&PlayerState::Stopping);
-        {
-            let sink = self.sink.lock().unwrap();
-            sink.stop();
-        }
-        self.abort.store(true, std::sync::atomic::Ordering::SeqCst);
-
-        while !self.thread_finished() {
-            thread::sleep(Duration::from_millis(10));
-        }
-        self.join_playback_thread();
-
-        self.state.lock().unwrap().clone_from(&PlayerState::Stopped);
-    }
-
-    /// Join the current playback thread handle if one is present.
-    pub(in crate::playback::player) fn join_playback_thread(&self) {
-        if let Some(handle) = self.playback_thread_handle.lock().unwrap().take() {
-            if handle.join().is_err() {
-                warn!("playback thread panicked during join");
-            }
-        }
-    }
-
     /// Stop playback and reset timing state.
     pub fn stop(&self) {
         self.stop_and_join_playback_thread();
@@ -131,56 +100,6 @@ impl Player {
     /// Get the current end-of-stream action.
     pub fn get_end_of_stream_action(&self) -> EndOfStreamAction {
         *self.end_of_stream_action.lock().unwrap()
-    }
-
-    /// Return true if playback is currently active.
-    pub fn is_playing(&self) -> bool {
-        let state = self.state.lock().unwrap();
-        *state == PlayerState::Playing
-    }
-
-    /// Return true if playback is currently paused.
-    pub fn is_paused(&self) -> bool {
-        let state = self.state.lock().unwrap();
-        *state == PlayerState::Paused
-    }
-
-    /// Get the current playback time in seconds.
-    pub fn get_time(&self) -> f64 {
-        let ts = self.ts.lock().unwrap();
-        *ts
-    }
-
-    /// Return `true` when no playback worker thread is alive.
-    pub(super) fn thread_finished(&self) -> bool {
-        let playback_thread_exists = self
-            .playback_thread_exists
-            .load(std::sync::atomic::Ordering::SeqCst);
-        !playback_thread_exists
-    }
-
-    /// Return `true` when no playback worker thread is alive.
-    ///
-    /// This reflects runtime lifecycle state, not end-of-stream semantics.
-    /// Use playback state and timestamp/duration checks for stricter EOS logic.
-    pub fn is_finished(&self) -> bool {
-        self.thread_finished()
-    }
-
-    /// Block the current thread until playback finishes.
-    pub fn sleep_until_end(&self) {
-        loop {
-            if self.thread_finished() {
-                break;
-            }
-            thread::sleep(Duration::from_millis(100));
-        }
-    }
-
-    /// Get the total duration (seconds) of the active selection.
-    pub fn get_duration(&self) -> f64 {
-        let duration = self.duration.lock().unwrap();
-        *duration
     }
 
     /// Seek to the given timestamp (seconds).
@@ -240,7 +159,7 @@ impl Player {
                 let sink = self.sink.lock().unwrap();
                 sink.set_volume(gain.max(0.0));
             }
-            thread::sleep(Duration::from_millis(step_ms));
+            std::thread::sleep(Duration::from_millis(step_ms));
         }
     }
 
@@ -275,50 +194,6 @@ impl Player {
         self.wait_for_audio_heard(Duration::from_secs(5));
     }
 
-    /// Wait until the runtime reports that at least one chunk was appended.
-    ///
-    /// # Arguments
-    ///
-    /// * `timeout` - Maximum wait duration before returning `false`.
-    ///
-    /// # Returns
-    ///
-    /// `true` once audio has been observed, `false` on timeout or early thread
-    /// termination.
-    pub(super) fn wait_for_audio_heard(&self, timeout: Duration) -> bool {
-        let trace_ms = self
-            .play_command_ms
-            .load(std::sync::atomic::Ordering::Relaxed);
-        if trace_ms > 0 {
-            debug!(
-                "play trace: wait_for_audio_heard start timeout_ms={} +{}ms",
-                timeout.as_millis(),
-                current_ms().saturating_sub(trace_ms)
-            );
-        }
-        let start = Instant::now();
-        loop {
-            if self.audio_heard.load(std::sync::atomic::Ordering::Relaxed) {
-                return true;
-            }
-            if self.thread_finished() {
-                warn!("playback thread ended before audio was heard");
-                return false;
-            }
-            if start.elapsed() >= timeout {
-                warn!("timed out waiting for audio to start");
-                if trace_ms > 0 {
-                    warn!(
-                        "play trace: wait_for_audio_heard timeout +{}ms",
-                        current_ms().saturating_sub(trace_ms)
-                    );
-                }
-                return false;
-            }
-            thread::sleep(Duration::from_millis(10));
-        }
-    }
-
     /// Shuffle track selections and restart playback.
     pub fn shuffle(&mut self) {
         self.refresh_tracks();
@@ -342,22 +217,6 @@ impl Player {
     /// Get the current playback volume.
     pub fn get_volume(&self) -> f32 {
         *self.volume.lock().unwrap()
-    }
-
-    /// Get the track identifiers used for display.
-    pub fn get_ids(&self) -> Vec<String> {
-        let prot = self.prot.lock().unwrap();
-        prot.get_ids()
-    }
-
-    /// Get the full timestamped shuffle schedule used by playback.
-    ///
-    /// Each entry is `(time_seconds, grouped_selected_ids_or_paths)`, where the
-    /// inner groups map to logical tracks and contain all selections for each
-    /// track (for example when `selections_count > 1`).
-    pub fn get_shuffle_schedule(&self) -> Vec<(f64, Vec<Vec<String>>)> {
-        let prot = self.prot.lock().unwrap();
-        prot.get_shuffle_schedule()
     }
 
     /// Enable periodic reporting of playback status for UI consumers.
@@ -396,19 +255,11 @@ fn seek_should_resume(state: PlayerState) -> bool {
     matches!(state, PlayerState::Playing | PlayerState::Resuming)
 }
 
-fn current_ms() -> u64 {
-    use std::time::SystemTime;
-
-    SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0)
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{current_ms, seek_should_resume, EndOfStreamAction, Player, PlayerState};
+    use super::{seek_should_resume, EndOfStreamAction, Player, PlayerState};
     use crate::container::prot::PathsTrack;
+    use crate::playback::player::lifecycle::current_ms;
     use std::sync::atomic::Ordering;
 
     #[test]

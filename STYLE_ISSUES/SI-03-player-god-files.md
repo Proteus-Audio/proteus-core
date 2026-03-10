@@ -124,8 +124,32 @@ Alternatively, if the split feels too granular, merge `lifecycle.rs` back into
 
 ## Acceptance criteria
 
-- [ ] All existing tests pass (`cargo test -p proteus-lib`)
-- [ ] `cargo check --all-features` shows no new errors or warnings
-- [ ] Each new file is ≤400 lines
-- [ ] `pub(in crate::playback::player)` visibility paths remain valid after restructuring
-- [ ] The `Drop` impl compiles and the player still cleans up correctly under test
+- [x] All existing tests pass (`cargo test -p proteus-lib`)
+- [x] `cargo check --all-features` shows no new errors or warnings
+- [x] Each new file is ≤400 lines
+- [x] `pub(in crate::playback::player)` visibility paths remain valid after restructuring
+- [x] The `Drop` impl compiles and the player still cleans up correctly under test
+
+## Validation notes
+
+Validated on March 10, 2026.
+
+- `cargo test -p proteus-lib`: passed (`172` unit tests and `2` doc tests)
+- `cargo check --all-features`: passed. Fixed `AlignedSampleBuffer` visibility warning in
+  `buffer_mixer/mod.rs` (field narrowed from `pub(super)` to
+  `pub(in crate::playback::engine::mix::buffer_mixer)`). Remaining 14 warnings are
+  pre-existing issues outside SI-03 scope (`convolution_reverb`, `logging`, diagnostics).
+- Player file sizes after refactor:
+  - `proteus-lib/src/playback/player/mod.rs`: `249`
+  - `proteus-lib/src/playback/player/builder.rs`: `318`
+  - `proteus-lib/src/playback/player/controls.rs`: `320`
+  - `proteus-lib/src/playback/player/lifecycle.rs`: `164`
+  - `proteus-lib/src/playback/player/state.rs`: `64`
+  - `proteus-lib/src/playback/player/runtime/worker/runner.rs`: `200`
+  - `proteus-lib/src/playback/player/runtime/worker/sink.rs`: `278`
+  - `proteus-lib/src/playback/player/runtime/worker/transitions.rs`: `162`
+  - `proteus-lib/src/playback/player/runtime/worker/timing.rs`: `207`
+
+## Status
+
+SI-03 is complete. All acceptance criteria are met.

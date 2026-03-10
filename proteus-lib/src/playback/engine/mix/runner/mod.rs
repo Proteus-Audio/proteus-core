@@ -262,10 +262,7 @@ pub fn spawn_mix_thread(
                 &mut logged_first_packet_drain,
                 &mut logged_first_packet_route,
             );
-            loop_body::apply_inline_track_mix_updates(
-                &inline_track_mix_updates,
-                &mut buffer_mixer,
-            );
+            loop_body::apply_inline_track_mix_updates(&inline_track_mix_updates, &mut buffer_mixer);
             loop_body::apply_effect_runtime_updates(
                 &effects_reset,
                 &mut last_effects_reset,

@@ -6,9 +6,7 @@ use crate::dsp::utils::fade_interleaved_per_frame;
 use crate::playback::engine::mix::cover_map::{map_cover, Cover, TransitionDirection};
 
 use super::backpressure::DecodeBackpressure;
-use super::routing_helpers::{
-    packet_overlap_samples, push_owned_slice, push_slice, push_zeros,
-};
+use super::routing_helpers::{packet_overlap_samples, push_owned_slice, push_slice, push_zeros};
 use super::routing_time::{instance_past_window_ts, samples_to_ms};
 use super::{BufferInstance, BufferMixer, RouteDecision, SectionWriteResult, SourceKey};
 

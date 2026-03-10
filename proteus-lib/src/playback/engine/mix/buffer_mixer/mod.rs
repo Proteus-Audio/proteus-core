@@ -11,25 +11,25 @@ use log::{debug, warn};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
+use crate::container::prot::{RuntimeInstanceMeta, RuntimeInstancePlan};
 #[cfg(feature = "buffer-map")]
 use crate::logging::clear_logfile;
-use crate::container::prot::{RuntimeInstanceMeta, RuntimeInstancePlan};
 
 use super::track_stage::{apply_track_gain_pan, combine_tracks_equal_weight};
 use aligned_buffer::AlignedSampleBuffer;
 pub(crate) use backpressure::DecodeBackpressure;
 use routing_helpers::instance_needs_data;
+#[cfg(any(test, feature = "debug"))]
+pub(crate) use routing_helpers::FillState;
 #[cfg(feature = "buffer-map")]
 use routing_helpers::{log_buffer, log_buffer_header};
 pub(crate) use routing_helpers::{RouteDecision, SourceKey};
-#[cfg(any(test, feature = "debug"))]
-pub(crate) use routing_helpers::FillState;
 use routing_time::{instance_fully_past_window, samples_to_ms};
 
 #[derive(Debug)]
 pub(super) struct BufferInstance {
     pub(super) meta: RuntimeInstanceMeta,
-    pub(super) buffer: AlignedSampleBuffer,
+    pub(in crate::playback::engine::mix::buffer_mixer) buffer: AlignedSampleBuffer,
     pub(super) buffer_capacity_samples: usize,
     pub(super) full: bool,
     pub(super) finished: bool,

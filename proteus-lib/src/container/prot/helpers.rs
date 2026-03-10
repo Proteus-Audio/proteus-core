@@ -6,9 +6,7 @@ use crate::container::info::Info;
 use crate::container::play_settings::{PlaySettingsLegacy, SettingsTrack};
 
 use super::schedule::parse_shuffle_points;
-use super::types::{
-    ActiveWindow, PathsTrack, RuntimeInstanceMeta, ShuffleSource,
-};
+use super::types::{ActiveWindow, PathsTrack, RuntimeInstanceMeta, ShuffleSource};
 
 pub(super) fn sanitize_level(level: f32) -> f32 {
     if level.is_finite() {
@@ -172,10 +170,7 @@ pub(super) fn update_settings_track_slot(
     false
 }
 
-pub(super) fn linked_paths_slots(
-    tracks: &[PathsTrack],
-    slot_index: usize,
-) -> Option<Vec<usize>> {
+pub(super) fn linked_paths_slots(tracks: &[PathsTrack], slot_index: usize) -> Option<Vec<usize>> {
     let mut slot_cursor = 0usize;
     for track in tracks {
         let span = track.selections_count.max(1) as usize;
