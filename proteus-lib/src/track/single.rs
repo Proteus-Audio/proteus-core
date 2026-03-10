@@ -37,13 +37,11 @@ pub fn buffer_track(args: TrackArgs, abort: Arc<AtomicBool>) -> JoinHandle<()> {
         track_key,
         buffer_map,
         buffer_notify,
-        track_weights,
+        track_weights: _,
         finished_tracks,
         start_time,
         channels,
     } = args;
-    let _track_weights = track_weights;
-    // TODO: Apply `_track_weights` to scale per-track samples when weighting single-track buffers.
 
     let opened = open_file(&file_path);
 

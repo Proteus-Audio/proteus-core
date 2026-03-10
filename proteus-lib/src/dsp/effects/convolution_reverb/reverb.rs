@@ -217,51 +217,6 @@ impl Reverb {
     }
 }
 
-// pub fn apply_reverb(samples: Vec<f32>, dry_wet: f32) -> Vec<f32> {
-//     // Clamp dry_wet between 0 and 1
-//     let dry_wet = dry_wet.clamp(0.0, 1.0);
-//     let dry_amount = 1.0 - dry_wet;
-//     let wet_amount = dry_wet;
-
-//     println!("Samples length: {:?}", samples.len());
-//     let left_samples = samples.iter().step_by(2).cloned().collect::<Vec<f32>>();
-//     let right_samples = samples
-//         .iter()
-//         .skip(1)
-//         .step_by(2)
-//         .cloned()
-//         .collect::<Vec<f32>>();
-
-//     let mut convolver_left = Convolver::new(SPRING_IMPULSE_RESPONSE, left_samples.len());
-//     let mut convolver_right = Convolver::new(SPRING_IMPULSE_RESPONSE, right_samples.len());
-
-//     let processed_left = convolver_left.process(&left_samples);
-//     let processed_right = convolver_right.process(&right_samples);
-
-//     let previous_tail_left = convolver_left.previous_tail;
-//     let previous_tail_right = convolver_right.previous_tail;
-
-//     println!("Previous tail left: {:?}", previous_tail_left.len());
-//     println!("Previous tail right: {:?}", previous_tail_right.len());
-
-//     // Mix dry and wet signals
-//     let mut processed = Vec::with_capacity(processed_left.len() * 2);
-//     for ((dry_l, dry_r), (wet_l, wet_r)) in left_samples.iter().zip(right_samples.iter())
-//         .zip(processed_left.iter().zip(processed_right.iter()))
-//     {
-//         // Mix left channel
-//         let mixed_l = (dry_l * dry_amount) + (wet_l * wet_amount);
-//         // Mix right channel
-//         let mixed_r = (dry_r * dry_amount) + (wet_r * wet_amount);
-
-//         processed.push(mixed_l);
-//         processed.push(mixed_r);
-//     }
-
-//     println!("Processed length: {:?}", processed.len());
-//     processed
-// }
-
 #[cfg(test)]
 mod tests {
     use super::*;

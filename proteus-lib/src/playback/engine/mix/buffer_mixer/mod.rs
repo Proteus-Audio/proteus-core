@@ -136,7 +136,6 @@ impl BufferMixer {
         if let Err(err) = clear_logfile() {
             log::warn!("failed to clear buffer-map log file: {}", err);
         }
-        // println!("Shuffle plan: {:?}", plan);
         let mut instances = Vec::with_capacity(plan.instances.len());
         let mut slot_to_logical = HashMap::new();
         for meta in plan.instances {

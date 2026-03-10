@@ -1,7 +1,12 @@
 # Style Issues
 
-This directory contains style found and notes with details on how best to resolve them.
+This directory tracks style violations that require non-trivial refactoring. Small
+violations are fixed in-place; larger ones get a writeup here.
 
-| Finished | Index | Writeup File                     | Summary                    |
-| -------- | ----- | -------------------------------- | -------------------------- |
-| [ ]      | 1.    | [test_issue.md](./test_issue.md) | Brief summary of the issue |
+| Done | ID    | Writeup                                                                      | Summary                                                                                                                          |
+| ---- | ----- | ---------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| [ ]  | SI-01 | [SI-01-container-god-files.md](./SI-01-container-god-files.md)               | `prot.rs` (1 666 lines) and `info.rs` (817 lines) need splitting into focused sub-modules                                        |
+| [ ]  | SI-02 | [SI-02-mix-engine-god-files.md](./SI-02-mix-engine-god-files.md)             | `buffer_mixer/mod.rs` (944 lines) and `runner/mod.rs` (715 lines) need splitting                                                 |
+| [ ]  | SI-03 | [SI-03-player-god-files.md](./SI-03-player-god-files.md)                     | `worker/runner.rs` (893 lines), `player/mod.rs` (617 lines), and `controls.rs` (469 lines) need splitting                        |
+| [ ]  | SI-04 | [SI-04-dsp-god-files.md](./SI-04-dsp-god-files.md)                           | `multiband_eq.rs` (761 lines), `diffusion_reverb/mod.rs` (740 lines), and `convolution_reverb/mod.rs` (621 lines) need splitting |
+| [ ]  | SI-05 | [SI-05-track-decode-god-functions.md](./SI-05-track-decode-god-functions.md) | `buffer_container_tracks` (~270 lines) and `buffer_track` (~165 lines) exceed function-length limits                             |

@@ -13,6 +13,7 @@ mod effects;
 mod runtime;
 mod settings;
 
+use log::debug;
 use rodio::{OutputStream, Sink};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -561,7 +562,7 @@ impl Drop for Player {
             output_meter.reset();
         }
 
-        println!("Player dropped");
+        debug!("player dropped");
 
         *self.duration.lock().unwrap() = 0.0;
         *self.ts.lock().unwrap() = 0.0;

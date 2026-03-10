@@ -4,7 +4,7 @@ use rand::Rng;
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
-use log::{error, info, warn};
+use log::{debug, error, info, warn};
 
 use crate::container::info::*;
 use crate::container::play_settings::{PlaySettingsFile, PlaySettingsLegacy, SettingsTrack};
@@ -120,7 +120,7 @@ impl Prot {
     fn build_from_path(file_path: &str) -> Self {
         let info = Info::new(file_path.to_string());
 
-        println!("Info: {:?}", info);
+        debug!("prot info: {:?}", info);
 
         let mut this = Self {
             info,
@@ -187,11 +187,6 @@ impl Prot {
         }
         Self::new_from_file_paths(paths_track_list)
     }
-
-    // fn get_duration_from_file_path(file_path: &String) -> f64 {
-    //     let file = std::fs::File::open(file_path).unwrap();
-    //     let symphonia: Symphonia = Symphonia::open(file).expect("Could not open file");
-    // }
 
     /// Rebuild the active track list (e.g., after shuffle).
     pub fn refresh_tracks(&mut self) {

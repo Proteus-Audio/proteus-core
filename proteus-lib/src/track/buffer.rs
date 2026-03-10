@@ -57,33 +57,6 @@ pub fn add_samples_to_buffer_map(
     }
 }
 
-/// Push samples into the per-track ring buffer without blocking.
-#[allow(dead_code)]
-pub fn add_samples_to_buffer_map_nonblocking(
-    buffer_map: &mut TrackBufferMap,
-    track_key: u16,
-    samples: Vec<f32>,
-    _abort: &Arc<AtomicBool>,
-    notify: Option<&Arc<std::sync::Condvar>>,
-) {
-    let remaining = buffer_remaining_space(buffer_map, track_key);
-    if remaining == 0 {
-        return;
-    }
-
-    let take = remaining.min(samples.len());
-    let map = buffer_map.lock().unwrap();
-    if let Some(buffer) = map.get(&track_key) {
-        let mut buffer = buffer.lock().unwrap();
-        for sample in samples.into_iter().take(take) {
-            buffer.push(sample);
-        }
-    }
-    if let Some(notify) = notify {
-        notify.notify_one();
-    }
-}
-
 /// Record a track key as finished (idempotent).
 pub fn mark_track_as_finished(finished_tracks: &mut Arc<Mutex<Vec<u16>>>, track_key: u16) {
     let mut finished_tracks_copy = finished_tracks.lock().unwrap();
@@ -97,9 +70,7 @@ pub fn mark_track_as_finished(finished_tracks: &mut Arc<Mutex<Vec<u16>>>, track_
 
 #[cfg(test)]
 mod tests {
-    use super::{add_samples_to_buffer_map_nonblocking, mark_track_as_finished};
-    use crate::audio::buffer::init_buffer_map;
-    use std::sync::atomic::AtomicBool;
+    use super::mark_track_as_finished;
     use std::sync::{Arc, Mutex};
 
     #[test]
@@ -108,13 +79,5 @@ mod tests {
         mark_track_as_finished(&mut finished, 4);
         mark_track_as_finished(&mut finished, 4);
         assert_eq!(finished.lock().unwrap().as_slice(), &[4]);
-    }
-
-    #[test]
-    fn nonblocking_add_with_missing_track_is_noop() {
-        let mut map = init_buffer_map();
-        let abort = Arc::new(AtomicBool::new(false));
-        add_samples_to_buffer_map_nonblocking(&mut map, 9, vec![0.1, 0.2], &abort, None);
-        assert!(map.lock().unwrap().is_empty());
     }
 }
