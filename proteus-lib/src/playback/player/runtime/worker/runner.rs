@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 
 use log::{debug, error, warn};
 
-use crate::playback::engine::PlayerEngine;
+use crate::playback::engine::{PlayerEngine, PlayerEngineConfig};
 use crate::tools::timer;
 
 use super::super::super::{
@@ -84,14 +84,16 @@ pub(in crate::playback::player::runtime) fn run_playback_thread(
 
     let mut engine = PlayerEngine::new(
         ctx.prot.clone(),
-        Some(ctx.abort.clone()),
-        start_time,
-        ctx.buffer_settings.clone(),
-        ctx.effects.clone(),
-        ctx.dsp_metrics.clone(),
-        ctx.effects_reset.clone(),
-        ctx.inline_effects_update.clone(),
-        ctx.inline_track_mix_updates.clone(),
+        PlayerEngineConfig {
+            abort_option: Some(ctx.abort.clone()),
+            start_time,
+            buffer_settings: ctx.buffer_settings.clone(),
+            effects: ctx.effects.clone(),
+            dsp_metrics: ctx.dsp_metrics.clone(),
+            effects_reset: ctx.effects_reset.clone(),
+            inline_effects_update: ctx.inline_effects_update.clone(),
+            inline_track_mix_updates: ctx.inline_track_mix_updates.clone(),
+        },
     );
 
     initialize_sink(&ctx, &ctx.output_mixer);
@@ -108,6 +110,31 @@ pub(in crate::playback::player::runtime) fn run_playback_thread(
     if let Some(elapsed_ms) = play_trace_elapsed_ms(&ctx) {
         debug!("play trace: engine receiver started +{}ms", elapsed_ms);
     }
+    run_engine_receive_loop(&ctx, &mut loop_state, playback_id, receiver);
+    #[cfg(feature = "debug")]
+    log::info!("engine reception loop finished");
+
+    mark_buffering_complete(&ctx, &loop_state);
+
+    #[cfg(feature = "debug")]
+    log_drain_loop_start(&ctx, &loop_state);
+
+    let drain_completed = run_drain_loop(&ctx, &mut loop_state, &engine);
+
+    #[cfg(feature = "debug")]
+    log::info!("Finished drain loop!");
+
+    if drain_completed {
+        apply_end_of_stream_action(&ctx, &loop_state);
+    }
+}
+
+fn run_engine_receive_loop(
+    ctx: &ThreadContext,
+    loop_state: &mut LoopState,
+    playback_id: u64,
+    receiver: std::sync::mpsc::Receiver<(SamplesBuffer, f64)>,
+) {
     let mut logged_first_engine_chunk = false;
     loop {
         if ctx.abort.load(Ordering::SeqCst) {
@@ -117,52 +144,38 @@ pub(in crate::playback::player::runtime) fn run_playback_thread(
             Ok(chunk) => {
                 if !logged_first_engine_chunk {
                     logged_first_engine_chunk = true;
-                    if let Some(elapsed_ms) = play_trace_elapsed_ms(&ctx) {
+                    if let Some(elapsed_ms) = play_trace_elapsed_ms(ctx) {
                         debug!("play trace: first engine chunk received +{}ms", elapsed_ms);
                     }
                 }
-                update_sink(&ctx, &mut loop_state, playback_id, chunk);
+                update_sink(ctx, loop_state, playback_id, chunk);
                 if ctx.abort.load(Ordering::SeqCst) {
                     break;
                 }
             }
             Err(RecvTimeoutError::Timeout) => {
-                update_chunk_lengths(&ctx, &mut loop_state);
-                if !check_runtime_state(&ctx, &mut loop_state) {
+                update_chunk_lengths(ctx, loop_state);
+                if !check_runtime_state(ctx, loop_state) {
                     break;
                 }
             }
             Err(RecvTimeoutError::Disconnected) => break,
         }
     }
-    #[cfg(feature = "debug")]
-    log::info!("engine reception loop finished");
+}
 
-    mark_buffering_complete(&ctx, &loop_state);
-
-    #[cfg(feature = "debug")]
-    log_drain_loop_start(&ctx, &loop_state);
-
-    let mut drain_completed = false;
+fn run_drain_loop(ctx: &ThreadContext, loop_state: &mut LoopState, engine: &PlayerEngine) -> bool {
     loop {
-        update_chunk_lengths(&ctx, &mut loop_state);
-        if !check_runtime_state(&ctx, &mut loop_state) {
-            break;
+        update_chunk_lengths(ctx, loop_state);
+        if !check_runtime_state(ctx, loop_state) {
+            return false;
         }
 
-        if is_drain_complete(&ctx, &loop_state, &engine) {
-            drain_completed = true;
-            break;
+        if is_drain_complete(ctx, loop_state, engine) {
+            return true;
         }
 
         thread::sleep(Duration::from_millis(10));
-    }
-
-    #[cfg(feature = "debug")]
-    log::info!("Finished drain loop!");
-
-    if drain_completed {
-        apply_end_of_stream_action(&ctx, &loop_state);
     }
 }
 

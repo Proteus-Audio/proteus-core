@@ -107,7 +107,7 @@ fn normalize_cmd(args: Vec<String>) {
     };
 
     let mut channels = impulse_response.channels;
-    normalize_impulse_response_channels(&mut channels, tail_db);
+    normalize_impulse_response_channels(&mut channels, tail_db, true);
 
     if let Err(err) = write_wav(&out_path, impulse_response.sample_rate, &channels) {
         eprintln!("Failed to write {}: {}", out_path.display(), err);

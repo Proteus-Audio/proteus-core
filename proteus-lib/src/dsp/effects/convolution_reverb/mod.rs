@@ -574,8 +574,12 @@ impl ConvolutionReverbSettings {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{
+        clear_global_caches, resolve_impulse_response_path, ConvolutionReverbEffect,
+        ConvolutionReverbSettings, EffectContext,
+    };
     use crate::dsp::effects::core::DspEffect;
+    use std::path::PathBuf;
 
     #[test]
     fn resolve_impulse_response_path_uses_container_parent_for_relative_paths() {

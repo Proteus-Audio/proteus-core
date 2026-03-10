@@ -421,8 +421,8 @@ impl Player {
 
     /// Create a player from either a container path or standalone file paths.
     ///
-    /// Exactly one input source is expected. `path` takes precedence when
-    /// provided; otherwise `paths` is used for file-based playback.
+    /// Exactly one input source is required. Passing both `path` and `paths`
+    /// is rejected as [`PlayerInitError::AmbiguousSource`].
     ///
     /// # Arguments
     ///

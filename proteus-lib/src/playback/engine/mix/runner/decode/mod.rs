@@ -4,10 +4,14 @@ mod container_worker;
 mod file_worker;
 
 use std::thread::JoinHandle;
+use std::time::Instant;
 
-use log::warn;
+use log::{debug, info, warn};
 use symphonia::core::audio::AudioBufferRef;
 use symphonia::core::units::TimeBase;
+
+use super::super::buffer_mixer::{DecodeBackpressure, SourceKey};
+use super::super::decoder_events::{DecodeWorkerEvent, DecodedPacket};
 
 pub(super) use container_worker::spawn_container_decode_worker;
 pub(super) use file_worker::spawn_file_decode_worker;
@@ -41,7 +45,7 @@ pub(super) fn interleaved_samples(decoded: AudioBufferRef<'_>, channels: u8) -> 
     let channels = channels.max(1) as usize;
     let mut out_channels: Vec<Vec<f32>> = Vec::with_capacity(channels);
     for channel in 0..channels {
-        out_channels.push(crate::track::convert::process_channel(
+        out_channels.push(crate::audio::decode::process_channel(
             decoded.clone(),
             channel,
         ));
@@ -79,6 +83,78 @@ pub(super) fn packet_ts_seconds(
         0.0
     };
     (absolute - start_time).max(0.0)
+}
+
+/// Shared decode-worker path: apply backpressure and forward one packet.
+pub(super) fn forward_decoded_packet(
+    worker_label: &str,
+    source_key: SourceKey,
+    packet_ts: f64,
+    samples: Vec<f32>,
+    sender: &std::sync::mpsc::SyncSender<DecodeWorkerEvent>,
+    decode_backpressure: &DecodeBackpressure,
+    abort: &std::sync::atomic::AtomicBool,
+    startup_trace: Instant,
+    logged_first_ready: &mut bool,
+    logged_first_send: &mut bool,
+) -> bool {
+    debug!(
+        "{} decode packet ready: source={:?} ts={:.6} samples={}",
+        worker_label,
+        source_key,
+        packet_ts,
+        samples.len()
+    );
+    if !*logged_first_ready {
+        *logged_first_ready = true;
+        info!(
+            "mix startup trace: {} worker first decoded packet ready in {}ms (source={:?} ts={:.6} samples={})",
+            worker_label,
+            startup_trace.elapsed().as_millis(),
+            source_key,
+            packet_ts,
+            samples.len()
+        );
+    }
+
+    if !decode_backpressure.wait_for_source_room(&source_key, samples.len(), abort) {
+        debug!(
+            "{} decode wait interrupted: source={:?} ts={:.6} samples={}",
+            worker_label,
+            source_key,
+            packet_ts,
+            samples.len()
+        );
+        return false;
+    }
+
+    debug!(
+        "{} decode packet send: source={:?} ts={:.6} samples={}",
+        worker_label,
+        source_key,
+        packet_ts,
+        samples.len()
+    );
+    if sender
+        .send(DecodeWorkerEvent::Packet(DecodedPacket {
+            source_key: source_key.clone(),
+            packet_ts,
+            samples,
+        }))
+        .is_err()
+    {
+        return false;
+    }
+    if !*logged_first_send {
+        *logged_first_send = true;
+        info!(
+            "mix startup trace: {} worker first packet sent in {}ms (source={:?})",
+            worker_label,
+            startup_trace.elapsed().as_millis(),
+            source_key
+        );
+    }
+    true
 }
 
 #[cfg(test)]

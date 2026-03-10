@@ -70,9 +70,9 @@ impl super::core::DspEffect for GainEffect {
 
 #[cfg(test)]
 mod tests {
-    use super::super::core::level::db_to_linear;
     use super::super::core::DspEffect;
     use super::*;
+    use rodio::math::db_to_linear;
 
     fn context() -> EffectContext {
         EffectContext {

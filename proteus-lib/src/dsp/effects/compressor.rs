@@ -2,7 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::core::level::{db_to_linear, deserialize_db_gain, linear_to_db};
+use super::core::level::deserialize_db_gain;
 use super::EffectContext;
 
 const DEFAULT_THRESHOLD_DB: f32 = -18.0;
@@ -110,10 +110,10 @@ impl super::core::DspEffect for CompressorEffect {
                 peak = peak.max(sample.abs());
             }
 
-            let level_db = linear_to_db(peak);
+            let level_db = rodio::math::linear_to_db(peak);
             let target_gain_db = compute_gain_db(level_db, state.threshold_db, state.ratio);
             state.update_gain(target_gain_db);
-            let gain = db_to_linear(state.current_gain_db + state.makeup_gain_db);
+            let gain = rodio::math::db_to_linear(state.current_gain_db + state.makeup_gain_db);
 
             for &sample in frame {
                 output.push(sample * gain);
@@ -273,8 +273,8 @@ fn sanitize_makeup_db(value: f32) -> f32 {
 
 #[cfg(test)]
 mod tests {
-    use super::super::core::DspEffect;
-    use super::*;
+    use super::CompressorEffect;
+    use crate::dsp::effects::{core::DspEffect, EffectContext};
 
     fn context(channels: usize) -> EffectContext {
         EffectContext {
@@ -314,7 +314,7 @@ mod tests {
 
         let level_db = 0.0;
         let target_gain_db = (-6.0 + (level_db + 6.0) / 2.0) - level_db;
-        let expected = db_to_linear(target_gain_db);
+        let expected = rodio::math::db_to_linear(target_gain_db);
         assert!(output.iter().all(|value| approx_eq(*value, expected, 1e-3)));
     }
 
@@ -333,7 +333,7 @@ mod tests {
         assert!(approx_eq(effect.settings.threshold_db, -12.0, 1e-6));
         assert!(approx_eq(
             effect.settings.makeup_gain_db,
-            linear_to_db(2.0),
+            rodio::math::linear_to_db(2.0),
             1e-6
         ));
     }

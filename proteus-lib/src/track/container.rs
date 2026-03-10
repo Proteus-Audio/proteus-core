@@ -12,9 +12,9 @@ use symphonia::core::formats::{SeekMode, SeekTo};
 use symphonia::core::units::{Time, TimeBase};
 
 use crate::audio::buffer::TrackBufferMap;
+use crate::audio::decode::{decoded_format_label, process_channel};
 
 use super::buffer::{add_samples_to_buffer_map, mark_track_as_finished};
-use super::convert::{decoded_format_label, process_channel};
 
 /// Arguments required to buffer multiple tracks from a shared container stream.
 pub struct ContainerTrackArgs {

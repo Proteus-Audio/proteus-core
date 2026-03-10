@@ -33,16 +33,16 @@
     }
   },
   {
-    "DistortionSettings": {
-      "enabled": false,
-      "gain": 1.0,
-      "threshold": 1.0
+    "GainSettings": {
+      "enabled": true,
+      "gain": "20db"
     }
   },
   {
-    "GainSettings": {
-      "enabled": false,
-      "gain": 1.0
+    "DistortionSettings": {
+      "enabled": true,
+      "gain": 1.0,
+      "threshold": "-4db"
     }
   },
   {

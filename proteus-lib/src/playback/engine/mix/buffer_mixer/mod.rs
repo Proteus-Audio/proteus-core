@@ -3,6 +3,7 @@
 mod aligned_buffer;
 mod backpressure;
 mod routing_helpers;
+mod routing_time;
 
 use log::{debug, info, warn};
 use std::collections::{HashMap, HashSet};
@@ -23,11 +24,11 @@ pub(crate) use backpressure::DecodeBackpressure;
 #[cfg(any(test, feature = "debug"))]
 use routing_helpers::aggregate_fill_state;
 use routing_helpers::{
-    instance_fully_past_window, instance_needs_data, instance_past_window_ts,
-    packet_overlap_samples, push_owned_slice, push_slice, push_zeros, samples_to_ms,
+    instance_needs_data, packet_overlap_samples, push_owned_slice, push_slice, push_zeros,
 };
 #[cfg(feature = "buffer-map")]
 use routing_helpers::{log_buffer, log_buffer_header};
+use routing_time::{instance_fully_past_window, instance_past_window_ts, samples_to_ms};
 
 /// Source identifier used by decode workers.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

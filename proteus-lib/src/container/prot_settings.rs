@@ -1,6 +1,6 @@
 //! Play-settings loading and effect-derivation helpers for `Prot`.
 
-use log::{error, info, warn};
+use log::{info, warn};
 use matroska::Matroska;
 
 use crate::container::play_settings::{self, PlaySettingsFile};
@@ -15,26 +15,43 @@ pub struct ProtRuntimeSettings {
     pub effects: Option<Vec<AudioEffect>>,
 }
 
-/// Load and parse `play_settings.json` from a `.prot`/`.mka` attachment list.
-pub fn load_play_settings_from_container(file_path: &str) -> Option<PlaySettingsFile> {
-    let file = std::fs::File::open(file_path).ok()?;
-    let mka: Matroska = Matroska::open(file).ok()?;
+/// Failure modes while loading `play_settings.json` from a container file.
+#[derive(Debug)]
+pub enum PlaySettingsLoadError {
+    OpenFile(std::io::Error),
+    OpenMatroska(matroska::Error),
+    ParseJson(serde_json::Error),
+    MissingAttachment,
+}
 
-    for attachment in &mka.attachments {
-        if attachment.name != "play_settings.json" {
-            continue;
-        }
-
-        match serde_json::from_slice::<PlaySettingsFile>(&attachment.data) {
-            Ok(play_settings) => return Some(play_settings),
-            Err(err) => {
-                error!("Failed to parse play_settings.json: {}", err);
-                return None;
-            }
+impl std::fmt::Display for PlaySettingsLoadError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::OpenFile(err) => write!(f, "failed to open container file: {}", err),
+            Self::OpenMatroska(err) => write!(f, "failed to read matroska container: {}", err),
+            Self::ParseJson(err) => write!(f, "failed to parse play_settings.json: {}", err),
+            Self::MissingAttachment => write!(f, "play_settings.json attachment not found"),
         }
     }
+}
 
-    None
+impl std::error::Error for PlaySettingsLoadError {}
+
+/// Fallible play-settings loader with typed error variants.
+pub fn try_load_play_settings_from_container(
+    file_path: &str,
+) -> Result<PlaySettingsFile, PlaySettingsLoadError> {
+    let file = std::fs::File::open(file_path).map_err(PlaySettingsLoadError::OpenFile)?;
+    let mka: Matroska = Matroska::open(file).map_err(PlaySettingsLoadError::OpenMatroska)?;
+
+    let attachment = mka
+        .attachments
+        .iter()
+        .find(|attachment| attachment.name == "play_settings.json")
+        .ok_or(PlaySettingsLoadError::MissingAttachment)?;
+
+    serde_json::from_slice::<PlaySettingsFile>(&attachment.data)
+        .map_err(PlaySettingsLoadError::ParseJson)
 }
 
 /// Derive runtime effect state from a parsed play-settings file.

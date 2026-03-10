@@ -11,10 +11,10 @@ use symphonia::core::formats::{SeekMode, SeekTo};
 use symphonia::core::units::Time;
 
 use crate::audio::buffer::TrackBufferMap;
+use crate::audio::decode::{decoded_format_label, process_channel};
 use crate::tools::decode::open_file;
 
 use super::buffer::{add_samples_to_buffer_map, mark_track_as_finished};
-use super::convert::{decoded_format_label, process_channel};
 
 /// Arguments required to buffer a single track into a ring buffer.
 pub struct TrackArgs {

@@ -44,6 +44,18 @@ pub struct InlineTrackMixUpdate {
     pub pan: f32,
 }
 
+/// Shared initialization inputs for [`PlayerEngine`].
+pub struct PlayerEngineConfig {
+    pub abort_option: Option<Arc<AtomicBool>>,
+    pub start_time: f64,
+    pub buffer_settings: Arc<Mutex<PlaybackBufferSettings>>,
+    pub effects: Arc<Mutex<Vec<crate::dsp::effects::AudioEffect>>>,
+    pub dsp_metrics: Arc<Mutex<DspChainMetrics>>,
+    pub effects_reset: Arc<AtomicU64>,
+    pub inline_effects_update: Arc<Mutex<Option<InlineEffectsUpdate>>>,
+    pub inline_track_mix_updates: Arc<Mutex<Vec<InlineTrackMixUpdate>>>,
+}
+
 /// Internal playback engine used by the high-level [`Player`].
 #[derive(Debug)]
 pub struct PlayerEngine {
@@ -67,18 +79,17 @@ pub struct PlayerEngine {
 
 impl PlayerEngine {
     /// Create a new engine for the given container and settings.
-    #[allow(clippy::too_many_arguments)]
-    pub fn new(
-        prot: Arc<Mutex<Prot>>,
-        abort_option: Option<Arc<AtomicBool>>,
-        start_time: f64,
-        buffer_settings: Arc<Mutex<PlaybackBufferSettings>>,
-        effects: Arc<Mutex<Vec<crate::dsp::effects::AudioEffect>>>,
-        dsp_metrics: Arc<Mutex<DspChainMetrics>>,
-        effects_reset: Arc<AtomicU64>,
-        inline_effects_update: Arc<Mutex<Option<InlineEffectsUpdate>>>,
-        inline_track_mix_updates: Arc<Mutex<Vec<InlineTrackMixUpdate>>>,
-    ) -> Self {
+    pub fn new(prot: Arc<Mutex<Prot>>, config: PlayerEngineConfig) -> Self {
+        let PlayerEngineConfig {
+            abort_option,
+            start_time,
+            buffer_settings,
+            effects,
+            dsp_metrics,
+            effects_reset,
+            inline_effects_update,
+            inline_track_mix_updates,
+        } = config;
         let buffer_map = init_buffer_map();
         let buffer_notify = Arc::new(Condvar::new());
         let track_weights = Arc::new(Mutex::new(HashMap::new()));

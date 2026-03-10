@@ -33,7 +33,7 @@ pub(crate) trait DspEffect {
 
 #[cfg(test)]
 mod tests {
-    use super::{DspEffect, EffectContext};
+    use crate::dsp::effects::core::DspEffect;
 
     #[derive(Default)]
     struct DummyEffect {
@@ -41,8 +41,13 @@ mod tests {
         reset_called: bool,
     }
 
-    impl DspEffect for DummyEffect {
-        fn process(&mut self, samples: &[f32], _context: &EffectContext, _drain: bool) -> Vec<f32> {
+    impl super::DspEffect for DummyEffect {
+        fn process(
+            &mut self,
+            samples: &[f32],
+            _context: &super::EffectContext,
+            _drain: bool,
+        ) -> Vec<f32> {
             self.processed += samples.len();
             samples.to_vec()
         }
@@ -56,7 +61,8 @@ mod tests {
     #[test]
     fn default_warm_up_is_noop_and_trait_methods_work() {
         let mut effect = DummyEffect::default();
-        let context = EffectContext {
+
+        let context = super::EffectContext {
             sample_rate: 48_000,
             channels: 2,
             container_path: None,

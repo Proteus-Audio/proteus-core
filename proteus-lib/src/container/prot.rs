@@ -8,7 +8,9 @@ use log::{error, info, warn};
 
 use crate::container::info::*;
 use crate::container::play_settings::{PlaySettingsFile, PlaySettingsLegacy, SettingsTrack};
-use crate::container::prot_settings::{derive_runtime_settings, load_play_settings_from_container};
+use crate::container::prot_settings::{
+    derive_runtime_settings, try_load_play_settings_from_container, PlaySettingsLoadError,
+};
 use crate::dsp::effects::convolution_reverb::ImpulseResponseSpec;
 use crate::dsp::effects::AudioEffect;
 
@@ -268,8 +270,13 @@ impl Prot {
             return;
         };
 
-        let Some(play_settings) = load_play_settings_from_container(file_path) else {
-            return;
+        let play_settings = match try_load_play_settings_from_container(file_path) {
+            Ok(play_settings) => play_settings,
+            Err(PlaySettingsLoadError::MissingAttachment) => return,
+            Err(err) => {
+                warn!("Unable to load play_settings.json: {}", err);
+                return;
+            }
         };
 
         let runtime = derive_runtime_settings(&play_settings);
@@ -1055,7 +1062,7 @@ fn random_path(paths: &[String]) -> String {
 
 fn sanitize_level(level: f32) -> f32 {
     if level.is_finite() {
-        level.max(0.0)
+        level.clamp(0.0, 2.0)
     } else {
         1.0
     }

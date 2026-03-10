@@ -17,6 +17,47 @@ fn title_banner() -> &'static str {
     "Proteus Audio"
 }
 
+fn playback_widget(text: &str) -> Paragraph<'_> {
+    Paragraph::new(text)
+        .style(
+            Style::default()
+                .fg(Color::Green)
+                .add_modifier(Modifier::BOLD),
+        )
+        .block(Block::default().borders(Borders::ALL).title("Playback"))
+}
+
+fn levels_widget(text: Text<'static>) -> Paragraph<'static> {
+    Paragraph::new(text)
+        .style(Style::default().fg(Color::Cyan))
+        .block(Block::default().borders(Borders::ALL).title("Levels"))
+}
+
+fn log_text(log_lines: &[LogLine], log_height: usize) -> Text<'_> {
+    let start = log_lines.len().saturating_sub(log_height);
+    if log_lines.is_empty() {
+        Text::from(Line::styled(
+            "No logs yet.",
+            Style::default().fg(Color::DarkGray),
+        ))
+    } else {
+        let lines: Vec<Line> = log_lines[start..]
+            .iter()
+            .map(|line| {
+                let color = match line.kind {
+                    LogKind::Error | LogKind::Stderr => Color::Red,
+                    LogKind::Warn => Color::Yellow,
+                    LogKind::Info => Color::DarkGray,
+                    LogKind::Debug => Color::Blue,
+                    LogKind::Trace => Color::Magenta,
+                };
+                Line::styled(line.text.as_str(), Style::default().fg(color))
+            })
+            .collect();
+        Text::from(lines)
+    }
+}
+
 /// Render the TUI frame (title, controls, status, logs).
 pub fn draw_status(
     terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>,
@@ -67,14 +108,7 @@ pub fn draw_status(
             let meter_mode = pick_meter_mode(status_area.width, status_area.height);
             match meter_mode {
                 MeterMode::Hidden => {
-                    let status_widget = Paragraph::new(status.text.as_str())
-                        .style(
-                            Style::default()
-                                .fg(Color::Green)
-                                .add_modifier(Modifier::BOLD),
-                        )
-                        .block(Block::default().borders(Borders::ALL).title("Playback"));
-                    f.render_widget(status_widget, status_area);
+                    f.render_widget(playback_widget(status.text.as_str()), status_area);
                 }
                 MeterMode::Vertical => {
                     let cols = Layout::default()
@@ -82,21 +116,11 @@ pub fn draw_status(
                         .constraints([Constraint::Min(0), Constraint::Length(10)])
                         .split(status_area);
 
-                    let status_widget = Paragraph::new(status.text.as_str())
-                        .style(
-                            Style::default()
-                                .fg(Color::Green)
-                                .add_modifier(Modifier::BOLD),
-                        )
-                        .block(Block::default().borders(Borders::ALL).title("Playback"));
-                    f.render_widget(status_widget, cols[0]);
+                    f.render_widget(playback_widget(status.text.as_str()), cols[0]);
 
                     let meter_text =
                         vertical_meter_text(levels, levels_db, cols[1].height.saturating_sub(2));
-                    let meter_widget = Paragraph::new(meter_text)
-                        .style(Style::default().fg(Color::Cyan))
-                        .block(Block::default().borders(Borders::ALL).title("Levels"));
-                    f.render_widget(meter_widget, cols[1]);
+                    f.render_widget(levels_widget(meter_text), cols[1]);
                 }
                 MeterMode::Horizontal => {
                     let rows = Layout::default()
@@ -104,21 +128,11 @@ pub fn draw_status(
                         .constraints([Constraint::Min(0), Constraint::Length(4)])
                         .split(status_area);
 
-                    let status_widget = Paragraph::new(status.text.as_str())
-                        .style(
-                            Style::default()
-                                .fg(Color::Green)
-                                .add_modifier(Modifier::BOLD),
-                        )
-                        .block(Block::default().borders(Borders::ALL).title("Playback"));
-                    f.render_widget(status_widget, rows[0]);
+                    f.render_widget(playback_widget(status.text.as_str()), rows[0]);
 
                     let meter_text =
                         horizontal_meter_text(levels, levels_db, rows[1].width.saturating_sub(2));
-                    let meter_widget = Paragraph::new(meter_text)
-                        .style(Style::default().fg(Color::Cyan))
-                        .block(Block::default().borders(Borders::ALL).title("Levels"));
-                    f.render_widget(meter_widget, rows[1]);
+                    f.render_widget(levels_widget(meter_text), rows[1]);
                 }
             }
         }
@@ -126,39 +140,11 @@ pub fn draw_status(
         {
             let _ = levels;
             let _ = levels_db;
-            let status_widget = Paragraph::new(status.text.as_str())
-                .style(
-                    Style::default()
-                        .fg(Color::Green)
-                        .add_modifier(Modifier::BOLD),
-                )
-                .block(Block::default().borders(Borders::ALL).title("Playback"));
-            f.render_widget(status_widget, status_area);
+            f.render_widget(playback_widget(status.text.as_str()), status_area);
         }
 
         let log_height = chunks[3].height.saturating_sub(2) as usize;
-        let start = log_lines.len().saturating_sub(log_height);
-        let log_text = if log_lines.is_empty() {
-            Text::from(Line::styled(
-                "No logs yet.",
-                Style::default().fg(Color::DarkGray),
-            ))
-        } else {
-            let lines: Vec<Line> = log_lines[start..]
-                .iter()
-                .map(|line| {
-                    let color = match line.kind {
-                        LogKind::Error | LogKind::Stderr => Color::Red,
-                        LogKind::Warn => Color::Yellow,
-                        LogKind::Info => Color::DarkGray,
-                        LogKind::Debug => Color::Blue,
-                        LogKind::Trace => Color::Magenta,
-                    };
-                    Line::styled(line.text.as_str(), Style::default().fg(color))
-                })
-                .collect();
-            Text::from(lines)
-        };
+        let log_text = log_text(log_lines, log_height);
 
         let log_widget =
             Paragraph::new(log_text).block(Block::default().borders(Borders::ALL).title("Logs"));

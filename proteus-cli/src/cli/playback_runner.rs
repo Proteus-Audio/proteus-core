@@ -168,82 +168,7 @@ fn run_playback_session(
 
     loop {
         if let Some(term) = terminal.as_mut() {
-            let time = player.get_time();
-            let duration = player.get_duration();
-            let playing = player.is_playing();
-            let effect_names = player.get_effect_names();
-            #[cfg(feature = "output-meter")]
-            let levels = player.get_levels();
-            #[cfg(not(feature = "output-meter"))]
-            let levels: Vec<f32> = Vec::new();
-            #[cfg(feature = "output-meter")]
-            let levels_db = player.get_levels_db();
-            #[cfg(not(feature = "output-meter"))]
-            let levels_db: Vec<f32> = Vec::new();
-            #[cfg(feature = "debug")]
-            let dsp_metrics = player.get_dsp_metrics();
-            #[cfg(feature = "debug")]
-            let (thread_exists, state, audio_heard) = player.debug_playback_state();
-            #[cfg(feature = "debug")]
-            let buffering_done = player.debug_buffering_done();
-            #[cfg(feature = "debug")]
-            let (_sink_paused, _sink_empty, sink_len) = player.debug_sink_state();
-            let log_lines = logging::snapshot_lines(&log_buffer);
-            let status = controls::status_text(controls::StatusArgs {
-                time,
-                duration,
-                playing,
-                effects: effect_names,
-                #[cfg(feature = "debug")]
-                sample_rate: player.info.sample_rate,
-                #[cfg(feature = "debug")]
-                overrun: dsp_metrics.overrun,
-                #[cfg(feature = "debug")]
-                overrun_ms: dsp_metrics.overrun_ms,
-                #[cfg(feature = "debug")]
-                avg_overrun_ms: dsp_metrics.avg_overrun_ms,
-                #[cfg(feature = "debug")]
-                max_overrun_ms: dsp_metrics.max_overrun_ms,
-                #[cfg(feature = "debug")]
-                chain_ksps: dsp_metrics.chain_ksps,
-                #[cfg(feature = "debug")]
-                avg_chain_ksps: dsp_metrics.avg_chain_ksps,
-                #[cfg(feature = "debug")]
-                min_chain_ksps: dsp_metrics.min_chain_ksps,
-                #[cfg(feature = "debug")]
-                max_chain_ksps: dsp_metrics.max_chain_ksps,
-                #[cfg(feature = "debug")]
-                underrun_count: dsp_metrics.underrun_count,
-                #[cfg(feature = "debug")]
-                underrun_active: dsp_metrics.underrun_active,
-                #[cfg(feature = "debug")]
-                pop_count: dsp_metrics.pop_count,
-                #[cfg(feature = "debug")]
-                clip_count: dsp_metrics.clip_count,
-                #[cfg(feature = "debug")]
-                nan_count: dsp_metrics.nan_count,
-                #[cfg(feature = "debug")]
-                late_append_count: dsp_metrics.late_append_count,
-                #[cfg(feature = "debug")]
-                late_append_active: dsp_metrics.late_append_active,
-                #[cfg(feature = "debug")]
-                track_key_count: dsp_metrics.track_key_count,
-                #[cfg(feature = "debug")]
-                finished_track_count: dsp_metrics.finished_track_count,
-                #[cfg(feature = "debug")]
-                prot_key_count: dsp_metrics.prot_key_count,
-                #[cfg(feature = "debug")]
-                thread_exists,
-                #[cfg(feature = "debug")]
-                state_label: format!("{:?}", state),
-                #[cfg(feature = "debug")]
-                audio_heard,
-                #[cfg(feature = "debug")]
-                buffering_done,
-                #[cfg(feature = "debug")]
-                sink_len,
-            });
-            ui::draw_status(term, &status, &log_lines, &levels, &levels_db);
+            draw_status_frame(term, &mut player, &log_buffer);
         }
 
         if !controls::handle_key_event(&mut player) {
@@ -261,57 +186,110 @@ fn run_playback_session(
     0
 }
 
+fn draw_status_frame(
+    terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>,
+    player: &mut player::Player,
+    log_buffer: &Arc<Mutex<VecDeque<LogLine>>>,
+) {
+    let time = player.get_time();
+    let duration = player.get_duration();
+    let playing = player.is_playing();
+    let effect_names = player.get_effect_names();
+    #[cfg(feature = "output-meter")]
+    let levels = player.get_levels();
+    #[cfg(not(feature = "output-meter"))]
+    let levels: Vec<f32> = Vec::new();
+    #[cfg(feature = "output-meter")]
+    let levels_db = player.get_levels_db();
+    #[cfg(not(feature = "output-meter"))]
+    let levels_db: Vec<f32> = Vec::new();
+    #[cfg(feature = "debug")]
+    let dsp_metrics = player.get_dsp_metrics();
+    #[cfg(feature = "debug")]
+    let (thread_exists, state, audio_heard) = player.debug_playback_state();
+    #[cfg(feature = "debug")]
+    let buffering_done = player.debug_buffering_done();
+    #[cfg(feature = "debug")]
+    let (_sink_paused, _sink_empty, sink_len) = player.debug_sink_state();
+    let log_lines = logging::snapshot_lines(log_buffer);
+    let status = controls::status_text(controls::StatusArgs {
+        time,
+        duration,
+        playing,
+        effects: effect_names,
+        #[cfg(feature = "debug")]
+        sample_rate: player.info.sample_rate,
+        #[cfg(feature = "debug")]
+        overrun: dsp_metrics.overrun,
+        #[cfg(feature = "debug")]
+        overrun_ms: dsp_metrics.overrun_ms,
+        #[cfg(feature = "debug")]
+        avg_overrun_ms: dsp_metrics.avg_overrun_ms,
+        #[cfg(feature = "debug")]
+        max_overrun_ms: dsp_metrics.max_overrun_ms,
+        #[cfg(feature = "debug")]
+        chain_ksps: dsp_metrics.chain_ksps,
+        #[cfg(feature = "debug")]
+        avg_chain_ksps: dsp_metrics.avg_chain_ksps,
+        #[cfg(feature = "debug")]
+        min_chain_ksps: dsp_metrics.min_chain_ksps,
+        #[cfg(feature = "debug")]
+        max_chain_ksps: dsp_metrics.max_chain_ksps,
+        #[cfg(feature = "debug")]
+        underrun_count: dsp_metrics.underrun_count,
+        #[cfg(feature = "debug")]
+        underrun_active: dsp_metrics.underrun_active,
+        #[cfg(feature = "debug")]
+        pop_count: dsp_metrics.pop_count,
+        #[cfg(feature = "debug")]
+        clip_count: dsp_metrics.clip_count,
+        #[cfg(feature = "debug")]
+        nan_count: dsp_metrics.nan_count,
+        #[cfg(feature = "debug")]
+        late_append_count: dsp_metrics.late_append_count,
+        #[cfg(feature = "debug")]
+        late_append_active: dsp_metrics.late_append_active,
+        #[cfg(feature = "debug")]
+        track_key_count: dsp_metrics.track_key_count,
+        #[cfg(feature = "debug")]
+        finished_track_count: dsp_metrics.finished_track_count,
+        #[cfg(feature = "debug")]
+        prot_key_count: dsp_metrics.prot_key_count,
+        #[cfg(feature = "debug")]
+        thread_exists,
+        #[cfg(feature = "debug")]
+        state_label: format!("{:?}", state),
+        #[cfg(feature = "debug")]
+        audio_heard,
+        #[cfg(feature = "debug")]
+        buffering_done,
+        #[cfg(feature = "debug")]
+        sink_len,
+    });
+    ui::draw_status(terminal, &status, &log_lines, &levels, &levels_db);
+}
+
+fn arg_f32(args: &ArgMatches, key: &str) -> f32 {
+    args.get_one::<String>(key).unwrap().parse::<f32>().unwrap()
+}
+
+fn arg_usize(args: &ArgMatches, key: &str) -> usize {
+    args.get_one::<String>(key)
+        .unwrap()
+        .parse::<usize>()
+        .unwrap()
+}
+
 fn configure_player(args: &ArgMatches, player: &mut player::Player) {
-    let start_buffer_ms = args
-        .get_one::<String>("start-buffer-ms")
-        .unwrap()
-        .parse::<f32>()
-        .unwrap();
-    player.set_start_buffer_ms(start_buffer_ms);
-
-    let start_sink_chunks = args
-        .get_one::<String>("start-sink-chunks")
-        .unwrap()
-        .parse::<usize>()
-        .unwrap();
-    player.set_start_sink_chunks(start_sink_chunks);
-
-    let max_sink_chunks = args
-        .get_one::<String>("max-sink-chunks")
-        .unwrap()
-        .parse::<usize>()
-        .unwrap();
-    player.set_max_sink_chunks(max_sink_chunks);
-
-    let startup_silence_ms = args
-        .get_one::<String>("startup-silence-ms")
-        .unwrap()
-        .parse::<f32>()
-        .unwrap();
-    player.set_startup_silence_ms(startup_silence_ms);
-
-    let startup_fade_ms = args
-        .get_one::<String>("startup-fade-ms")
-        .unwrap()
-        .parse::<f32>()
-        .unwrap();
-    player.set_startup_fade_ms(startup_fade_ms);
-
-    let append_jitter_log_ms = args
-        .get_one::<String>("append-jitter-log-ms")
-        .unwrap()
-        .parse::<f32>()
-        .unwrap();
-    player.set_append_jitter_log_ms(append_jitter_log_ms);
+    player.set_start_buffer_ms(arg_f32(args, "start-buffer-ms"));
+    player.set_start_sink_chunks(arg_usize(args, "start-sink-chunks"));
+    player.set_max_sink_chunks(arg_usize(args, "max-sink-chunks"));
+    player.set_startup_silence_ms(arg_f32(args, "startup-silence-ms"));
+    player.set_startup_fade_ms(arg_f32(args, "startup-fade-ms"));
+    player.set_append_jitter_log_ms(arg_f32(args, "append-jitter-log-ms"));
 
     player.set_effect_boundary_log(args.get_flag("effect-boundary-log"));
-
-    let track_eos_ms = args
-        .get_one::<String>("track-eos-ms")
-        .unwrap()
-        .parse::<f32>()
-        .unwrap();
-    player.set_track_eos_ms(track_eos_ms);
+    player.set_track_eos_ms(arg_f32(args, "track-eos-ms"));
 }
 
 struct RawModeGuard;
@@ -331,41 +309,33 @@ impl Drop for RawModeGuard {
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        collections::VecDeque,
-        sync::{Arc, Mutex},
-    };
-
-    use clap::{Arg, ArgAction, Command};
-
-    use super::{maybe_print_durations, run_playback};
-    use crate::logging::LogLine;
-
     #[test]
     fn maybe_print_durations_returns_none_without_duration_flags() {
-        let args = Command::new("prot")
+        let args = clap::Command::new("prot")
             .arg(
-                Arg::new("scan-durations")
+                clap::Arg::new("scan-durations")
                     .long("scan-durations")
-                    .action(ArgAction::SetTrue),
+                    .action(clap::ArgAction::SetTrue),
             )
             .arg(
-                Arg::new("read-durations")
+                clap::Arg::new("read-durations")
                     .long("read-durations")
-                    .action(ArgAction::SetTrue),
+                    .action(clap::ArgAction::SetTrue),
             )
             .get_matches_from(["prot"]);
-        assert_eq!(maybe_print_durations(&args, "ignored"), None);
+        assert_eq!(super::maybe_print_durations(&args, "ignored"), None);
     }
 
     #[test]
     fn run_playback_without_input_returns_error_code() {
-        let args = Command::new("prot")
-            .arg(Arg::new("INPUT").required(false))
+        let args = clap::Command::new("prot")
+            .arg(clap::Arg::new("INPUT").required(false))
             .get_matches_from(["prot"]);
-        let logs = Arc::new(Mutex::new(VecDeque::<LogLine>::new()));
+        let logs = std::sync::Arc::new(std::sync::Mutex::new(std::collections::VecDeque::<
+            crate::logging::LogLine,
+        >::new()));
 
-        let code = run_playback(&args, logs).expect("runner should return result");
+        let code = super::run_playback(&args, logs).expect("runner should return result");
         assert_eq!(code, -1);
     }
 }

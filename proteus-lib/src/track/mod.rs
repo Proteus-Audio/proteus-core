@@ -1,3 +1,1 @@
-//! Track decoding and buffering helpers.
-
-pub(crate) mod convert;
+//! Legacy track buffering modules.

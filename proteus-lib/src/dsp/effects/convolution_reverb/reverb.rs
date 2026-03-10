@@ -115,28 +115,11 @@ impl Reverb {
     fn process_channel(&mut self, channel: &[f32], index: usize) -> Vec<f32> {
         let start = Instant::now();
         let convolver = &mut self.convolvers[index];
-        // convolver.fft_size = channel.len();
-        // let mut convolver = Convolver::new(SPRING_IMPULSE_RESPONSE, FFT_SIZE);
 
         debug!("Convolver fft size: {:?}", convolver.fft_size);
         debug!("Channel length: {:?}", channel.len());
 
-        let time_to_create_convolver = Instant::now();
-        debug!(
-            "Time taken to create convolver #{}: {:?}",
-            index,
-            time_to_create_convolver.duration_since(start)
-        );
-        // println!("Channel length: {:?}", channel.len());
-        // println!("Previous tail length: {:?}", self.previous_tails.len());
-        // convolver.previous_tail = if self.previous_tails.len() > index {
-        //     self.previous_tails[index].clone()
-        // } else {
-        //     self.previous_tails.push(vec![0.0; channel.len()]);
-        //     self.previous_tails[index].clone()
-        // };
         let processed = convolver.process(channel);
-        // self.previous_tails[index] = convolver.previous_tail;
         let end = Instant::now();
         debug!(
             "Time taken to process channel #{}: {:?}",

@@ -7,7 +7,7 @@ use std::thread;
 use std::thread::JoinHandle;
 use std::time::Instant;
 
-use log::{debug, info};
+use log::{debug, warn};
 use symphonia::core::codecs::CODEC_TYPE_NULL;
 use symphonia::core::errors::Error;
 use symphonia::core::formats::{SeekMode, SeekTo};
@@ -16,8 +16,8 @@ use symphonia::core::units::Time;
 use crate::tools::decode::open_file;
 
 use super::super::super::buffer_mixer::{DecodeBackpressure, SourceKey};
-use super::super::super::decoder_events::{DecodeWorkerEvent, DecodedPacket};
-use super::{interleaved_samples, packet_ts_seconds};
+use super::super::super::decoder_events::DecodeWorkerEvent;
+use super::{forward_decoded_packet, interleaved_samples, packet_ts_seconds};
 
 /// Spawn a decode worker for one standalone audio file source.
 pub(crate) fn spawn_file_decode_worker(
@@ -64,13 +64,23 @@ pub(crate) fn spawn_file_decode_worker(
         let seconds = start_time.floor() as u64;
         let frac_of_second = start_time.fract();
         let time = Time::new(seconds, frac_of_second);
-        let _ = format.seek(
+        if let Err(err) = format.seek(
             SeekMode::Coarse,
             SeekTo::Time {
                 time,
                 track_id: Some(track.id),
             },
-        );
+        ) {
+            warn!(
+                "file decode seek failed, falling back to stream start: source={} err={}",
+                file_path, err
+            );
+            let _ = sender.send(DecodeWorkerEvent::SourceError {
+                source_key: source_key.clone(),
+                recoverable: true,
+                message: format!("seek failed; continuing from stream start: {}", err),
+            });
+        }
 
         let time_base = track.codec_params.time_base;
         let sample_rate = track.codec_params.sample_rate;
@@ -94,57 +104,19 @@ pub(crate) fn spawn_file_decode_worker(
                     if samples.is_empty() {
                         continue;
                     }
-                    debug!(
-                        "file decode packet ready: source={:?} ts={:.6} samples={}",
-                        source_key,
+                    if !forward_decoded_packet(
+                        "file",
+                        source_key.clone(),
                         packet_ts,
-                        samples.len()
-                    );
-                    if !logged_first_ready {
-                        logged_first_ready = true;
-                        info!(
-                            "mix startup trace: file worker first decoded packet ready in {}ms (source={:?} ts={:.6} samples={})",
-                            startup_trace.elapsed().as_millis(),
-                            source_key,
-                            packet_ts,
-                            samples.len()
-                        );
-                    }
-                    if !decode_backpressure.wait_for_source_room(
-                        &source_key,
-                        samples.len(),
+                        samples,
+                        &sender,
+                        decode_backpressure.as_ref(),
                         abort.as_ref(),
+                        startup_trace,
+                        &mut logged_first_ready,
+                        &mut logged_first_send,
                     ) {
-                        debug!(
-                            "file decode wait interrupted: source={:?} ts={:.6} samples={}",
-                            source_key,
-                            packet_ts,
-                            samples.len()
-                        );
                         break;
-                    }
-                    debug!(
-                        "file decode packet send: source={:?} ts={:.6} samples={}",
-                        source_key,
-                        packet_ts,
-                        samples.len()
-                    );
-                    if sender
-                        .send(DecodeWorkerEvent::Packet(DecodedPacket {
-                            source_key: source_key.clone(),
-                            packet_ts,
-                            samples,
-                        }))
-                        .is_err()
-                    {
-                        break;
-                    } else if !logged_first_send {
-                        logged_first_send = true;
-                        info!(
-                            "mix startup trace: file worker first packet sent in {}ms (source={:?})",
-                            startup_trace.elapsed().as_millis(),
-                            source_key
-                        );
                     }
                 }
                 Err(Error::DecodeError(err)) => {

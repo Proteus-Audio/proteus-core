@@ -98,14 +98,20 @@ pub fn log_on_line(message: &str, line_number: usize) -> io::Result<()> {
 #[cfg(all(test, feature = "buffer-map"))]
 mod tests {
     use super::append_on_line;
-    use std::fs::{self, File};
+    use std::fs::{self, File, OpenOptions};
     use std::io::Read;
 
     #[test]
     fn append_on_line_extends_and_updates_requested_line() {
         let mut path = std::env::temp_dir();
         path.push(format!("proteus-log-test-{}.txt", std::process::id()));
-        let mut file = File::create(&path).unwrap();
+        let mut file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(&path)
+            .unwrap();
 
         append_on_line(&mut file, "hello", 1).unwrap();
 

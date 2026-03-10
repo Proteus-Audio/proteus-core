@@ -4,14 +4,8 @@ use log::{info, warn};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 pub mod legacy;
-pub mod v1;
-pub mod v2;
-pub mod v3;
 
 pub use legacy::{PlaySettingsLegacy, PlaySettingsLegacyFile, PlaySettingsTrackLegacy};
-pub use v1::{PlaySettingsV1, PlaySettingsV1File};
-pub use v2::{PlaySettingsV2, PlaySettingsV2File};
-pub use v3::{PlaySettingsV3, PlaySettingsV3File};
 
 /// Effect settings variants that can appear in the settings file.
 pub type EffectSettings = serde_json::Value;
@@ -45,6 +39,19 @@ pub struct VersionedPlaySettingsFile<T> {
     #[serde(flatten)]
     pub settings: PlaySettingsContainer<T>,
 }
+
+/// Version 1 settings payload.
+pub type PlaySettingsV1 = PlaySettingsPayload;
+/// Top-level wrapper for V1 settings files.
+pub type PlaySettingsV1File = VersionedPlaySettingsFile<PlaySettingsV1>;
+/// Version 2 settings payload.
+pub type PlaySettingsV2 = PlaySettingsPayload;
+/// Top-level wrapper for V2 settings files.
+pub type PlaySettingsV2File = VersionedPlaySettingsFile<PlaySettingsV2>;
+/// Version 3 settings payload.
+pub type PlaySettingsV3 = PlaySettingsPayload;
+/// Top-level wrapper for V3 settings files.
+pub type PlaySettingsV3File = VersionedPlaySettingsFile<PlaySettingsV3>;
 
 fn default_selections_count() -> u32 {
     1

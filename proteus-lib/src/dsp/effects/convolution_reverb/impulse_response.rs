@@ -173,7 +173,7 @@ where
         channel_samples[index % channels].push(sample);
     }
 
-    normalize_impulse_response_channels(&mut channel_samples, tail_db);
+    normalize_impulse_response_channels(&mut channel_samples, tail_db, true);
 
     if channel_samples.iter().any(|channel| channel.is_empty()) {
         warn!("Impulse response includes empty channels; results may be silent.");
@@ -190,7 +190,11 @@ where
 /// Normalization is a two-step process:
 /// 1. Peak normalization to avoid clipping.
 /// 2. Energy normalization (attenuation-only) to keep long IRs controlled.
-pub fn normalize_impulse_response_channels(channel_samples: &mut [Vec<f32>], tail_db: Option<f32>) {
+pub fn normalize_impulse_response_channels(
+    channel_samples: &mut [Vec<f32>],
+    tail_db: Option<f32>,
+    energy_normalize: bool,
+) {
     let mut max_abs = 0.0_f32;
     for channel in channel_samples.iter() {
         for sample in channel {
@@ -216,26 +220,28 @@ pub fn normalize_impulse_response_channels(channel_samples: &mut [Vec<f32>], tai
         }
     }
 
-    // Energy-normalize (attenuate only) so long IRs don't explode the wet gain.
-    let mut max_energy = 0.0_f32;
-    for channel in channel_samples.iter() {
-        let mut sum_sq = 0.0_f32;
-        for sample in channel {
-            sum_sq += sample * sample;
+    if energy_normalize {
+        // Energy-normalize (attenuate only) so long IRs don't explode the wet gain.
+        let mut max_energy = 0.0_f32;
+        for channel in channel_samples.iter() {
+            let mut sum_sq = 0.0_f32;
+            for sample in channel {
+                sum_sq += sample * sample;
+            }
+            if sum_sq > max_energy {
+                max_energy = sum_sq;
+            }
         }
-        if sum_sq > max_energy {
-            max_energy = sum_sq;
-        }
-    }
-    if max_energy > 0.0 {
-        let mut scale = 1.0_f32 / max_energy.sqrt();
-        if scale > 1.0 {
-            scale = 1.0;
-        }
-        if scale < 1.0 {
-            for channel in channel_samples.iter_mut() {
-                for sample in channel {
-                    *sample *= scale;
+        if max_energy > 0.0 {
+            let mut scale = 1.0_f32 / max_energy.sqrt();
+            if scale > 1.0 {
+                scale = 1.0;
+            }
+            if scale < 1.0 {
+                for channel in channel_samples.iter_mut() {
+                    for sample in channel {
+                        *sample *= scale;
+                    }
                 }
             }
         }
@@ -296,7 +302,7 @@ mod tests {
     #[test]
     fn normalize_impulse_response_channels_scales_peak() {
         let mut channels = vec![vec![2.0_f32, -1.0], vec![0.5, -0.25]];
-        normalize_impulse_response_channels(&mut channels, None);
+        normalize_impulse_response_channels(&mut channels, None, false);
         let max = channels
             .iter()
             .flat_map(|channel| channel.iter())
@@ -305,9 +311,20 @@ mod tests {
     }
 
     #[test]
+    fn normalize_impulse_response_channels_scales_peak_with_energy_normalize() {
+        let mut channels = vec![vec![2.0_f32, -1.0], vec![0.5, -0.25]];
+        normalize_impulse_response_channels(&mut channels, None, true);
+        let max = channels
+            .iter()
+            .flat_map(|channel| channel.iter())
+            .fold(0.0_f32, |acc, sample| acc.max(sample.abs()));
+        assert!((max - 1.0) < 1e-6);
+    }
+
+    #[test]
     fn normalize_impulse_response_channels_trims_tail_when_requested() {
         let mut channels = vec![vec![1.0_f32, 0.2, 0.01, 0.0001, 0.00001]];
-        normalize_impulse_response_channels(&mut channels, Some(-40.0));
+        normalize_impulse_response_channels(&mut channels, Some(-40.0), true);
         assert!(channels[0].len() < 5);
         assert!(!channels[0].is_empty());
     }
