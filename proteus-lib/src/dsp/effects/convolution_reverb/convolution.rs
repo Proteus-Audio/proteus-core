@@ -5,7 +5,7 @@
 //! - `complex_fft` (feature `complex-fft`): full complex FFT using `rustfft`.
 //! Note: when both features are enabled, `real_fft` is used.
 
-#[cfg(feature = "complex-fft")]
+#[cfg(all(feature = "complex-fft", not(feature = "real-fft")))]
 mod complex_fft {
     use std::collections::VecDeque;
     use std::sync::Arc;

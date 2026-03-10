@@ -488,7 +488,7 @@ pub fn spawn_mix_thread(
                 }
             } else if buffer_mixer.mix_finished() {
                 #[cfg(feature = "debug")]
-                pivot_buffer();
+                let _ = pivot_buffer();
                 info!("Mix Finished!!! (in runner)");
                 effect_drain_passes = effect_drain_passes.saturating_add(1);
                 if effect_drain_passes > MAX_EFFECT_DRAIN_PASSES {

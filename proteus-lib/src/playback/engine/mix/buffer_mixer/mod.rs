@@ -19,7 +19,7 @@ use super::track_stage::{apply_track_gain_pan, combine_tracks_equal_weight};
 use aligned_buffer::AlignedSampleBuffer;
 pub(crate) use backpressure::DecodeBackpressure;
 use routing_helpers::instance_needs_data;
-#[cfg(any(test, feature = "debug"))]
+#[cfg(test)]
 pub(crate) use routing_helpers::FillState;
 #[cfg(feature = "buffer-map")]
 use routing_helpers::{log_buffer, log_buffer_header};

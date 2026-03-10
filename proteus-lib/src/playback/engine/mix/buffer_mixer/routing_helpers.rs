@@ -28,7 +28,7 @@ impl From<&ShuffleSource> for SourceKey {
 }
 
 /// Aggregate fill state for a track or the whole mix.
-#[cfg(any(test, feature = "debug"))]
+#[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum FillState {
     /// Mix/track buffers are neither uniformly full nor uniformly not-full.
@@ -123,7 +123,7 @@ pub(super) fn push_zeros(
 }
 
 /// Collapse multiple per-instance "full" flags into one aggregate fill state.
-#[cfg(any(test, feature = "debug"))]
+#[cfg(test)]
 pub(super) fn aggregate_fill_state<I>(states: I) -> FillState
 where
     I: IntoIterator<Item = bool>,
