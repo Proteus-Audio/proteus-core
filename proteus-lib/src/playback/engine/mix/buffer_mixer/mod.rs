@@ -2,86 +2,40 @@
 
 mod aligned_buffer;
 mod backpressure;
+mod diagnostics;
+mod packet_router;
 mod routing_helpers;
 mod routing_time;
 
-use log::{debug, info, warn};
+use log::{debug, warn};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use crate::dsp::utils::fade_interleaved_per_frame;
 #[cfg(feature = "buffer-map")]
 use crate::logging::clear_logfile;
-use crate::playback::engine::mix::cover_map::TransitionDirection;
-use crate::{
-    container::prot::{RuntimeInstanceMeta, RuntimeInstancePlan, ShuffleSource},
-    playback::engine::mix::cover_map::{map_cover, Cover},
-};
+use crate::container::prot::{RuntimeInstanceMeta, RuntimeInstancePlan};
 
 use super::track_stage::{apply_track_gain_pan, combine_tracks_equal_weight};
 use aligned_buffer::AlignedSampleBuffer;
 pub(crate) use backpressure::DecodeBackpressure;
-#[cfg(any(test, feature = "debug"))]
-use routing_helpers::aggregate_fill_state;
-use routing_helpers::{
-    instance_needs_data, packet_overlap_samples, push_owned_slice, push_slice, push_zeros,
-};
+use routing_helpers::instance_needs_data;
 #[cfg(feature = "buffer-map")]
 use routing_helpers::{log_buffer, log_buffer_header};
-use routing_time::{instance_fully_past_window, instance_past_window_ts, samples_to_ms};
-
-/// Source identifier used by decode workers.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub(crate) enum SourceKey {
-    /// Container track id source.
-    TrackId(u32),
-    /// Standalone file path source.
-    FilePath(String),
-}
-
-impl From<&ShuffleSource> for SourceKey {
-    /// Convert a runtime shuffle source into a decode-worker source key.
-    fn from(value: &ShuffleSource) -> Self {
-        match value {
-            ShuffleSource::TrackId(track_id) => Self::TrackId(*track_id),
-            ShuffleSource::FilePath(path) => Self::FilePath(path.clone()),
-        }
-    }
-}
-
-/// Aggregate fill state for a track or the whole mix.
+pub(crate) use routing_helpers::{RouteDecision, SourceKey};
 #[cfg(any(test, feature = "debug"))]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum FillState {
-    /// Mix/track buffers are neither uniformly full nor uniformly not-full.
-    Partial,
-    /// Every instance currently reports full.
-    Full,
-    /// No instance currently reports full.
-    NotFull,
-}
-
-/// Debug telemetry returned by routing calls.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub(crate) struct RouteDecision {
-    /// Instance ids that received decoded source samples.
-    pub(crate) sample_targets_written: Vec<usize>,
-    /// Instance ids that received zero-fill for this packet span.
-    pub(crate) zero_fill_targets_written: Vec<usize>,
-    /// True when no instance was relevant for this packet.
-    pub(crate) ignored: bool,
-}
+pub(crate) use routing_helpers::FillState;
+use routing_time::{instance_fully_past_window, samples_to_ms};
 
 #[derive(Debug)]
-struct BufferInstance {
-    meta: RuntimeInstanceMeta,
-    buffer: AlignedSampleBuffer,
-    buffer_capacity_samples: usize,
-    full: bool,
-    finished: bool,
-    produced_samples: u64,
-    zero_filled_samples: u64,
-    eof_reached_ms: Option<u64>,
+pub(super) struct BufferInstance {
+    pub(super) meta: RuntimeInstanceMeta,
+    pub(super) buffer: AlignedSampleBuffer,
+    pub(super) buffer_capacity_samples: usize,
+    pub(super) full: bool,
+    pub(super) finished: bool,
+    pub(super) produced_samples: u64,
+    pub(super) zero_filled_samples: u64,
+    pub(super) eof_reached_ms: Option<u64>,
 }
 
 impl BufferInstance {
@@ -103,23 +57,23 @@ impl BufferInstance {
 /// Router/mixer that owns per-instance buffers and schedule-window alignment.
 #[derive(Debug)]
 pub(crate) struct BufferMixer {
-    sample_rate: u32,
-    channels: usize,
-    mix_chunk_samples: usize,
-    consumed_samples: usize,
-    instances: Vec<BufferInstance>,
-    track_instances: Vec<Vec<usize>>,
-    track_mix_settings: HashMap<usize, (f32, f32)>,
+    pub(super) sample_rate: u32,
+    pub(super) channels: usize,
+    pub(super) mix_chunk_samples: usize,
+    pub(super) consumed_samples: usize,
+    pub(super) instances: Vec<BufferInstance>,
+    pub(super) track_instances: Vec<Vec<usize>>,
+    pub(super) track_mix_settings: HashMap<usize, (f32, f32)>,
     slot_to_logical: HashMap<usize, usize>,
-    decode_backpressure: Arc<DecodeBackpressure>,
-    crossfade_ms: usize,
-    pop_warning: Vec<usize>,
+    pub(super) decode_backpressure: Arc<DecodeBackpressure>,
+    pub(super) crossfade_ms: usize,
+    pub(super) pop_warning: Vec<usize>,
 }
 
 #[derive(Debug, Default, Clone, Copy)]
-struct SectionWriteResult {
-    wrote_real: bool,
-    wrote_zero: bool,
+pub(super) struct SectionWriteResult {
+    pub(super) wrote_real: bool,
+    pub(super) wrote_zero: bool,
 }
 
 impl BufferMixer {
@@ -166,332 +120,6 @@ impl BufferMixer {
             crossfade_ms: 2,
             pop_warning: Vec::new(),
         }
-    }
-
-    /// Route one decoded packet into schedule-owned instance buffers.
-    pub(crate) fn route_packet(
-        &mut self,
-        samples: &[f32],
-        source: SourceKey,
-        packet_ts: f64,
-    ) -> RouteDecision {
-        if samples.is_empty() {
-            return RouteDecision {
-                ignored: true,
-                ..RouteDecision::default()
-            };
-        }
-
-        let frame_count = samples.len() / self.channels;
-        if frame_count == 0 {
-            return RouteDecision {
-                ignored: true,
-                ..RouteDecision::default()
-            };
-        }
-
-        let mut decision = RouteDecision::default();
-        for (instance_index, instance) in self.instances.iter_mut().enumerate() {
-            if instance.finished {
-                continue;
-            }
-
-            if SourceKey::from(&instance.meta.source_key) != source {
-                continue;
-            }
-
-            if instance_past_window_ts(instance, &packet_ts) {
-                debug!(
-                    "Instance {} (Track {}) is finished!!",
-                    instance.meta.instance_id, instance.meta.logical_track_index
-                );
-                instance.finished = true;
-                self.decode_backpressure.on_finished(instance_index);
-                continue;
-            }
-
-            let overlap = packet_overlap_samples(
-                packet_ts,
-                frame_count,
-                self.sample_rate,
-                self.channels,
-                &instance.meta.active_windows,
-            );
-
-            let cover_transition = self.crossfade_ms * self.sample_rate as usize / 1000;
-            let cover = map_cover(&overlap, samples.len(), Some(cover_transition));
-
-            // if last_of_window || (first_window_start > 0.0 && first_window_start > packet_ts) {
-            debug!(
-                "Instance {} / Track {} / Time {} / Overlap {:?} / Cover {:?}",
-                instance.meta.instance_id,
-                instance.meta.logical_track_index,
-                // samples.len(),
-                packet_ts,
-                overlap,
-                cover,
-                // first_window.unwrap()
-            );
-            // }
-
-            let mut wrote_real = false;
-            let mut wrote_zero = false;
-            for section in cover {
-                let result = Self::route_cover_section(
-                    section,
-                    samples,
-                    packet_ts,
-                    cover_transition,
-                    self.sample_rate,
-                    self.channels,
-                    self.decode_backpressure.as_ref(),
-                    instance_index,
-                    instance,
-                );
-                wrote_real |= result.wrote_real;
-                wrote_zero |= result.wrote_zero;
-            }
-
-            if wrote_real {
-                decision
-                    .sample_targets_written
-                    .push(instance.meta.instance_id);
-            }
-            if wrote_zero {
-                decision
-                    .zero_fill_targets_written
-                    .push(instance.meta.instance_id);
-            }
-        }
-
-        decision.ignored = decision.sample_targets_written.is_empty()
-            && decision.zero_fill_targets_written.is_empty();
-        decision
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn route_cover_section(
-        section: Cover,
-        samples: &[f32],
-        packet_ts: f64,
-        cover_transition: usize,
-        sample_rate: u32,
-        channels: usize,
-        decode_backpressure: &DecodeBackpressure,
-        instance_index: usize,
-        instance: &mut BufferInstance,
-    ) -> SectionWriteResult {
-        match section {
-            Cover::Overlap((start_sample, end_sample)) => Self::write_overlap(
-                samples,
-                start_sample,
-                end_sample,
-                decode_backpressure,
-                instance_index,
-                instance,
-            ),
-            Cover::Underlay((start_sample, end_sample)) => Self::write_underlay(
-                start_sample,
-                end_sample,
-                decode_backpressure,
-                instance_index,
-                instance,
-            ),
-            Cover::Transition((direction, (start_sample, end_sample))) => Self::write_transition(
-                samples,
-                packet_ts,
-                cover_transition,
-                sample_rate,
-                channels,
-                decode_backpressure,
-                direction,
-                start_sample,
-                end_sample,
-                instance_index,
-                instance,
-            ),
-        }
-    }
-
-    fn write_overlap(
-        samples: &[f32],
-        start_sample: usize,
-        end_sample: usize,
-        decode_backpressure: &DecodeBackpressure,
-        instance_index: usize,
-        instance: &mut BufferInstance,
-    ) -> SectionWriteResult {
-        if start_sample >= end_sample || end_sample > samples.len() {
-            return SectionWriteResult::default();
-        }
-
-        let push = push_slice(
-            &mut instance.buffer,
-            instance.buffer_capacity_samples,
-            &samples[start_sample..end_sample],
-            &mut instance.full,
-        );
-        decode_backpressure.on_samples_pushed(
-            instance_index,
-            end_sample - start_sample,
-            push.written_samples,
-            instance.full,
-        );
-        if push.written_samples < (end_sample - start_sample) {
-            warn!(
-                "Partial overlap write for i{}: wrote {} / {} samples",
-                instance.meta.instance_id,
-                push.written_samples,
-                end_sample - start_sample
-            );
-        }
-        instance.produced_samples = instance
-            .produced_samples
-            .saturating_add(push.written_samples as u64);
-        SectionWriteResult {
-            wrote_real: push.wrote_any,
-            wrote_zero: false,
-        }
-    }
-
-    fn write_underlay(
-        start_sample: usize,
-        end_sample: usize,
-        decode_backpressure: &DecodeBackpressure,
-        instance_index: usize,
-        instance: &mut BufferInstance,
-    ) -> SectionWriteResult {
-        let length = end_sample.saturating_sub(start_sample);
-        if length == 0 {
-            return SectionWriteResult::default();
-        }
-
-        let push = push_zeros(
-            &mut instance.buffer,
-            instance.buffer_capacity_samples,
-            length,
-            &mut instance.full,
-        );
-        decode_backpressure.on_samples_pushed(
-            instance_index,
-            length,
-            push.written_samples,
-            instance.full,
-        );
-        if push.written_samples < length {
-            warn!(
-                "Partial underlay write for i{}: wrote {} / {} samples",
-                instance.meta.instance_id, push.written_samples, length
-            );
-        }
-        instance.zero_filled_samples = instance
-            .zero_filled_samples
-            .saturating_add(push.written_samples as u64);
-        SectionWriteResult {
-            wrote_real: false,
-            wrote_zero: push.wrote_any,
-        }
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn write_transition(
-        samples: &[f32],
-        packet_ts: f64,
-        cover_transition: usize,
-        sample_rate: u32,
-        channels: usize,
-        decode_backpressure: &DecodeBackpressure,
-        direction: TransitionDirection,
-        start_sample: usize,
-        end_sample: usize,
-        instance_index: usize,
-        instance: &mut BufferInstance,
-    ) -> SectionWriteResult {
-        if start_sample >= end_sample || end_sample > samples.len() {
-            return SectionWriteResult::default();
-        }
-
-        let slice_length = end_sample - start_sample;
-        info!(
-            "Transition starting at: {}",
-            packet_ts + (samples_to_ms(start_sample, sample_rate, channels) as f64 / 1000.0)
-        );
-
-        let (ramp_start, ramp_end) = match direction {
-            TransitionDirection::Up => {
-                let starting_val =
-                    (cover_transition as f32 - slice_length as f32) / cover_transition as f32;
-                (starting_val, 1.0)
-            }
-            TransitionDirection::Down => {
-                let ending_val =
-                    (cover_transition as f32 - slice_length as f32) / cover_transition as f32;
-                (1.0, ending_val)
-            }
-        };
-        info!("Ramp: {:?}", (ramp_start, ramp_end));
-
-        let mut slice = samples[start_sample..end_sample].to_vec();
-        fade_interleaved_per_frame(&mut slice, channels, ramp_start, ramp_end);
-
-        let push = push_owned_slice(
-            &mut instance.buffer,
-            instance.buffer_capacity_samples,
-            slice,
-            &mut instance.full,
-        );
-        decode_backpressure.on_samples_pushed(
-            instance_index,
-            slice_length,
-            push.written_samples,
-            instance.full,
-        );
-        if push.written_samples < slice_length {
-            warn!(
-                "Partial transition write for i{}: wrote {} / {} samples",
-                instance.meta.instance_id, push.written_samples, slice_length
-            );
-        }
-        instance.produced_samples = instance
-            .produced_samples
-            .saturating_add(push.written_samples as u64);
-        SectionWriteResult {
-            wrote_real: push.wrote_any,
-            wrote_zero: false,
-        }
-    }
-
-    /// Mark all instances for `source_key` as finished.
-    pub(crate) fn signal_finish(&mut self, source_key: &SourceKey) {
-        let eof_ms = samples_to_ms(self.consumed_samples, self.sample_rate, self.channels);
-        for (instance_index, instance) in self.instances.iter_mut().enumerate() {
-            if SourceKey::from(&instance.meta.source_key) != *source_key {
-                continue;
-            }
-            if !instance.finished {
-                instance.finished = true;
-                instance.eof_reached_ms = Some(eof_ms);
-                self.decode_backpressure.on_finished(instance_index);
-            }
-        }
-    }
-
-    /// Mark all instances for `source_key` as finished.
-    pub(crate) fn signal_finish_all(&mut self) {
-        let eof_ms = samples_to_ms(self.consumed_samples, self.sample_rate, self.channels);
-        for (instance_index, instance) in self.instances.iter_mut().enumerate() {
-            if !instance.finished {
-                instance.finished = true;
-                instance.eof_reached_ms = Some(eof_ms);
-                self.decode_backpressure.on_finished(instance_index);
-            }
-        }
-    }
-
-    /// True when each instance in the logical track has samples or is finished.
-    #[cfg(any(test, feature = "debug"))]
-    pub(crate) fn track_ready(&self, logical_track_index: usize) -> bool {
-        self.track_ready_with_min_samples(logical_track_index, 1)
     }
 
     /// True when each instance in the logical track has at least `min_samples`
@@ -550,52 +178,6 @@ impl BufferMixer {
     /// True when all logical tracks are finished.
     pub(crate) fn mix_finished(&self) -> bool {
         (0..self.track_instances.len()).all(|track_index| self.track_finished(track_index))
-    }
-
-    /// Fill-state aggregate for one logical track.
-    #[cfg(any(test, feature = "debug"))]
-    pub(crate) fn instance_buffer_fills(&self) -> Vec<(usize, usize)> {
-        self.instances
-            .iter()
-            .map(|instance| (instance.meta.instance_id, instance.buffer.len()))
-            .collect()
-    }
-
-    /// Fill-state aggregate for one logical track.
-    #[cfg(any(test, feature = "debug"))]
-    pub(crate) fn tracks_fill_state(&self) -> Vec<FillState> {
-        let tracks: Vec<FillState> = self
-            .track_instances
-            .iter()
-            .map(|instance_ids| {
-                aggregate_fill_state(
-                    instance_ids
-                        .iter()
-                        .map(|instance_index| self.instances[*instance_index].full),
-                )
-            })
-            .collect();
-
-        tracks
-    }
-
-    /// Fill-state aggregate for one logical track.
-    #[cfg(any(test, feature = "debug"))]
-    pub(crate) fn track_fill_state(&self, logical_track_index: usize) -> FillState {
-        let Some(instances) = self.track_instances.get(logical_track_index) else {
-            return FillState::NotFull;
-        };
-        aggregate_fill_state(
-            instances
-                .iter()
-                .map(|instance_index| self.instances[*instance_index].full),
-        )
-    }
-
-    /// Fill-state aggregate across all logical tracks.
-    #[cfg(any(test, feature = "debug"))]
-    pub(crate) fn mix_fill_state(&self) -> FillState {
-        aggregate_fill_state(self.instances.iter().map(|instance| instance.full))
     }
 
     /// Take synchronized mixed samples across all logical tracks.
@@ -746,22 +328,6 @@ impl BufferMixer {
         Some(combine_tracks_equal_weight(&logical_tracks))
     }
 
-    /// Return per-instance debug counters.
-    #[cfg(any(test, feature = "debug"))]
-    pub(crate) fn counters(&self) -> Vec<(usize, u64, u64, Option<u64>)> {
-        self.instances
-            .iter()
-            .map(|instance| {
-                (
-                    instance.meta.instance_id,
-                    instance.produced_samples,
-                    instance.zero_filled_samples,
-                    instance.eof_reached_ms,
-                )
-            })
-            .collect()
-    }
-
     /// Return unique source keys referenced by this runtime plan.
     pub(crate) fn sources(&self) -> Vec<SourceKey> {
         let mut set = HashSet::new();
@@ -812,132 +378,4 @@ impl BufferMixer {
 }
 
 #[cfg(test)]
-mod tests {
-    use std::collections::HashMap;
-
-    use crate::container::prot::{
-        ActiveWindow, RuntimeInstanceMeta, RuntimeInstancePlan, ShuffleSource,
-    };
-
-    use super::{BufferMixer, FillState, SourceKey};
-
-    /// Build a small two-track runtime plan used by buffer mixer unit tests.
-    fn simple_plan() -> RuntimeInstancePlan {
-        RuntimeInstancePlan {
-            logical_track_count: 2,
-            instances: vec![
-                RuntimeInstanceMeta {
-                    instance_id: 0,
-                    logical_track_index: 0,
-                    slot_index: 0,
-                    source_key: ShuffleSource::TrackId(1),
-                    active_windows: vec![ActiveWindow {
-                        start_ms: 0,
-                        end_ms: Some(1000),
-                    }],
-                    selection_index: 0,
-                    occurrence_index: 0,
-                },
-                RuntimeInstanceMeta {
-                    instance_id: 1,
-                    logical_track_index: 1,
-                    slot_index: 1,
-                    source_key: ShuffleSource::TrackId(2),
-                    active_windows: vec![ActiveWindow {
-                        start_ms: 0,
-                        end_ms: Some(1000),
-                    }],
-                    selection_index: 0,
-                    occurrence_index: 0,
-                },
-            ],
-            event_boundaries_ms: vec![0],
-        }
-    }
-
-    #[test]
-    /// Verifies packet routing writes samples only to matching source instances.
-    fn route_packet_targets_and_zero_fills_instances() {
-        let mut mixer = BufferMixer::new(simple_plan(), 48_000, 2, 8, HashMap::new(), 4);
-
-        let decision = mixer.route_packet(&[1.0, 1.0, 0.5, 0.5], SourceKey::TrackId(1), 0.0);
-        assert_eq!(decision.sample_targets_written, vec![0]);
-        assert!(decision.zero_fill_targets_written.is_empty());
-        assert!(!decision.ignored);
-    }
-
-    #[test]
-    /// Verifies mix readiness and sample consumption stay in lockstep.
-    fn readiness_and_take_samples_are_synchronized() {
-        let mut mixer = BufferMixer::new(simple_plan(), 48_000, 2, 16, HashMap::new(), 4);
-
-        mixer.route_packet(&[1.0, 1.0, 1.0, 1.0], SourceKey::TrackId(1), 0.0);
-        assert!(!mixer.mix_ready());
-        assert!(mixer.take_samples().is_none());
-
-        mixer.route_packet(&[0.5, 0.5, 0.5, 0.5], SourceKey::TrackId(2), 0.0);
-        assert!(mixer.mix_ready());
-
-        let mixed = mixer.take_samples().expect("mixed samples");
-        assert_eq!(mixed.len(), 4);
-        assert_eq!(mixed, vec![0.75, 0.75, 0.75, 0.75]);
-    }
-
-    #[test]
-    /// Verifies finish signals propagate to per-track and global finished state.
-    fn signal_finish_propagates_track_and_mix_finished() {
-        let mut mixer = BufferMixer::new(simple_plan(), 48_000, 2, 8, HashMap::new(), 4);
-        mixer.signal_finish(&SourceKey::TrackId(1));
-        assert!(mixer.track_finished(0));
-        assert!(!mixer.mix_finished());
-
-        mixer.signal_finish(&SourceKey::TrackId(2));
-        assert!(mixer.track_finished(1));
-        assert!(mixer.mix_finished());
-    }
-
-    #[test]
-    /// Verifies aggregate fill-state reporting reflects per-instance fullness.
-    fn fill_state_aggregates_as_expected() {
-        let mut track_mix = HashMap::new();
-        track_mix.insert(0usize, (1.0_f32, 0.0_f32));
-        let mut mixer = BufferMixer::new(simple_plan(), 48_000, 2, 2, track_mix, 4);
-        assert_eq!(mixer.mix_fill_state(), FillState::NotFull);
-
-        let _ = mixer.route_packet(&[1.0, 1.0, 1.0, 1.0], SourceKey::TrackId(1), 0.0);
-        assert!(matches!(
-            mixer.mix_fill_state(),
-            FillState::Partial | FillState::Full
-        ));
-    }
-
-    #[test]
-    /// Verifies packets before a window start are represented as aligned zero-fill.
-    fn route_packet_zero_fills_when_packet_is_before_window_start() {
-        let plan = RuntimeInstancePlan {
-            logical_track_count: 1,
-            instances: vec![RuntimeInstanceMeta {
-                instance_id: 0,
-                logical_track_index: 0,
-                slot_index: 0,
-                source_key: ShuffleSource::TrackId(1),
-                active_windows: vec![ActiveWindow {
-                    start_ms: 1000,
-                    end_ms: Some(2000),
-                }],
-                selection_index: 0,
-                occurrence_index: 0,
-            }],
-            event_boundaries_ms: vec![0, 1000],
-        };
-        let mut mixer = BufferMixer::new(plan, 48_000, 2, 16, HashMap::new(), 4);
-
-        let decision = mixer.route_packet(&[1.0, 1.0, 1.0, 1.0], SourceKey::TrackId(1), 0.0);
-        assert!(decision.sample_targets_written.is_empty());
-        assert_eq!(decision.zero_fill_targets_written, vec![0]);
-        assert!(mixer.mix_ready());
-
-        let mixed = mixer.take_samples().expect("zero-filled samples");
-        assert_eq!(mixed, vec![0.0, 0.0, 0.0, 0.0]);
-    }
-}
+mod tests;

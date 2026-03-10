@@ -1,14 +1,54 @@
 //! Helper functions for buffer routing, window math, and debug logging.
 
-use crate::container::prot::ActiveWindow;
+use crate::container::prot::{ActiveWindow, ShuffleSource};
 #[cfg(feature = "buffer-map")]
 use crate::logging::log;
 
 #[cfg(feature = "buffer-map")]
 use super::routing_time::samples_to_ms;
-#[cfg(any(test, feature = "debug"))]
-use super::FillState;
 use super::{AlignedSampleBuffer, BufferInstance};
+
+/// Source identifier used by decode workers.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) enum SourceKey {
+    /// Container track id source.
+    TrackId(u32),
+    /// Standalone file path source.
+    FilePath(String),
+}
+
+impl From<&ShuffleSource> for SourceKey {
+    /// Convert a runtime shuffle source into a decode-worker source key.
+    fn from(value: &ShuffleSource) -> Self {
+        match value {
+            ShuffleSource::TrackId(track_id) => Self::TrackId(*track_id),
+            ShuffleSource::FilePath(path) => Self::FilePath(path.clone()),
+        }
+    }
+}
+
+/// Aggregate fill state for a track or the whole mix.
+#[cfg(any(test, feature = "debug"))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FillState {
+    /// Mix/track buffers are neither uniformly full nor uniformly not-full.
+    Partial,
+    /// Every instance currently reports full.
+    Full,
+    /// No instance currently reports full.
+    NotFull,
+}
+
+/// Debug telemetry returned by routing calls.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct RouteDecision {
+    /// Instance ids that received decoded source samples.
+    pub(crate) sample_targets_written: Vec<usize>,
+    /// Instance ids that received zero-fill for this packet span.
+    pub(crate) zero_fill_targets_written: Vec<usize>,
+    /// True when no instance was relevant for this packet.
+    pub(crate) ignored: bool,
+}
 
 #[derive(Debug, Clone, Copy, Default)]
 pub(super) struct PushResult {
