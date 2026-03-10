@@ -29,17 +29,17 @@ proteus-core/
 
 Top-level modules map to architectural concerns:
 
-| Module | Purpose |
-|---|---|
-| `container/` | `.prot`/`.mka` parsing, settings, scheduling |
-| `playback/` | Player API, engine, mix loop, decode workers |
-| `dsp/effects/` | `AudioEffect` variants and DSP state |
-| `track/` | Decode threads and ring buffer push |
-| `audio/` | Shared ring buffer and sample primitives |
-| `diagnostics/` | Optional metrics reporter |
-| `peaks/` | Waveform peak extraction |
-| `tools/` | Shared decode and timer utilities |
-| `logging/` | Log buffering and debug file helpers |
+| Module         | Purpose                                      |
+| -------------- | -------------------------------------------- |
+| `container/`   | `.prot`/`.mka` parsing, settings, scheduling |
+| `playback/`    | Player API, engine, mix loop, decode workers |
+| `dsp/effects/` | `AudioEffect` variants and DSP state         |
+| `track/`       | Decode threads and ring buffer push          |
+| `audio/`       | Shared ring buffer and sample primitives     |
+| `diagnostics/` | Optional metrics reporter                    |
+| `peaks/`       | Waveform peak extraction                     |
+| `tools/`       | Shared decode and timer utilities            |
+| `logging/`     | Log buffering and debug file helpers         |
 
 ### Module boundaries
 
@@ -65,12 +65,12 @@ dsp/effects/convolution_reverb/
 
 ## 3. File and Function Size Limits
 
-| Unit | Recommended | Hard limit |
-|---|---|---|
-| File | ≤ 400 lines | 600 lines† |
-| Function / method | ≤ 40 lines | 80 lines |
-| `impl` block | ≤ 200 lines | — |
-| Test module | ≤ 150 lines | — |
+| Unit              | Recommended | Hard limit |
+| ----------------- | ----------- | ---------- |
+| File              | ≤ 400 lines | 600 lines† |
+| Function / method | ≤ 40 lines  | 80 lines   |
+| `impl` block      | ≤ 200 lines | —          |
+| Test module       | ≤ 150 lines | —          |
 
 †`prot.rs` currently exceeds this; it is a known exception and a refactor target. Do not add to it without splitting existing code out.
 
@@ -80,36 +80,36 @@ Functions that exceed 40 lines are usually doing more than one thing. Extract he
 
 ## 4. Naming Conventions
 
-| Item | Convention | Example |
-|---|---|---|
-| Files / modules | `snake_case` | `prot_settings.rs`, `buffer_mixer/` |
-| Structs / enums / traits | `PascalCase` | `PlayerState`, `AudioEffect`, `DspEffect` |
-| Enum variants | `PascalCase` | `Playing`, `Paused`, `EndOfStream` |
-| Functions / methods | `snake_case` | `build_runtime_instance_plan` |
-| Constants | `SCREAMING_SNAKE_CASE` | `DEFAULT_THRESHOLD_DB`, `OUTPUT_METER_REFRESH_HZ` |
-| Unused bindings | Leading `_` | `let _track_weights = ...;` |
+| Item                     | Convention             | Example                                           |
+| ------------------------ | ---------------------- | ------------------------------------------------- |
+| Files / modules          | `snake_case`           | `prot_settings.rs`, `buffer_mixer/`               |
+| Structs / enums / traits | `PascalCase`           | `PlayerState`, `AudioEffect`, `DspEffect`         |
+| Enum variants            | `PascalCase`           | `Playing`, `Paused`, `EndOfStream`                |
+| Functions / methods      | `snake_case`           | `build_runtime_instance_plan`                     |
+| Constants                | `SCREAMING_SNAKE_CASE` | `DEFAULT_THRESHOLD_DB`, `OUTPUT_METER_REFRESH_HZ` |
+| Unused bindings          | Leading `_`            | `let _track_weights = ...;`                       |
 
 ### Type-name suffixes
 
 Use consistent suffixes to signal a type's role:
 
-| Suffix | Role | Example |
-|---|---|---|
-| `Settings` | Plain data, serializable | `CompressorSettings`, `GainSettings` |
-| `Effect` | Settings + runtime state | `CompressorEffect`, `GainEffect` |
-| `State` | Ephemeral runtime state | `CompressorState`, `PlayerState` |
-| `Error` | Error enum | `ProtError`, `PlayerInitError` |
-| `Config` | Constructor configuration | `PlayerEngineConfig` |
-| `Plan` | Pre-computed scheduling data | `RuntimeInstancePlan` |
+| Suffix     | Role                         | Example                              |
+| ---------- | ---------------------------- | ------------------------------------ |
+| `Settings` | Plain data, serializable     | `CompressorSettings`, `GainSettings` |
+| `Effect`   | Settings + runtime state     | `CompressorEffect`, `GainEffect`     |
+| `State`    | Ephemeral runtime state      | `CompressorState`, `PlayerState`     |
+| `Error`    | Error enum                   | `ProtError`, `PlayerInitError`       |
+| `Config`   | Constructor configuration    | `PlayerEngineConfig`                 |
+| `Plan`     | Pre-computed scheduling data | `RuntimeInstancePlan`                |
 
 ### Function prefixes
 
-| Prefix | Meaning |
-|---|---|
-| `try_` | Returns `Result`, may fail |
-| `build_` | Constructs a value from parts |
-| `set_` / `get_` | Simple accessors on shared state |
-| `update_` | Takes a closure to mutate shared state |
+| Prefix          | Meaning                                |
+| --------------- | -------------------------------------- |
+| `try_`          | Returns `Result`, may fail             |
+| `build_`        | Constructs a value from parts          |
+| `set_` / `get_` | Simple accessors on shared state       |
+| `update_`       | Takes a closure to mutate shared state |
 
 ---
 
@@ -271,11 +271,11 @@ Err(err) => {
 
 Use the `log` crate everywhere. Never use `println!` or `eprintln!` in library code.
 
-| Level | When to use |
-|---|---|
-| `error!` | Unrecoverable failures, unknown states |
-| `warn!` | Recoverable issues, skipped operations, fallbacks |
-| `info!` | Significant state transitions, successful initialization |
+| Level    | When to use                                              |
+| -------- | -------------------------------------------------------- |
+| `error!` | Unrecoverable failures, unknown states                   |
+| `warn!`  | Recoverable issues, skipped operations, fallbacks        |
+| `info!`  | Significant state transitions, successful initialization |
 | `debug!` | Developer trace information, gated on `--features debug` |
 
 Do not use `trace!`.
@@ -329,6 +329,7 @@ pub fn load_from_mka(file_path: &str) -> Result<PlaySettingsFile, PlaySettingsLo
 ```
 
 Sections to include:
+
 - `# Arguments` — when parameters are non-obvious
 - `# Returns` — when the return type needs clarification
 - `# Errors` — whenever the function returns `Result`
@@ -336,7 +337,7 @@ Sections to include:
 
 ### Inline comments
 
-Use inline comments only for non-obvious logic. If a comment is needed to explain *what* code does, rename the variable or function instead. Comments should explain *why*:
+Use inline comments only for non-obvious logic. If a comment is needed to explain _what_ code does, rename the variable or function instead. Comments should explain _why_:
 
 ```rust
 // Keep schedule entries rectangular by carrying the previous value for

@@ -11,15 +11,19 @@ Approximately 17,400 lines of Rust across 76 source files. The library has stron
 **Issues:**
 
 ### `playback/player/runtime/worker/runner.rs` — 749 lines, multiple concerns
+
 This is the largest file in the library and contains the playback worker loop, sink management, timing tracking, start-gate logic, and playback metrics aggregation all in one place. Each of those is a separable concern and the current size makes it difficult to test or change any single behavior in isolation.
 
 ### `track/single.rs` and `track/container.rs` share similar decode loop structure
+
 Both implement decode-thread loops with buffering and EOS detection but do so independently, with slightly different patterns. The shared logic (buffer pushes, `track_eos_ms` tracking, shutdown checks) is duplicated rather than composed from common helpers. A subtle behavioral difference in EOS detection between the two could cause desync between single-file and container playback — this is worth verifying.
 
 ### Commented-out code in `container/info.rs` lines 211–222
+
 A large `PartialEq` implementation is commented out with no explanation. Should be removed or documented.
 
 ### `instance_needs_data()` in `playback/engine/mix/buffer_mixer/helpers.rs` lines 143–149
+
 The function always returns `true` and carries a comment explaining this is intentional for alignment semantics. The name implies conditional logic but it is unconditional. Either rename to communicate the intent or remove the function and inline a literal `true`.
 
 ---
@@ -29,15 +33,19 @@ The function always returns `true` and carries a comment explaining this is inte
 **Issues:**
 
 ### Internal mixing types exposed through `container/prot.rs`
+
 `RuntimeInstanceMeta`, `RuntimeInstancePlan`, `ActiveWindow`, and `ShuffleSource` are all `pub`. These are scheduling implementation details used by the mix engine. Exposing them couples external callers to the internal shuffling model and makes future refactoring harder.
 
 ### `TrackBuffer` / `TrackBufferMap` in `audio/buffer.rs` lines 10 and 12
+
 These are `pub` type aliases over `Arc<Mutex<Bounded<Vec<f32>>>>`, exposing the specific ring-buffer crate (`dasp_ring_buffer`) as part of the public interface. Any change to the backing data structure becomes a breaking change.
 
 ### `EffectContext` in `dsp/effects/mod.rs` lines 42–50
+
 `EffectContext` has all public fields and derives `Clone`. This means any caller can construct an arbitrary `EffectContext` with inconsistent values (e.g., `channels: 0`, mismatched `sample_rate`). It should have private fields and a controlled constructor.
 
 ### Play settings versioning leaked through `container/play_settings/mod.rs`
+
 Multiple versioned structs (`PlaySettingsLegacy`, `PlaySettingsV1`, etc.) are public. The deserialization versioning strategy is an internal detail that need not be part of the public interface.
 
 ---
@@ -45,6 +53,7 @@ Multiple versioned structs (`PlaySettingsLegacy`, `PlaySettingsV1`, etc.) are pu
 ## Performance
 
 ### Allocation on every effect pass — real-time concern
+
 `playback/engine/mix/effects.rs` lines 17–27:
 
 ```rust
@@ -59,21 +68,27 @@ Every effect in the chain allocates a fresh `Vec<f32>`. For stereo 48 kHz audio 
 Each `AudioEffect::process()` implementation also returns a freshly-allocated `Vec<f32>`. This is the root interface issue — the signature should take a mutable output slice rather than returning an owned buffer.
 
 ### `SamplesBuffer` double-clone in `audio/samples.rs` lines 19–27
+
 `clone_samples_buffer()` collects an iterator into a `Vec<f32>`, then immediately clones the vector again to construct a `SamplesBuffer`. One of these copies is unnecessary.
 
 ### `VecDeque::drain(0..n)` in `playback/engine/premix.rs` line 52
+
 `drain` on a `VecDeque` from the front is O(n) because it must shift elements. For the premix buffer this happens on every chunk. A ring buffer with read/write indices would be O(1) and this is exactly the access pattern `dasp_ring_buffer` is designed for — it is already a dependency.
 
 ### HashMap lookups in the tight mixing loop — `playback/engine/mix/track_mix.rs` lines 82–95
+
 For every mix chunk, per-track weights and channel gain arrays are looked up by key from a snapshot `HashMap`. Since the set of active tracks is stable across a chunk, these could be snapshotted into parallel `Vec`s indexed by position at the start of the loop rather than resolved per-iteration.
 
 ### `std::panic::catch_unwind()` in `container/info.rs` lines 152–162
+
 `catch_unwind` is used as an error handling mechanism in `get_durations_best_effort()`. Crossing the unwind boundary is expensive (stack unwinding, registering/deregistering the handler), and it signals that the underlying code is panicking on expected error conditions rather than returning `Result`. The panics should become errors.
 
 ### `Condvar::wait()` without timeout in `playback/engine/mix/buffer_mixer/backpressure.rs` line 114
+
 ```rust
 guard = self.cv.wait(guard).unwrap();
 ```
+
 If the thread that is supposed to notify this condvar panics or exits without notifying, this wait will block forever. A bounded `wait_timeout` with a shutdown check guards against this.
 
 ---
@@ -167,62 +182,71 @@ The pattern of clamping gain to `0.0` on `NaN` and the channel-count `.max(1)` g
 ## Things Done Well
 
 ### Virtual zero-fill in `playback/engine/mix/buffer_mixer/aligned_buffer.rs`
+
 The aligned buffer tracks zero-fill regions as metadata segments rather than materializing large `Vec<f32>` zero buffers. This cleanly implements the alignment model described in `.guides/NOTES.md` without the memory cost.
 
 ### Convolution reverb caching — `dsp/effects/convolution_reverb/mod.rs`
+
 ```rust
 static IMPULSE_RESPONSE_CACHE: OnceLock<Mutex<ImpulseResponseCacheMap>>;
 static REVERB_KERNEL_CACHE: OnceLock<Mutex<ReverbKernelCacheMap>>;
 ```
+
 IR loading and FFT kernel computation are cached globally behind `OnceLock`. Computing convolution kernels is expensive; this prevents redundant work when multiple instances share the same impulse response.
 
 ### Diffusion reverb per-channel decorrelated lanes
+
 The diffusion reverb uses independent delay networks per channel rather than a shared interleaved network. This avoids the metallic cross-channel ringing that the shared approach produces. The `.guides/NOTES.md` constraint against reverting this is well-founded and the implementation respects it.
 
 ### Play settings versioning — `container/play_settings/mod.rs`
+
 Multiple schema versions deserialize cleanly without crashing on unknown keys. Unknown versions fall through to a raw JSON capture rather than hard failing. This is a well-designed extension point for the settings format.
 
 ### Backpressure coordination — `playback/engine/mix/buffer_mixer/backpressure.rs`
+
 The decode throttling correctly prevents buffer overflow in decoder threads while maintaining alignment across sources. The startup-phase priority scheme (favoring lagging sources during initial buffering) is a clean solution to the cold-start alignment problem.
 
 ### Numeric stability in DSP effects
+
 Effects consistently use `clamp()`, `max()`, and `saturating_*()` operations. Biquad coefficient computation validates with `is_finite()` checks before applying. This prevents NaN/Inf propagation into the audio stream.
 
 ### Effect chain design — `dsp/effects/mod.rs`
+
 The `AudioEffect` enum with a uniform `process(&[f32], &EffectContext, drain: bool) -> Vec<f32>` interface is clean and easy to extend. The `drain: bool` flag is an elegant way to handle tail-producing effects without a separate flush API. The `warm_up()` hook for lazy-initialization of expensive state (IR loading) is a good pattern.
 
 ### Play settings serde round-trip test coverage — `dsp/effects/mod.rs` tests
+
 The test suite for `AudioEffect` covers both round-trip serialization and aliased/legacy JSON key names. This kind of regression coverage on serialized formats is exactly right given the versioned settings model.
 
 ---
 
 ## Summary Table
 
-| Severity | Issue |
-|---|---|
+| Severity | Issue                                                                                                     |
+| -------- | --------------------------------------------------------------------------------------------------------- |
 | Critical | Panics on mismatched track sample rates / channel layouts / bit depth (`container/info.rs` 471, 478, 488) |
-| Critical | `catch_unwind` used as error handling for expected error conditions |
-| High | Panic if container has no decodable audio track (`track/single.rs`) |
-| High | Panic on file permission error (`container/info.rs` line 73) |
-| High | Per-chunk Vec allocations in the effect chain hot path |
-| High | Atomic ordering inconsistency on `playback_thread_exists` and `buffering_done` |
-| Medium | Silent seek failure with no log or signal |
-| Medium | Decode errors silently discarded in decode loop |
-| Medium | Track weighting unimplemented for standalone file mode (TODO) |
-| Medium | `Condvar::wait()` without timeout in backpressure |
-| Medium | Float-to-usize cast without explicit sign guard |
-| Medium | O(n) `VecDeque::drain` in premix buffer |
-| Medium | HashMap lookups inside tight mixing loop |
-| Low | `runner.rs` 749 lines, multiple concerns |
-| Low | ~50 `.lock().unwrap()` calls, no poisoning strategy |
-| Low | Dead code (`add_samples_to_buffer_map_nonblocking`) |
-| Low | Deprecated `BasicReverb` variant still actively matched |
-| Low | Internal mixing types (`RuntimeInstancePlan` etc.) exposed publicly |
-| Low | `EffectContext` with fully public fields, no invariant enforcement |
-| Good | Virtual zero-fill aligned buffer |
-| Good | Convolution IR and kernel caching |
-| Good | Per-channel diffusion reverb decorrelation |
-| Good | Versioned play settings with graceful fallback |
-| Good | Backpressure / decode throttle design |
-| Good | Numeric stability guards in DSP code |
-| Good | Effect chain interface with `drain` flag and `warm_up` |
+| Critical | `catch_unwind` used as error handling for expected error conditions                                       |
+| High     | Panic if container has no decodable audio track (`track/single.rs`)                                       |
+| High     | Panic on file permission error (`container/info.rs` line 73)                                              |
+| High     | Per-chunk Vec allocations in the effect chain hot path                                                    |
+| High     | Atomic ordering inconsistency on `playback_thread_exists` and `buffering_done`                            |
+| Medium   | Silent seek failure with no log or signal                                                                 |
+| Medium   | Decode errors silently discarded in decode loop                                                           |
+| Medium   | Track weighting unimplemented for standalone file mode (TODO)                                             |
+| Medium   | `Condvar::wait()` without timeout in backpressure                                                         |
+| Medium   | Float-to-usize cast without explicit sign guard                                                           |
+| Medium   | O(n) `VecDeque::drain` in premix buffer                                                                   |
+| Medium   | HashMap lookups inside tight mixing loop                                                                  |
+| Low      | `runner.rs` 749 lines, multiple concerns                                                                  |
+| Low      | ~50 `.lock().unwrap()` calls, no poisoning strategy                                                       |
+| Low      | Dead code (`add_samples_to_buffer_map_nonblocking`)                                                       |
+| Low      | Deprecated `BasicReverb` variant still actively matched                                                   |
+| Low      | Internal mixing types (`RuntimeInstancePlan` etc.) exposed publicly                                       |
+| Low      | `EffectContext` with fully public fields, no invariant enforcement                                        |
+| Good     | Virtual zero-fill aligned buffer                                                                          |
+| Good     | Convolution IR and kernel caching                                                                         |
+| Good     | Per-channel diffusion reverb decorrelation                                                                |
+| Good     | Versioned play settings with graceful fallback                                                            |
+| Good     | Backpressure / decode throttle design                                                                     |
+| Good     | Numeric stability guards in DSP code                                                                      |
+| Good     | Effect chain interface with `drain` flag and `warm_up`                                                    |
