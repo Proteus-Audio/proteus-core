@@ -171,11 +171,36 @@ fn drain_effect_tail(state: &mut MixLoopState) -> bool
 
 ## Acceptance criteria
 
-- [ ] All existing tests pass (`cargo test -p proteus-lib`)
-- [ ] `cargo check --all-features` shows no new errors or warnings
-- [ ] `spawn_mix_thread` ≤ 30 lines
-- [ ] `setup_mix_state` ≤ 80 lines
-- [ ] `run_mix_loop` ≤ 80 lines
-- [ ] `process_and_send_samples` ≤ 80 lines
-- [ ] `drain_effect_tail` ≤ 80 lines
-- [ ] `runner/mod.rs` ≤ 400 lines
+- [x] All existing tests pass (`cargo test -p proteus-lib`)
+- [x] `cargo check --all-features` shows no new errors or warnings
+- [x] `spawn_mix_thread` ≤ 30 lines
+- [x] `setup_mix_state` ≤ 80 lines
+- [x] `run_mix_loop` ≤ 80 lines
+- [x] `process_and_send_samples` ≤ 80 lines
+- [x] `drain_effect_tail` ≤ 80 lines
+- [x] `runner/mod.rs` ≤ 400 lines
+
+## Validation notes
+
+Validated on March 11, 2026.
+
+- `cargo test -p proteus-lib`: passed (`172` unit tests and `2` doc tests)
+- `cargo check --all-features`: clean (one pre-existing dead_code warning in `types.rs`, zero new warnings)
+- Function sizes after refactor:
+  - `runner/mod.rs` total: 40 lines; `spawn_mix_thread`: 17 lines
+  - `loop_body.rs` — `setup_mix_state`: 80, `run_mix_loop`: 29, `process_and_send_samples`: 60, `drain_effect_tail`: 39, `teardown_mix`: 17, `spawn_mix_decode_workers`: 37, `take_next_samples`: 27, `update_debug_metrics`: 20
+
+### Split strategy
+
+- Introduced `MixLoopState` struct in `loop_body.rs` to bundle all mutable loop state (~30 fields including `#[cfg(feature = "debug")]` metric accumulators and the `DecodeWorkerJoinGuard`).
+- `setup_mix_state` (phases 1–5): builds the runtime plan, sizes buffers, constructs `BufferMixer`, spawns decode workers via extracted `spawn_mix_decode_workers`, and warms up effects. Returns `Option<MixLoopState>` — `None` on empty instance plan.
+- `run_mix_loop` (phase 6): thin loop skeleton that calls `drain_decode_events`, `apply_inline_*`, start-gate check, and dispatches to `take_next_samples` → `process_and_send_samples` or `drain_effect_tail`.
+- `take_next_samples`: convolution-batch accumulation and ring-buffer pop, extracted from the loop body to keep `run_mix_loop` concise.
+- `process_and_send_samples`: effect-chain processing (including inline transition crossfade), `#[cfg(feature = "debug")]` metrics via extracted `update_debug_metrics`, and output send.
+- `drain_effect_tail` (phase 6 tail): silence-detection loop for draining reverb tails after mix finishes.
+- `teardown_mix` (phase 7): writes finished track indices, calls `decode_backpressure.shutdown()`, then explicitly drops `packet_rx` before `decode_workers` to preserve the deadlock-safe teardown order.
+- The constants `MAX_EFFECT_DRAIN_PASSES`, `DRAIN_SILENCE_EPSILON`, and `DRAIN_SILENT_PASSES_TO_STOP` moved to `loop_body.rs` (as `pub(super)` so the test in `runner/mod.rs` can reference them).
+
+## Status
+
+SI-06 is complete. All acceptance criteria are met.
