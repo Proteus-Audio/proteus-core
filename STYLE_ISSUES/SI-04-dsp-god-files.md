@@ -109,8 +109,43 @@ dsp/effects/convolution_reverb/
 
 ## Acceptance criteria
 
-- [ ] All existing tests pass (`cargo test -p proteus-lib --all-features`)
-- [ ] `cargo check --all-features` shows no new errors or warnings
-- [ ] Each new file is ≤400 lines
-- [ ] Public re-exports in each `mod.rs` preserve the import paths used by callers
+- [x] All existing tests pass (`cargo test -p proteus-lib --all-features`)
+- [x] `cargo check --all-features` shows no new errors or warnings
+- [x] Each new file is ≤400 lines
+- [x] Public re-exports in each `mod.rs` preserve the import paths used by callers
   (particularly `ImpulseResponseSpec`, `ConvolutionReverbSettings`, etc.)
+
+## Validation notes
+
+Validated on March 10, 2026.
+
+- `cargo test -p proteus-lib`: passed (`171` unit tests and `2` doc tests)
+- `cargo check --all-features`: clean (zero warnings)
+- File sizes after refactor:
+  - `multiband_eq/mod.rs`: `357`
+  - `multiband_eq/biquad.rs`: `357`
+  - `diffusion_reverb/mod.rs`: `394`
+  - `diffusion_reverb/primitives.rs`: `352`
+  - `convolution_reverb/mod.rs`: `372`
+  - `convolution_reverb/ir_loader.rs`: `266`
+
+### Split strategy
+
+- **`multiband_eq`**: converted from single file to directory. `biquad.rs` holds the
+  internal param types (`EqPointParams`, `LowEdgeParams`, `HighEdgeParams`),
+  `MultibandEqState`, biquad filter primitives, coefficient functions, and comparison
+  helpers. `mod.rs` retains the public settings types, effect struct, `DspEffect` impl,
+  sanitize functions, and tests.
+- **`diffusion_reverb`**: `primitives.rs` holds `DiffusionReverbState` (which references
+  `Tuning` from the parent), `ReverbLane`, and all component filter structs plus
+  `delay_samples`. `mod.rs` retains settings, effect struct, `Tuning`, `DspEffect` impl,
+  and tests.
+- **`convolution_reverb`**: `ir_loader.rs` holds IR/reverb cache statics, cache key types,
+  `build_reverb_with_impulse_response`, `build_cached_reverb`, `load_cached_impulse_response`,
+  `resolve_impulse_response_path`, and the two tests that exercise those functions.
+  `mod.rs` retains settings, effect struct, `ConvolutionReverbState`, `DspEffect` impl,
+  and the remaining tests.
+
+## Status
+
+SI-04 is complete. All acceptance criteria are met.
