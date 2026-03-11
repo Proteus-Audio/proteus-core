@@ -125,8 +125,27 @@ Then `buffer_track` becomes a coordinator: open → find track → seek → run 
 
 ## Acceptance criteria
 
-- [ ] All existing tests pass (`cargo test -p proteus-lib`)
-- [ ] `cargo check --all-features` shows no new errors or warnings
-- [ ] `buffer_track` ≤80 lines
-- [ ] `buffer_container_tracks` ≤80 lines
-- [ ] Each extracted helper ≤40 lines
+- [x] All existing tests pass (`cargo test -p proteus-lib`)
+- [x] `cargo check --all-features` shows no new errors or warnings
+- [x] `buffer_track` ≤80 lines
+- [x] `buffer_container_tracks` ≤80 lines
+- [x] Each extracted helper ≤40 lines
+
+## Validation notes
+
+Validated on March 11, 2026.
+
+- `cargo test -p proteus-lib`: passed (`171` unit tests and `2` doc tests)
+- `cargo check --all-features`: clean (zero warnings)
+- Function sizes after refactor:
+  - `single.rs` — `buffer_track`: 70 lines, `find_track`: 20, `interleave_to_stereo`: 13, `process_decoded_packet`: 29
+  - `container.rs` — `buffer_container_tracks`: 46 lines, `open_container_decoders`: 36, `init_container_weights`: 17, `interleave_to_stereo`: 13, `check_eos_skew`: 28, `push_decoded_container_packet`: 20, `run_container_decode_loop`: 37
+
+### Split strategy
+
+- **`single.rs`**: extracted `find_track` (locate the right track in the format reader, return id + duration), `interleave_to_stereo` (channel processing shared by single and container decode paths), and `process_decoded_packet` (log format label, interleave, push to ring buffer). The decode loop stays inline in `buffer_track` since it reduces to a compact control-flow block with helpers.
+- **`container.rs`**: introduced `TrackDecoder` struct (consolidates the 5 parallel `HashMap`s from the original into one struct per unique track ID, with `track_keys: Vec<u16>` for duplicate-key support). Extracted `open_container_decoders` (build `Vec<TrackDecoder>` from format reader), `init_container_weights` (primary/duplicate weight setup), `check_eos_skew` (per-tick EOS skew detection across all tracks), `push_decoded_container_packet` (log + interleave + push), and `run_container_decode_loop` (the main packet loop, returns finished track IDs).
+
+## Status
+
+SI-05 is complete. All acceptance criteria are met.
