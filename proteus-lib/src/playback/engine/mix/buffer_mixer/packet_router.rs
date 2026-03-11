@@ -34,69 +34,29 @@ impl BufferMixer {
         }
 
         let mut decision = RouteDecision::default();
+        let sample_rate = self.sample_rate;
+        let channels = self.channels;
+        let crossfade_ms = self.crossfade_ms;
+        let decode_backpressure = self.decode_backpressure.as_ref();
         for (instance_index, instance) in self.instances.iter_mut().enumerate() {
-            if instance.finished {
-                continue;
-            }
-
-            if SourceKey::from(&instance.meta.source_key) != source {
-                continue;
-            }
-
-            if instance_past_window_ts(instance, &packet_ts) {
-                debug!(
-                    "Instance {} (Track {}) is finished!!",
-                    instance.meta.instance_id, instance.meta.logical_track_index
-                );
-                instance.finished = true;
-                self.decode_backpressure.on_finished(instance_index);
-                continue;
-            }
-
-            let overlap = packet_overlap_samples(
+            let result = route_packet_to_instance(
+                instance_index,
+                instance,
+                samples,
+                &source,
                 packet_ts,
                 frame_count,
-                self.sample_rate,
-                self.channels,
-                &instance.meta.active_windows,
+                sample_rate,
+                channels,
+                crossfade_ms,
+                decode_backpressure,
             );
-
-            let cover_transition = self.crossfade_ms * self.sample_rate as usize / 1000;
-            let cover = map_cover(&overlap, samples.len(), Some(cover_transition));
-
-            debug!(
-                "Instance {} / Track {} / Time {} / Overlap {:?} / Cover {:?}",
-                instance.meta.instance_id,
-                instance.meta.logical_track_index,
-                packet_ts,
-                overlap,
-                cover,
-            );
-
-            let mut wrote_real = false;
-            let mut wrote_zero = false;
-            for section in cover {
-                let result = Self::route_cover_section(
-                    section,
-                    samples,
-                    packet_ts,
-                    cover_transition,
-                    self.sample_rate,
-                    self.channels,
-                    self.decode_backpressure.as_ref(),
-                    instance_index,
-                    instance,
-                );
-                wrote_real |= result.wrote_real;
-                wrote_zero |= result.wrote_zero;
-            }
-
-            if wrote_real {
+            if result.wrote_real {
                 decision
                     .sample_targets_written
                     .push(instance.meta.instance_id);
             }
-            if wrote_zero {
+            if result.wrote_zero {
                 decision
                     .zero_fill_targets_written
                     .push(instance.meta.instance_id);
@@ -326,4 +286,79 @@ impl BufferMixer {
             }
         }
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn route_packet_to_instance(
+    instance_index: usize,
+    instance: &mut BufferInstance,
+    samples: &[f32],
+    source: &SourceKey,
+    packet_ts: f64,
+    frame_count: usize,
+    sample_rate: u32,
+    channels: usize,
+    crossfade_ms: usize,
+    decode_backpressure: &DecodeBackpressure,
+) -> SectionWriteResult {
+    if instance.finished || SourceKey::from(&instance.meta.source_key) != *source {
+        return SectionWriteResult::default();
+    }
+
+    if finish_instance_if_past_window(instance_index, instance, packet_ts, decode_backpressure) {
+        return SectionWriteResult::default();
+    }
+
+    let overlap = packet_overlap_samples(
+        packet_ts,
+        frame_count,
+        sample_rate,
+        channels,
+        &instance.meta.active_windows,
+    );
+    let cover_transition = crossfade_ms * sample_rate as usize / 1000;
+    let cover = map_cover(&overlap, samples.len(), Some(cover_transition));
+
+    debug!(
+        "Instance {} / Track {} / Time {} / Overlap {:?} / Cover {:?}",
+        instance.meta.instance_id, instance.meta.logical_track_index, packet_ts, overlap, cover,
+    );
+
+    let mut write_result = SectionWriteResult::default();
+    for section in cover {
+        let result = BufferMixer::route_cover_section(
+            section,
+            samples,
+            packet_ts,
+            cover_transition,
+            sample_rate,
+            channels,
+            decode_backpressure,
+            instance_index,
+            instance,
+        );
+        write_result.wrote_real |= result.wrote_real;
+        write_result.wrote_zero |= result.wrote_zero;
+    }
+
+    write_result
+}
+
+fn finish_instance_if_past_window(
+    instance_index: usize,
+    instance: &mut BufferInstance,
+    packet_ts: f64,
+    decode_backpressure: &DecodeBackpressure,
+) -> bool {
+    if !instance_past_window_ts(instance, &packet_ts) {
+        return false;
+    }
+
+    debug!(
+        "Instance {} (Track {}) is finished!!",
+        instance.meta.instance_id, instance.meta.logical_track_index
+    );
+    instance.finished = true;
+    decode_backpressure.on_finished(instance_index);
+    true
 }

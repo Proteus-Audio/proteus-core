@@ -35,7 +35,11 @@ pub struct EqPointSettings {
 impl EqPointSettings {
     /// Create an EQ point.
     pub fn new(freq_hz: u32, q: f32, gain_db: f32) -> Self {
-        Self { freq_hz, q, gain_db }
+        Self {
+            freq_hz,
+            q,
+            gain_db,
+        }
     }
 }
 
@@ -88,7 +92,11 @@ impl MultibandEqSettings {
         low_edge: Option<LowEdgeFilterSettings>,
         high_edge: Option<HighEdgeFilterSettings>,
     ) -> Self {
-        Self { points, low_edge, high_edge }
+        Self {
+            points,
+            low_edge,
+            high_edge,
+        }
     }
 }
 
@@ -232,7 +240,11 @@ fn sanitize_low_edge(edge: &LowEdgeFilterSettings, sample_rate: u32) -> LowEdgeP
             freq_hz: sanitize_freq(*freq_hz, sample_rate),
             q: sanitize_q(*q),
         },
-        LowEdgeFilterSettings::LowShelf { freq_hz, q, gain_db } => LowEdgeParams::LowShelf {
+        LowEdgeFilterSettings::LowShelf {
+            freq_hz,
+            q,
+            gain_db,
+        } => LowEdgeParams::LowShelf {
             freq_hz: sanitize_freq(*freq_hz, sample_rate),
             q: sanitize_q(*q),
             gain_db: sanitize_gain_db(*gain_db),
@@ -246,7 +258,11 @@ fn sanitize_high_edge(edge: &HighEdgeFilterSettings, sample_rate: u32) -> HighEd
             freq_hz: sanitize_freq(*freq_hz, sample_rate),
             q: sanitize_q(*q),
         },
-        HighEdgeFilterSettings::HighShelf { freq_hz, q, gain_db } => HighEdgeParams::HighShelf {
+        HighEdgeFilterSettings::HighShelf {
+            freq_hz,
+            q,
+            gain_db,
+        } => HighEdgeParams::HighShelf {
             freq_hz: sanitize_freq(*freq_hz, sample_rate),
             q: sanitize_q(*q),
             gain_db: sanitize_gain_db(*gain_db),

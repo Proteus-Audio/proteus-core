@@ -99,8 +99,8 @@ container/info/
 
 ## Acceptance criteria
 
-- [ ] All existing tests pass (`cargo test -p proteus-lib`)
-- [ ] `cargo check --all-features` shows no new errors or warnings
-- [ ] Each new file is ≤400 lines
-- [ ] No function exceeds 80 lines
-- [ ] Public re-exports in `mod.rs` preserve the existing import paths used by callers
+- [x] All existing tests pass (`cargo test -p proteus-lib`)
+- [x] `cargo check --all-features` shows no new errors or warnings
+- [x] Each new file is ≤400 lines
+- [x] No function exceeds 80 lines
+- [x] Public re-exports in `mod.rs` preserve the existing import paths used by callers

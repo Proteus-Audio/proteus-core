@@ -45,10 +45,18 @@ impl MultibandEqState {
             LowEdgeParams::HighPass { freq_hz, q } => {
                 Biquad::new(sample_rate, channels, BiquadDesign::HighPass { freq_hz, q })
             }
-            LowEdgeParams::LowShelf { freq_hz, q, gain_db } => Biquad::new(
+            LowEdgeParams::LowShelf {
+                freq_hz,
+                q,
+                gain_db,
+            } => Biquad::new(
                 sample_rate,
                 channels,
-                BiquadDesign::LowShelf { freq_hz, q, gain_db },
+                BiquadDesign::LowShelf {
+                    freq_hz,
+                    q,
+                    gain_db,
+                },
             ),
         });
 
@@ -71,10 +79,18 @@ impl MultibandEqState {
             HighEdgeParams::LowPass { freq_hz, q } => {
                 Biquad::new(sample_rate, channels, BiquadDesign::LowPass { freq_hz, q })
             }
-            HighEdgeParams::HighShelf { freq_hz, q, gain_db } => Biquad::new(
+            HighEdgeParams::HighShelf {
+                freq_hz,
+                q,
+                gain_db,
+            } => Biquad::new(
                 sample_rate,
                 channels,
-                BiquadDesign::HighShelf { freq_hz, q, gain_db },
+                BiquadDesign::HighShelf {
+                    freq_hz,
+                    q,
+                    gain_db,
+                },
             ),
         });
 
@@ -182,17 +198,23 @@ impl Biquad {
 
 fn coefficients(sample_rate: u32, design: BiquadDesign) -> BiquadCoefficients {
     match design {
-        BiquadDesign::Peaking { freq_hz, q, gain_db } => {
-            peaking_coefficients(sample_rate, freq_hz, q, gain_db)
-        }
+        BiquadDesign::Peaking {
+            freq_hz,
+            q,
+            gain_db,
+        } => peaking_coefficients(sample_rate, freq_hz, q, gain_db),
         BiquadDesign::LowPass { freq_hz, q } => low_pass_coefficients(sample_rate, freq_hz, q),
         BiquadDesign::HighPass { freq_hz, q } => high_pass_coefficients(sample_rate, freq_hz, q),
-        BiquadDesign::LowShelf { freq_hz, q, gain_db } => {
-            low_shelf_coefficients(sample_rate, freq_hz, q, gain_db)
-        }
-        BiquadDesign::HighShelf { freq_hz, q, gain_db } => {
-            high_shelf_coefficients(sample_rate, freq_hz, q, gain_db)
-        }
+        BiquadDesign::LowShelf {
+            freq_hz,
+            q,
+            gain_db,
+        } => low_shelf_coefficients(sample_rate, freq_hz, q, gain_db),
+        BiquadDesign::HighShelf {
+            freq_hz,
+            q,
+            gain_db,
+        } => high_shelf_coefficients(sample_rate, freq_hz, q, gain_db),
     }
 }
 
@@ -334,8 +356,16 @@ fn low_edge_params_equal(left: Option<LowEdgeParams>, right: Option<LowEdgeParam
             Some(LowEdgeParams::HighPass { freq_hz: rf, q: rq }),
         ) => lf == rf && (lq - rq).abs() < f32::EPSILON,
         (
-            Some(LowEdgeParams::LowShelf { freq_hz: lf, q: lq, gain_db: lg }),
-            Some(LowEdgeParams::LowShelf { freq_hz: rf, q: rq, gain_db: rg }),
+            Some(LowEdgeParams::LowShelf {
+                freq_hz: lf,
+                q: lq,
+                gain_db: lg,
+            }),
+            Some(LowEdgeParams::LowShelf {
+                freq_hz: rf,
+                q: rq,
+                gain_db: rg,
+            }),
         ) => lf == rf && (lq - rq).abs() < f32::EPSILON && (lg - rg).abs() < f32::EPSILON,
         _ => false,
     }
@@ -349,8 +379,16 @@ fn high_edge_params_equal(left: Option<HighEdgeParams>, right: Option<HighEdgePa
             Some(HighEdgeParams::LowPass { freq_hz: rf, q: rq }),
         ) => lf == rf && (lq - rq).abs() < f32::EPSILON,
         (
-            Some(HighEdgeParams::HighShelf { freq_hz: lf, q: lq, gain_db: lg }),
-            Some(HighEdgeParams::HighShelf { freq_hz: rf, q: rq, gain_db: rg }),
+            Some(HighEdgeParams::HighShelf {
+                freq_hz: lf,
+                q: lq,
+                gain_db: lg,
+            }),
+            Some(HighEdgeParams::HighShelf {
+                freq_hz: rf,
+                q: rq,
+                gain_db: rg,
+            }),
         ) => lf == rf && (lq - rq).abs() < f32::EPSILON && (lg - rg).abs() < f32::EPSILON,
         _ => false,
     }

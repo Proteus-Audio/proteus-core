@@ -87,9 +87,18 @@ fn fill_state_aggregates_as_expected() {
     let mut track_mix = HashMap::new();
     track_mix.insert(0usize, (1.0_f32, 0.0_f32));
     let mut mixer = BufferMixer::new(simple_plan(), 48_000, 2, 2, track_mix, 4);
+    assert!(!mixer.track_ready(0));
+    assert_eq!(mixer.instance_buffer_fills(), vec![(0, 0), (1, 0)]);
+    assert_eq!(
+        mixer.tracks_fill_state(),
+        vec![FillState::NotFull, FillState::NotFull]
+    );
+    assert_eq!(mixer.track_fill_state(0), FillState::NotFull);
+    assert_eq!(mixer.counters(), vec![(0, 0, 0, None), (1, 0, 0, None)]);
     assert_eq!(mixer.mix_fill_state(), FillState::NotFull);
 
     let _ = mixer.route_packet(&[1.0, 1.0, 1.0, 1.0], SourceKey::TrackId(1), 0.0);
+    assert!(mixer.track_ready(0));
     assert!(matches!(
         mixer.mix_fill_state(),
         FillState::Partial | FillState::Full

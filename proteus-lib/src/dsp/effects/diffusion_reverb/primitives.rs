@@ -28,7 +28,11 @@ impl DiffusionReverbState {
         let lanes = (0..channels)
             .map(|channel| ReverbLane::new(tuning.decorrelated(channel)))
             .collect();
-        Self { tuning, channels, lanes }
+        Self {
+            tuning,
+            channels,
+            lanes,
+        }
     }
 
     /// Reset all channel lanes.

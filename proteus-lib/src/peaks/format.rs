@@ -94,7 +94,7 @@ pub(crate) fn read_peaks_with_options(
     }
 
     if let Some(target_peaks) = options.target_peaks {
-        if options.start_seconds.is_some() && options.end_seconds.is_some() {
+        if should_time_align_peaks(options, header.window_size, target_peaks) {
             peaks = time_align_peaks(
                 &peaks,
                 &header,
@@ -109,6 +109,16 @@ pub(crate) fn read_peaks_with_options(
     }
 
     Ok(peaks)
+}
+
+fn should_time_align_peaks(
+    options: &GetPeaksOptions,
+    window_size: u32,
+    target_peaks: usize,
+) -> bool {
+    options.start_seconds.is_some()
+        && options.end_seconds.is_some()
+        && target_peaks > usize::try_from(window_size.max(1)).unwrap_or(usize::MAX)
 }
 
 fn compute_requested_sample_range(

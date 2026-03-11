@@ -258,44 +258,16 @@ fn source_room_status(
     let mut parts = include_details.then(Vec::new);
 
     for instance_index in instance_indices {
-        let Some(instance) = state.instances.get(*instance_index) else {
-            continue;
-        };
-        if instance.finished {
-            if let Some(parts) = parts.as_mut() {
-                parts.push(format!("i{}:finished", instance_index));
-            }
-            continue;
-        }
-        saw_unfinished = true;
-
-        let occupied = instance
-            .buffered_samples
-            .saturating_add(instance.reserved_samples)
-            .min(instance.capacity_samples);
-        let free = instance.capacity_samples.saturating_sub(occupied);
-        if let Some(startup_target) = startup_target {
-            let startup_target = startup_target.min(instance.capacity_samples.max(1));
-            if occupied < startup_target {
-                source_has_startup_deficit = true;
-            }
-        }
-
-        // A packet may be larger than the per-instance ring capacity, so "full packet room"
-        // is impossible in that case. Clamp the target to preserve liveness.
-        let target_room = required_samples.min(instance.capacity_samples.max(1));
-        all_have_target_room &= free >= target_room;
-        if let Some(parts) = parts.as_mut() {
-            parts.push(format!(
-                "i{}:buf={} res={} /{} free={} target={}",
-                instance_index,
-                instance.buffered_samples,
-                instance.reserved_samples,
-                instance.capacity_samples,
-                free,
-                target_room
-            ));
-        }
+        update_source_room_state(
+            state.instances.get(*instance_index),
+            *instance_index,
+            startup_target,
+            required_samples,
+            &mut saw_unfinished,
+            &mut all_have_target_room,
+            &mut source_has_startup_deficit,
+            &mut parts,
+        );
     }
 
     if !saw_unfinished {
@@ -343,6 +315,57 @@ fn source_room_status(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
+fn update_source_room_state(
+    instance: Option<&DecodeBackpressureInstance>,
+    instance_index: usize,
+    startup_target: Option<usize>,
+    required_samples: usize,
+    saw_unfinished: &mut bool,
+    all_have_target_room: &mut bool,
+    source_has_startup_deficit: &mut bool,
+    parts: &mut Option<Vec<String>>,
+) {
+    let Some(instance) = instance else {
+        return;
+    };
+    if instance.finished {
+        if let Some(parts) = parts.as_mut() {
+            parts.push(format!("i{}:finished", instance_index));
+        }
+        return;
+    }
+
+    *saw_unfinished = true;
+    let occupied = occupied_samples(instance);
+    let free = instance.capacity_samples.saturating_sub(occupied);
+    if startup_target.is_some_and(|target| occupied < target.min(instance.capacity_samples.max(1)))
+    {
+        *source_has_startup_deficit = true;
+    }
+
+    let target_room = required_samples.min(instance.capacity_samples.max(1));
+    *all_have_target_room &= free >= target_room;
+    if let Some(parts) = parts.as_mut() {
+        parts.push(format!(
+            "i{}:buf={} res={} /{} free={} target={}",
+            instance_index,
+            instance.buffered_samples,
+            instance.reserved_samples,
+            instance.capacity_samples,
+            free,
+            target_room
+        ));
+    }
+}
+
+fn occupied_samples(instance: &DecodeBackpressureInstance) -> usize {
+    instance
+        .buffered_samples
+        .saturating_add(instance.reserved_samples)
+        .min(instance.capacity_samples)
+}
+
 /// Reserve space for a source across all routed instances before packet delivery.
 /// Reserve capacity for a source packet across all unfinished routed instances.
 fn reserve_source_room(
@@ -369,35 +392,4 @@ fn reserve_source_room(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::container::prot::ShuffleSource;
-
-    fn state_with_one_source(buffered: usize, capacity: usize) -> DecodeBackpressureState {
-        let mut state = DecodeBackpressureState::default();
-        state.instances.push(DecodeBackpressureInstance {
-            capacity_samples: capacity,
-            buffered_samples: buffered,
-            reserved_samples: 0,
-            finished: false,
-        });
-        state
-            .source_to_instances
-            .insert(SourceKey::from(&ShuffleSource::TrackId(1)), vec![0]);
-        state
-    }
-
-    #[test]
-    fn source_room_status_disallows_when_target_not_available() {
-        let state = state_with_one_source(9, 10);
-        let status = source_room_status(&state, &SourceKey::TrackId(1), 4, true);
-        assert!(!status.allowed);
-    }
-
-    #[test]
-    fn reserve_source_room_clamps_to_capacity() {
-        let mut state = state_with_one_source(0, 8);
-        reserve_source_room(&mut state, &SourceKey::TrackId(1), 32);
-        assert_eq!(state.instances[0].reserved_samples, 8);
-    }
-}
+mod tests;

@@ -11,8 +11,8 @@ use super::EffectContext;
 
 pub mod convolution;
 pub mod impulse_response;
-pub mod reverb;
 mod ir_loader;
+pub mod reverb;
 mod spec;
 
 pub use ir_loader::clear_global_caches;

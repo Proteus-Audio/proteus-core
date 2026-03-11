@@ -1,7 +1,10 @@
 //! Core mix-thread runtime loop implementation.
 
 mod decode;
+mod effects_runtime;
 mod loop_body;
+mod startup;
+mod state;
 
 use rodio::buffer::SamplesBuffer;
 use std::sync::mpsc;
@@ -18,7 +21,7 @@ pub fn spawn_mix_thread(
     let (sender, receiver) = mpsc::sync_channel::<(SamplesBuffer, f64)>(1);
     let handle = thread::spawn(move || {
         let startup_trace = Instant::now();
-        let Some(mut state) = loop_body::setup_mix_state(args, sender, startup_trace) else {
+        let Some(mut state) = startup::setup_mix_state(args, sender, startup_trace) else {
             return;
         };
         loop_body::run_mix_loop(&mut state, startup_trace);
@@ -29,7 +32,9 @@ pub fn spawn_mix_thread(
 
 #[cfg(test)]
 mod tests {
-    use super::loop_body::{DRAIN_SILENCE_EPSILON, DRAIN_SILENT_PASSES_TO_STOP, MAX_EFFECT_DRAIN_PASSES};
+    use super::loop_body::{
+        DRAIN_SILENCE_EPSILON, DRAIN_SILENT_PASSES_TO_STOP, MAX_EFFECT_DRAIN_PASSES,
+    };
 
     #[test]
     fn drain_constants_are_positive() {

@@ -77,8 +77,8 @@ around `TransitionState`) into a `transition.rs` to keep all files under 400 lin
 
 ## Acceptance criteria
 
-- [ ] All existing tests pass (`cargo test -p proteus-lib`)
-- [ ] `cargo check --all-features` shows no new errors or warnings
-- [ ] Each new file is ≤400 lines
-- [ ] No public import paths used by callers are broken (add re-exports as needed)
-- [ ] `pub(crate)` visibility is preserved; no accidental widening
+- [x] All existing tests pass (`cargo test -p proteus-lib`)
+- [x] `cargo check --all-features` shows no new errors or warnings
+- [x] Each new file is ≤400 lines
+- [x] No public import paths used by callers are broken (add re-exports as needed)
+- [x] `pub(crate)` visibility is preserved; no accidental widening

@@ -99,29 +99,16 @@ pub(super) fn build_paths_shuffle_schedule(
     shuffle_timestamps.insert(0);
 
     for track in tracks {
-        if track.file_paths.is_empty() {
-            continue;
-        }
-        let selections = track.selections_count as usize;
-        if selections == 0 {
-            continue;
-        }
-        let points = parse_shuffle_points(&track.shuffle_points);
-        for point in &points {
-            shuffle_timestamps.insert(*point);
-        }
-        let point_set: HashSet<u64> = points.into_iter().collect();
-        for _ in 0..selections {
-            slot_candidates.push(track.file_paths.clone());
-            slot_points.push(point_set.clone());
-            let choice = random_path(&track.file_paths);
-            if let Some(index) = dictionary_lookup.get(choice.as_str()).copied() {
-                if let Some(duration) = info.get_duration(index) {
-                    longest_duration = longest_duration.max(duration);
-                }
-            }
-            current_paths.push(choice);
-        }
+        longest_duration = append_path_track_slots(
+            track,
+            info,
+            &dictionary_lookup,
+            &mut shuffle_timestamps,
+            &mut slot_candidates,
+            &mut slot_points,
+            &mut current_paths,
+            longest_duration,
+        );
     }
 
     let mut schedule = Vec::new();
@@ -163,6 +150,57 @@ pub(super) fn build_paths_shuffle_schedule(
     }
 
     (schedule, longest_duration)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn append_path_track_slots(
+    track: &PathsTrack,
+    info: &Info,
+    dictionary_lookup: &std::collections::HashMap<&str, u32>,
+    shuffle_timestamps: &mut BTreeSet<u64>,
+    slot_candidates: &mut Vec<Vec<String>>,
+    slot_points: &mut Vec<HashSet<u64>>,
+    current_paths: &mut Vec<String>,
+    mut longest_duration: f64,
+) -> f64 {
+    if track.file_paths.is_empty() {
+        return longest_duration;
+    }
+
+    let selections = track.selections_count as usize;
+    if selections == 0 {
+        return longest_duration;
+    }
+
+    let points = parse_shuffle_points(&track.shuffle_points);
+    for point in &points {
+        shuffle_timestamps.insert(*point);
+    }
+    let point_set: HashSet<u64> = points.into_iter().collect();
+    for _ in 0..selections {
+        slot_candidates.push(track.file_paths.clone());
+        slot_points.push(point_set.clone());
+        let choice = random_path(&track.file_paths);
+        longest_duration =
+            update_longest_duration_for_path(info, dictionary_lookup, &choice, longest_duration);
+        current_paths.push(choice);
+    }
+
+    longest_duration
+}
+
+fn update_longest_duration_for_path(
+    info: &Info,
+    dictionary_lookup: &std::collections::HashMap<&str, u32>,
+    path: &str,
+    longest_duration: f64,
+) -> f64 {
+    dictionary_lookup
+        .get(path)
+        .copied()
+        .and_then(|index| info.get_duration(index))
+        .map(|duration| longest_duration.max(duration))
+        .unwrap_or(longest_duration)
 }
 
 pub(super) fn parse_shuffle_points(points: &[String]) -> Vec<u64> {

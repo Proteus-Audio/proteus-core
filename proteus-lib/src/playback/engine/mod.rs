@@ -1,6 +1,5 @@
 //! Playback mixing engine and buffer coordination.
 
-use dasp_ring_buffer::Bounded;
 use log::warn;
 use rodio::buffer::SamplesBuffer;
 use std::collections::HashMap;
@@ -64,7 +63,6 @@ pub struct PlayerEngine {
     abort: Arc<AtomicBool>,
     buffer_map: Arc<Mutex<HashMap<u16, TrackBuffer>>>,
     buffer_notify: Arc<Condvar>,
-    effects_buffer: Arc<Mutex<Bounded<Vec<f32>>>>,
     track_weights: Arc<Mutex<HashMap<u16, f32>>>,
     track_channel_gains: Arc<Mutex<HashMap<u16, Vec<f32>>>>,
     effects_reset: Arc<AtomicU64>,
@@ -100,14 +98,9 @@ impl PlayerEngine {
         let prot_unlocked = prot.lock().unwrap();
         let start_buffer_ms = buffer_settings.lock().unwrap().start_buffer_ms;
         let channels = prot_unlocked.info.channels as usize;
-        let start_samples = ((prot_unlocked.info.sample_rate as f32 * start_buffer_ms) / 1000.0)
+        let _start_samples = ((prot_unlocked.info.sample_rate as f32 * start_buffer_ms) / 1000.0)
             as usize
             * channels;
-        let buffer_size = (prot_unlocked.info.sample_rate as usize * 10).max(start_samples * 2);
-        let effects_buffer = Arc::new(Mutex::new(dasp_ring_buffer::Bounded::from(vec![
-            0.0;
-            buffer_size
-        ])));
         drop(prot_unlocked);
 
         Self {
@@ -115,7 +108,6 @@ impl PlayerEngine {
             start_time,
             buffer_map,
             buffer_notify,
-            effects_buffer,
             track_weights,
             track_channel_gains,
             effects_reset,
@@ -165,11 +157,7 @@ impl PlayerEngine {
 
         let (receiver, handle) = spawn_mix_thread(MixThreadArgs {
             audio_info,
-            buffer_map: self.buffer_map.clone(),
             buffer_notify: self.buffer_notify.clone(),
-            effects_buffer: self.effects_buffer.clone(),
-            track_weights: self.track_weights.clone(),
-            track_channel_gains: self.track_channel_gains.clone(),
             effects_reset: self.effects_reset.clone(),
             inline_effects_update: self.inline_effects_update.clone(),
             inline_track_mix_updates: self.inline_track_mix_updates.clone(),
