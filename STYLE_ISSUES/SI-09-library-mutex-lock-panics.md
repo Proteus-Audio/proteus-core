@@ -39,24 +39,51 @@ paths.
 
 ### Recommended remediation
 
-1. Introduce a small set of helper utilities for lock acquisition:
-   - typed `Result`-returning helpers for fallible API paths
-   - `unwrap_or_else` helpers with module-specific panic messages for invariant-only internal paths
-2. Prioritize public API and background-thread entry points first:
-   - `playback/player/*`
-   - `playback/engine/*`
-   - `track/*`
-   - `diagnostics/reporter.rs`
-3. Audit hot-path locking after conversion so error handling does not add avoidable allocations or
-   extra lock churn
-4. Add a grep- or clippy-backed CI check to prevent reintroduction once the count is driven to
-   zero
+Lock-poisoning happens only when a thread panics while holding a lock, so the appropriate fix
+differs by call site. Callers fall into two categories:
+
+**Category A — invariant-only sites** (the vast majority): thread loops, hot-path decode and mix
+code, and callbacks that cannot return `Result`. These must not return `Result` because callers
+cannot handle the error. The fix is to add a descriptive message so a poisoned-lock panic is
+diagnosable:
+
+```rust
+// Before
+let guard = state.effects.lock().unwrap();
+
+// After
+let guard = state.effects.lock().unwrap_or_else(|_| {
+    panic!("effects lock poisoned — a thread panicked while holding it")
+});
+```
+
+**Category B — fallible public API paths** (a smaller minority): public `Player` methods and
+engine entry points that already return `Result` or could do so without major API changes. These
+can propagate the poisoned-lock error through a typed error variant instead of panicking:
+
+```rust
+pub fn get_buffer_settings(&self) -> Result<PlaybackBufferSettings, PlayerError> {
+    self.buffer_settings
+        .lock()
+        .map(|g| g.clone())
+        .map_err(|_| PlayerError::LockPoisoned)
+}
+```
+
+**Recommended approach:**
+
+1. Audit all 185 sites and classify each as Category A or B
+2. For Category A (most sites): replace `.unwrap()` with `.unwrap_or_else(|_| panic!("... lock poisoned"))` — this is a mechanical, low-risk change
+3. For Category B sites: add a `LockPoisoned` (or equivalent) error variant to the relevant error
+   enum and propagate via `map_err`
+4. Prioritize by module: `playback/player/*` → `playback/engine/*` → `track/*` → `diagnostics/`
+5. Add a grep- or clippy-backed CI check to prevent reintroduction of bare `.unwrap()` on lock results
 
 ### Acceptance criteria
 
-- [ ] No raw `lock().unwrap()` calls remain in `proteus-lib/src`
-- [ ] Public fallible APIs propagate lock failures through typed errors where appropriate
-- [ ] Invariant-only lock acquisitions use descriptive `unwrap_or_else` messages
+- [ ] No bare `lock().unwrap()` calls remain in `proteus-lib/src` (outside `#[cfg(test)]`)
+- [ ] Category A sites use `unwrap_or_else(|_| panic!("... lock poisoned"))` with a descriptive message
+- [ ] Category B sites propagate lock failures through typed error variants
 - [ ] Hot-path changes are validated to avoid behavioral regressions in playback timing
 
 ## Status

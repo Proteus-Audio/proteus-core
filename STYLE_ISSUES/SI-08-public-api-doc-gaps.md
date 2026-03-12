@@ -18,8 +18,9 @@ This issue spans multiple public `proteus-lib` modules, with the heaviest concen
 
 ## Current state
 
-`cargo rustdoc -p proteus-lib --lib -- -D missing_docs` currently reports **213 missing
+`cargo rustdoc -p proteus-lib --lib -- -D missing_docs` currently reports **212 missing
 documentation errors** across public modules, structs, fields, enum variants, and methods.
+The check covers only `pub` items visible outside the crate; `pub(crate)` items are excluded.
 
 The sweep also exposed several broken or private intra-doc links. Some of those were fixed in
 place as part of this pass, but the larger documentation gap remains open.
