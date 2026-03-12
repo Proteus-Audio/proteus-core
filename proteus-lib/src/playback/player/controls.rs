@@ -23,7 +23,10 @@ impl Player {
         let trace_ms = current_ms();
         self.play_command_ms
             .store(trace_ms, std::sync::atomic::Ordering::Relaxed);
-        let mut timestamp = self.ts.lock().unwrap();
+        let mut timestamp = self
+            .ts
+            .lock()
+            .unwrap_or_else(|_| panic!("ts lock poisoned — a thread panicked while holding it"));
         *timestamp = ts;
         drop(timestamp);
 
@@ -51,7 +54,9 @@ impl Player {
         debug!(
             "play trace: play requested thread_exists={} state={:?}",
             thread_exists,
-            *self.state.lock().unwrap()
+            *self.state.lock().unwrap_or_else(|_| panic!(
+                "state lock poisoned — a thread panicked while holding it"
+            ))
         );
 
         if !thread_exists {
@@ -65,7 +70,10 @@ impl Player {
 
     /// Pause playback.
     pub fn pause(&self) {
-        self.state.lock().unwrap().clone_from(&PlayerState::Pausing);
+        self.state
+            .lock()
+            .unwrap_or_else(|_| panic!("state lock poisoned — a thread panicked while holding it"))
+            .clone_from(&PlayerState::Pausing);
     }
 
     /// Resume playback if paused.
@@ -78,14 +86,17 @@ impl Player {
         }
         self.state
             .lock()
-            .unwrap()
+            .unwrap_or_else(|_| panic!("state lock poisoned — a thread panicked while holding it"))
             .clone_from(&PlayerState::Resuming);
     }
 
     /// Stop playback and reset timing state.
     pub fn stop(&self) {
         self.stop_and_join_playback_thread();
-        self.ts.lock().unwrap().clone_from(&0.0);
+        self.ts
+            .lock()
+            .unwrap_or_else(|_| panic!("ts lock poisoned — a thread panicked while holding it"))
+            .clone_from(&0.0);
     }
 
     /// Set the action applied automatically when playback reaches the end.
@@ -94,12 +105,16 @@ impl Player {
     ///
     /// * `action` - End-of-stream behavior (`Stop` or `Pause`).
     pub fn set_end_of_stream_action(&self, action: EndOfStreamAction) {
-        *self.end_of_stream_action.lock().unwrap() = action;
+        *self.end_of_stream_action.lock().unwrap_or_else(|_| {
+            panic!("end of stream action lock poisoned — a thread panicked while holding it")
+        }) = action;
     }
 
     /// Get the current end-of-stream action.
     pub fn get_end_of_stream_action(&self) -> EndOfStreamAction {
-        *self.end_of_stream_action.lock().unwrap()
+        *self.end_of_stream_action.lock().unwrap_or_else(|_| {
+            panic!("end of stream action lock poisoned — a thread panicked while holding it")
+        })
     }
 
     /// Seek to the given timestamp (seconds).
@@ -111,14 +126,22 @@ impl Player {
     ///
     /// * `ts` - New playback position in seconds.
     pub fn seek(&mut self, ts: f64) {
-        let mut timestamp = self.ts.lock().unwrap();
+        let mut timestamp = self
+            .ts
+            .lock()
+            .unwrap_or_else(|_| panic!("ts lock poisoned — a thread panicked while holding it"));
         *timestamp = ts;
         drop(timestamp);
 
-        let state = *self.state.lock().unwrap();
+        let state = *self
+            .state
+            .lock()
+            .unwrap_or_else(|_| panic!("state lock poisoned — a thread panicked while holding it"));
         let was_active = seek_should_resume(state);
         let (seek_fade_out_ms, seek_fade_in_ms) = {
-            let settings = self.buffer_settings.lock().unwrap();
+            let settings = self.buffer_settings.lock().unwrap_or_else(|_| {
+                panic!("buffer settings lock poisoned — a thread panicked while holding it")
+            });
             (settings.seek_fade_out_ms, settings.seek_fade_in_ms)
         };
         if was_active && seek_fade_out_ms > 0.0 {
@@ -130,10 +153,17 @@ impl Player {
         self.stop_and_join_playback_thread();
         self.initialize_thread(Some(ts));
         if was_active {
-            *self.next_resume_fade_ms.lock().unwrap() = Some(seek_fade_in_ms);
+            *self.next_resume_fade_ms.lock().unwrap_or_else(|_| {
+                panic!("next resume fade ms lock poisoned — a thread panicked while holding it")
+            }) = Some(seek_fade_in_ms);
             self.resume();
         } else {
-            self.state.lock().unwrap().clone_from(&state);
+            self.state
+                .lock()
+                .unwrap_or_else(|_| {
+                    panic!("state lock poisoned — a thread panicked while holding it")
+                })
+                .clone_from(&state);
         }
     }
 
@@ -146,7 +176,9 @@ impl Player {
         let steps = ((fade_ms / 5.0).ceil() as u32).max(1);
         let step_ms = (fade_ms / steps as f32).max(1.0) as u64;
         let start_volume = {
-            let sink = self.sink.lock().unwrap();
+            let sink = self.sink.lock().unwrap_or_else(|_| {
+                panic!("sink lock poisoned — a thread panicked while holding it")
+            });
             sink.volume().max(0.0)
         };
         if start_volume <= 0.0 {
@@ -156,7 +188,9 @@ impl Player {
             let t = step as f32 / steps as f32;
             let gain = start_volume * (1.0 - t);
             {
-                let sink = self.sink.lock().unwrap();
+                let sink = self.sink.lock().unwrap_or_else(|_| {
+                    panic!("sink lock poisoned — a thread panicked while holding it")
+                });
                 sink.set_volume(gain.max(0.0));
             }
             std::thread::sleep(Duration::from_millis(step_ms));
@@ -168,7 +202,10 @@ impl Player {
     /// Existing reverb overrides are re-applied and active playback is
     /// restarted at the current timestamp.
     pub fn refresh_tracks(&mut self) {
-        let mut prot = self.prot.lock().unwrap();
+        let mut prot = self
+            .prot
+            .lock()
+            .unwrap_or_else(|_| panic!("prot lock poisoned — a thread panicked while holding it"));
         prot.refresh_tracks();
         if let Some(spec) = self.impulse_response_override.clone() {
             prot.set_impulse_response_spec(spec);
@@ -205,18 +242,26 @@ impl Player {
     ///
     /// * `new_volume` - Desired sink gain multiplier.
     pub fn set_volume(&mut self, new_volume: f32) {
-        let sink = self.sink.lock().unwrap();
+        let sink = self
+            .sink
+            .lock()
+            .unwrap_or_else(|_| panic!("sink lock poisoned — a thread panicked while holding it"));
         sink.set_volume(new_volume);
         drop(sink);
 
-        let mut volume = self.volume.lock().unwrap();
+        let mut volume = self.volume.lock().unwrap_or_else(|_| {
+            panic!("volume lock poisoned — a thread panicked while holding it")
+        });
         *volume = new_volume;
         drop(volume);
     }
 
     /// Get the current playback volume.
     pub fn get_volume(&self) -> f32 {
-        *self.volume.lock().unwrap()
+        *self
+            .volume
+            .lock()
+            .unwrap_or_else(|_| panic!("volume lock poisoned — a thread panicked while holding it"))
     }
 
     /// Enable periodic reporting of playback status for UI consumers.
@@ -233,7 +278,12 @@ impl Player {
         reporting_interval: Duration,
     ) {
         if let Some(reporter) = self.reporter.as_ref() {
-            reporter.lock().unwrap().stop();
+            reporter
+                .lock()
+                .unwrap_or_else(|_| {
+                    panic!("reporter lock poisoned — a thread panicked while holding it")
+                })
+                .stop();
         }
 
         let reporter = Arc::new(Mutex::new(Reporter::new(
@@ -245,7 +295,12 @@ impl Player {
             reporting_interval,
         )));
 
-        reporter.lock().unwrap().start();
+        reporter
+            .lock()
+            .unwrap_or_else(|_| {
+                panic!("reporter lock poisoned — a thread panicked while holding it")
+            })
+            .start();
 
         self.reporter = Some(reporter);
     }

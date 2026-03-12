@@ -18,9 +18,20 @@ pub(super) fn check_runtime_state(ctx: &ThreadContext, loop_state: &mut LoopStat
         return false;
     }
 
-    let state = *ctx.play_state.lock().unwrap();
-    let start_sink_chunks = ctx.buffer_settings.lock().unwrap().start_sink_chunks;
-    let sink = ctx.sink_mutex.lock().unwrap();
+    let state = *ctx.play_state.lock().unwrap_or_else(|_| {
+        panic!("play state lock poisoned — a thread panicked while holding it")
+    });
+    let start_sink_chunks = ctx
+        .buffer_settings
+        .lock()
+        .unwrap_or_else(|_| {
+            panic!("buffer settings lock poisoned — a thread panicked while holding it")
+        })
+        .start_sink_chunks;
+    let sink = ctx
+        .sink_mutex
+        .lock()
+        .unwrap_or_else(|_| panic!("sink lock poisoned — a thread panicked while holding it"));
 
     if handle_resuming_gate(state, start_sink_chunks, &sink, loop_state) {
         return true;
@@ -40,7 +51,10 @@ fn handle_abort(ctx: &ThreadContext, loop_state: &mut LoopState) -> bool {
     if !ctx.abort.load(Ordering::SeqCst) {
         return false;
     }
-    let sink = ctx.sink_mutex.lock().unwrap();
+    let sink = ctx
+        .sink_mutex
+        .lock()
+        .unwrap_or_else(|_| panic!("sink lock poisoned — a thread panicked while holding it"));
     pause_sink(ctx, loop_state, &sink, 0.1);
     sink.clear();
     true
@@ -74,7 +88,7 @@ fn handle_pausing(
     pause_sink(ctx, loop_state, sink, 0.1);
     ctx.play_state
         .lock()
-        .unwrap()
+        .unwrap_or_else(|_| panic!("play state lock poisoned — a thread panicked while holding it"))
         .clone_from(&PlayerState::Paused);
     true
 }
@@ -105,10 +119,24 @@ fn handle_resuming_commit(
     }
     let fade_length = if loop_state.startup_fade_pending {
         loop_state.startup_fade_pending = false;
-        if let Some(ms) = ctx.next_resume_fade_ms.lock().unwrap().take() {
+        if let Some(ms) = ctx
+            .next_resume_fade_ms
+            .lock()
+            .unwrap_or_else(|_| {
+                panic!("next resume fade ms lock poisoned — a thread panicked while holding it")
+            })
+            .take()
+        {
             (ms / 1000.0).max(0.0)
         } else {
-            (ctx.buffer_settings.lock().unwrap().startup_fade_ms / 1000.0).max(0.0)
+            (ctx.buffer_settings
+                .lock()
+                .unwrap_or_else(|_| {
+                    panic!("buffer settings lock poisoned — a thread panicked while holding it")
+                })
+                .startup_fade_ms
+                / 1000.0)
+                .max(0.0)
         }
     } else {
         0.1
@@ -117,44 +145,63 @@ fn handle_resuming_commit(
     resume_sink(ctx, sink, fade_length);
     ctx.play_state
         .lock()
-        .unwrap()
+        .unwrap_or_else(|_| panic!("play state lock poisoned — a thread panicked while holding it"))
         .clone_from(&PlayerState::Playing);
     true
 }
 
 // Apply the configured transport action after a natural end-of-stream.
 pub(super) fn apply_end_of_stream_action(ctx: &ThreadContext, loop_state: &LoopState) {
-    let action = *ctx.end_of_stream_action.lock().unwrap();
-    let duration = *ctx.duration.lock().unwrap();
-    let final_duration = *loop_state.final_duration.lock().unwrap();
+    let action = *ctx.end_of_stream_action.lock().unwrap_or_else(|_| {
+        panic!("end of stream action lock poisoned — a thread panicked while holding it")
+    });
+    let duration = *ctx
+        .duration
+        .lock()
+        .unwrap_or_else(|_| panic!("duration lock poisoned — a thread panicked while holding it"));
+    let final_duration = *loop_state.final_duration.lock().unwrap_or_else(|_| {
+        panic!("final duration lock poisoned — a thread panicked while holding it")
+    });
 
     match action {
         EndOfStreamAction::Stop => {
             ctx.play_state
                 .lock()
-                .unwrap()
+                .unwrap_or_else(|_| {
+                    panic!("play state lock poisoned — a thread panicked while holding it")
+                })
                 .clone_from(&PlayerState::Stopped);
             {
-                let sink = ctx.sink_mutex.lock().unwrap();
+                let sink = ctx.sink_mutex.lock().unwrap_or_else(|_| {
+                    panic!("sink lock poisoned — a thread panicked while holding it")
+                });
                 sink.stop();
                 sink.clear();
             }
-            *ctx.time_passed.lock().unwrap() = 0.0;
+            *ctx.time_passed.lock().unwrap_or_else(|_| {
+                panic!("time passed lock poisoned — a thread panicked while holding it")
+            }) = 0.0;
         }
         EndOfStreamAction::Pause => {
             ctx.play_state
                 .lock()
-                .unwrap()
+                .unwrap_or_else(|_| {
+                    panic!("play state lock poisoned — a thread panicked while holding it")
+                })
                 .clone_from(&PlayerState::Paused);
             {
-                let sink = ctx.sink_mutex.lock().unwrap();
+                let sink = ctx.sink_mutex.lock().unwrap_or_else(|_| {
+                    panic!("sink lock poisoned — a thread panicked while holding it")
+                });
                 sink.pause();
             }
             let target_end = match final_duration {
                 Some(value) if value.is_finite() && value >= 0.0 => value,
                 _ => duration.max(0.0),
             };
-            *ctx.time_passed.lock().unwrap() = target_end;
+            *ctx.time_passed.lock().unwrap_or_else(|_| {
+                panic!("time passed lock poisoned — a thread panicked while holding it")
+            }) = target_end;
         }
     }
 

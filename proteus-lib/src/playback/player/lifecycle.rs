@@ -15,10 +15,12 @@ impl Player {
     pub fn stop_and_join_playback_thread(&self) {
         self.state
             .lock()
-            .unwrap()
+            .unwrap_or_else(|_| panic!("state lock poisoned — a thread panicked while holding it"))
             .clone_from(&PlayerState::Stopping);
         {
-            let sink = self.sink.lock().unwrap();
+            let sink = self.sink.lock().unwrap_or_else(|_| {
+                panic!("sink lock poisoned — a thread panicked while holding it")
+            });
             sink.stop();
         }
         self.abort.store(true, Ordering::SeqCst);
@@ -28,12 +30,22 @@ impl Player {
         }
         self.join_playback_thread();
 
-        self.state.lock().unwrap().clone_from(&PlayerState::Stopped);
+        self.state
+            .lock()
+            .unwrap_or_else(|_| panic!("state lock poisoned — a thread panicked while holding it"))
+            .clone_from(&PlayerState::Stopped);
     }
 
     /// Join the current playback thread handle if one is present.
     pub(in crate::playback::player) fn join_playback_thread(&self) {
-        if let Some(handle) = self.playback_thread_handle.lock().unwrap().take() {
+        if let Some(handle) = self
+            .playback_thread_handle
+            .lock()
+            .unwrap_or_else(|_| {
+                panic!("playback thread handle lock poisoned — a thread panicked while holding it")
+            })
+            .take()
+        {
             if handle.join().is_err() {
                 warn!("playback thread panicked during join");
             }
@@ -101,7 +113,12 @@ pub(super) fn drop_cleanup(player: &mut Player) {
     }
 
     if let Some(reporter) = player.reporter.take() {
-        reporter.lock().unwrap().stop();
+        reporter
+            .lock()
+            .unwrap_or_else(|_| {
+                panic!("reporter lock poisoned — a thread panicked while holding it")
+            })
+            .stop();
     }
 
     if player.playback_thread_exists.load(Ordering::SeqCst) {
@@ -112,49 +129,74 @@ pub(super) fn drop_cleanup(player: &mut Player) {
     }
 
     {
-        let sink = player.sink.lock().unwrap();
+        let sink = player
+            .sink
+            .lock()
+            .unwrap_or_else(|_| panic!("sink lock poisoned — a thread panicked while holding it"));
         sink.stop();
         sink.clear();
     }
 
     {
-        let mut finished_tracks = player.finished_tracks.lock().unwrap();
+        let mut finished_tracks = player.finished_tracks.lock().unwrap_or_else(|_| {
+            panic!("finished tracks lock poisoned — a thread panicked while holding it")
+        });
         finished_tracks.clear();
         finished_tracks.shrink_to_fit();
     }
 
     {
-        let mut effects = player.effects.lock().unwrap();
+        let mut effects = player.effects.lock().unwrap_or_else(|_| {
+            panic!("effects lock poisoned — a thread panicked while holding it")
+        });
         effects.clear();
         effects.shrink_to_fit();
     }
 
     {
-        let mut inline_effects_update = player.inline_effects_update.lock().unwrap();
+        let mut inline_effects_update = player.inline_effects_update.lock().unwrap_or_else(|_| {
+            panic!("inline effects update lock poisoned — a thread panicked while holding it")
+        });
         *inline_effects_update = None;
     }
 
     {
-        let mut inline_track_mix_updates = player.inline_track_mix_updates.lock().unwrap();
+        let mut inline_track_mix_updates =
+            player.inline_track_mix_updates.lock().unwrap_or_else(|_| {
+                panic!(
+                    "inline track mix updates lock poisoned — a thread panicked while holding it"
+                )
+            });
         inline_track_mix_updates.clear();
         inline_track_mix_updates.shrink_to_fit();
     }
 
     {
-        let mut dsp_metrics = player.dsp_metrics.lock().unwrap();
+        let mut dsp_metrics = player.dsp_metrics.lock().unwrap_or_else(|_| {
+            panic!("dsp metrics lock poisoned — a thread panicked while holding it")
+        });
         *dsp_metrics = DspChainMetrics::default();
     }
 
     {
-        let mut output_meter = player.output_meter.lock().unwrap();
+        let mut output_meter = player.output_meter.lock().unwrap_or_else(|_| {
+            panic!("output meter lock poisoned — a thread panicked while holding it")
+        });
         output_meter.reset();
     }
 
     debug!("player dropped");
 
-    *player.duration.lock().unwrap() = 0.0;
-    *player.ts.lock().unwrap() = 0.0;
-    *player.next_resume_fade_ms.lock().unwrap() = None;
+    *player.duration.lock().unwrap_or_else(|_| {
+        panic!("duration lock poisoned — a thread panicked while holding it")
+    }) = 0.0;
+    *player
+        .ts
+        .lock()
+        .unwrap_or_else(|_| panic!("ts lock poisoned — a thread panicked while holding it")) = 0.0;
+    *player.next_resume_fade_ms.lock().unwrap_or_else(|_| {
+        panic!("next resume fade ms lock poisoned — a thread panicked while holding it")
+    }) = None;
     player.buffering_done.store(false, Ordering::Relaxed);
     player.last_chunk_ms.store(0, Ordering::Relaxed);
     player.last_time_update_ms.store(0, Ordering::Relaxed);

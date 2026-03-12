@@ -146,7 +146,9 @@ fn mix_active_tracks(
     for (track_key, buffer) in active_buffer_snapshot {
         let weight = weights_snapshot.get(track_key).copied().unwrap_or(1.0);
         let channel_gains = channel_gains_snapshot.get(track_key).map(Vec::as_slice);
-        let mut buffer = buffer.lock().unwrap();
+        let mut buffer = buffer.lock().unwrap_or_else(|_| {
+            panic!("track buffer lock poisoned — a thread panicked while holding it")
+        });
         let take = buffer.len().min(current_chunk);
         for (sample_index, sample) in mix_buffer.iter_mut().take(take).enumerate() {
             if let Some(value) = buffer.pop() {
@@ -179,7 +181,9 @@ fn mix_fading_tracks(
         }
         let weight = weights_snapshot.get(track_key).copied().unwrap_or(1.0);
         let channel_gains = channel_gains_snapshot.get(track_key).map(Vec::as_slice);
-        let mut buffer = buffer.lock().unwrap();
+        let mut buffer = buffer.lock().unwrap_or_else(|_| {
+            panic!("track buffer lock poisoned — a thread panicked while holding it")
+        });
         let take = buffer.len().min(current_chunk);
         for (sample_index, sample) in mix_buffer.iter_mut().take(take).enumerate() {
             let Some(value) = buffer.pop() else {
@@ -189,7 +193,8 @@ fn mix_fading_tracks(
             if frame_index >= frames_remaining {
                 continue;
             }
-            let fade_gain = frames_remaining.saturating_sub(frame_index) as f32 / total_frames as f32;
+            let fade_gain =
+                frames_remaining.saturating_sub(frame_index) as f32 / total_frames as f32;
             let gain = channel_gains
                 .and_then(|gains| gains.get(sample_index % channel_count))
                 .copied()

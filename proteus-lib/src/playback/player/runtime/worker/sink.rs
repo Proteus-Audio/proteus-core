@@ -71,7 +71,10 @@ where
 
 // Recreate and initialize the sink connected to the active mixer.
 pub(super) fn initialize_sink(ctx: &ThreadContext, mixer: &rodio::mixer::Mixer) {
-    let mut sink = ctx.sink_mutex.lock().unwrap();
+    let mut sink = ctx
+        .sink_mutex
+        .lock()
+        .unwrap_or_else(|_| panic!("sink lock poisoned — a thread panicked while holding it"));
     *sink = Sink::connect_new(mixer);
     sink.pause();
     sink.set_volume(0.0);
@@ -79,7 +82,13 @@ pub(super) fn initialize_sink(ctx: &ThreadContext, mixer: &rodio::mixer::Mixer) 
 
 // Append startup silence pre-roll when configured.
 pub(super) fn append_startup_silence(ctx: &ThreadContext) {
-    let startup_silence_ms = ctx.buffer_settings.lock().unwrap().startup_silence_ms;
+    let startup_silence_ms = ctx
+        .buffer_settings
+        .lock()
+        .unwrap_or_else(|_| {
+            panic!("buffer settings lock poisoned — a thread panicked while holding it")
+        })
+        .startup_silence_ms;
     if startup_silence_ms <= 0.0 {
         return;
     }
@@ -89,7 +98,10 @@ pub(super) fn append_startup_silence(ctx: &ThreadContext) {
     let samples =
         ((startup_silence_ms / 1000.0) * sample_rate as f32).ceil() as usize * channels as usize;
     let silence_buffer = SamplesBuffer::new(channels, sample_rate, vec![0.0_f32; samples.max(1)]);
-    ctx.sink_mutex.lock().unwrap().append(silence_buffer);
+    ctx.sink_mutex
+        .lock()
+        .unwrap_or_else(|_| panic!("sink lock poisoned — a thread panicked while holding it"))
+        .append(silence_buffer);
 }
 
 // Fade out and pause the sink.
@@ -99,7 +111,9 @@ pub(super) fn pause_sink(
     sink: &Sink,
     fade_seconds: f32,
 ) {
-    let timestamp = *ctx.time_passed.lock().unwrap();
+    let timestamp = *ctx.time_passed.lock().unwrap_or_else(|_| {
+        panic!("time passed lock poisoned — a thread panicked while holding it")
+    });
     let fade_increments = sink.volume() / (fade_seconds * 100.0);
 
     while sink.volume() > 0.0 && timestamp != loop_state.start_time {
@@ -111,7 +125,10 @@ pub(super) fn pause_sink(
 
 // Start or resume sink playback with optional fade-in.
 pub(super) fn resume_sink(ctx: &ThreadContext, sink: &Sink, fade_seconds: f32) {
-    let target_volume = *ctx.volume.lock().unwrap();
+    let target_volume = *ctx
+        .volume
+        .lock()
+        .unwrap_or_else(|_| panic!("volume lock poisoned — a thread panicked while holding it"));
     if let Some(elapsed_ms) = super::timing::play_trace_elapsed_ms(ctx) {
         debug!(
             "play trace: resume_sink begin fade_s={:.3} target_volume={:.3} +{}ms",
@@ -155,7 +172,13 @@ pub(super) fn wait_for_sink_capacity(
     loop_state: &mut LoopState,
     playback_id: u64,
 ) -> bool {
-    let max_sink_chunks = ctx.buffer_settings.lock().unwrap().max_sink_chunks;
+    let max_sink_chunks = ctx
+        .buffer_settings
+        .lock()
+        .unwrap_or_else(|_| {
+            panic!("buffer settings lock poisoned — a thread panicked while holding it")
+        })
+        .max_sink_chunks;
     if max_sink_chunks == 0 {
         return true;
     }
@@ -168,7 +191,13 @@ pub(super) fn wait_for_sink_capacity(
             return false;
         }
 
-        if ctx.sink_mutex.lock().unwrap().len() < max_sink_chunks {
+        if ctx
+            .sink_mutex
+            .lock()
+            .unwrap_or_else(|_| panic!("sink lock poisoned — a thread panicked while holding it"))
+            .len()
+            < max_sink_chunks
+        {
             return true;
         }
 
@@ -212,16 +241,38 @@ pub(super) fn update_sink(
     ctx.audio_heard.store(true, Ordering::Relaxed);
     ctx.last_chunk_ms.store(now, Ordering::Relaxed);
 
-    ctx.output_meter.lock().unwrap().push_samples(&mixer);
+    ctx.output_meter
+        .lock()
+        .unwrap_or_else(|_| {
+            panic!("output meter lock poisoned — a thread panicked while holding it")
+        })
+        .push_samples(&mixer);
 
     {
-        let mut metrics = ctx.dsp_metrics.lock().unwrap();
-        metrics.late_append_count = loop_state.append_timing.lock().unwrap().2;
+        let mut metrics = ctx.dsp_metrics.lock().unwrap_or_else(|_| {
+            panic!("dsp metrics lock poisoned — a thread panicked while holding it")
+        });
+        metrics.late_append_count = loop_state
+            .append_timing
+            .lock()
+            .unwrap_or_else(|_| {
+                panic!("append timing lock poisoned — a thread panicked while holding it")
+            })
+            .2;
         metrics.late_append_active = late;
     }
 
-    let sink = ctx.sink_mutex.lock().unwrap();
-    let append_jitter_log_ms = ctx.buffer_settings.lock().unwrap().append_jitter_log_ms;
+    let sink = ctx
+        .sink_mutex
+        .lock()
+        .unwrap_or_else(|_| panic!("sink lock poisoned — a thread panicked while holding it"));
+    let append_jitter_log_ms = ctx
+        .buffer_settings
+        .lock()
+        .unwrap_or_else(|_| {
+            panic!("buffer settings lock poisoned — a thread panicked while holding it")
+        })
+        .append_jitter_log_ms;
     if append_jitter_log_ms > 0.0 && (late || delay_ms > append_jitter_log_ms as f64) {
         let expected_ms = length_in_seconds * 1000.0;
         log::info!(
@@ -239,7 +290,9 @@ pub(super) fn update_sink(
     loop_state
         .chunk_lengths
         .lock()
-        .unwrap()
+        .unwrap_or_else(|_| {
+            panic!("chunk lengths lock poisoned — a thread panicked while holding it")
+        })
         .push_back(length_in_seconds);
 
     update_chunk_lengths(ctx, loop_state);

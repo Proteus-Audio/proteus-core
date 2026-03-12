@@ -108,13 +108,17 @@ fn process_effects(samples: &[f32], state: &mut MixLoopState) -> Vec<f32> {
             .remaining_samples
             .saturating_sub(samples.len().max(1));
         if transition.remaining_samples == 0 {
-            *state.effects.lock().unwrap() = transition.new_effects.clone();
+            *state.effects.lock().unwrap_or_else(|_| {
+                panic!("effects lock poisoned — a thread panicked while holding it")
+            }) = transition.new_effects.clone();
             state.active_inline_transition = None;
         }
         blended
     } else {
         run_effect_chain(
-            &mut state.effects.lock().unwrap(),
+            &mut state.effects.lock().unwrap_or_else(|_| {
+                panic!("effects lock poisoned — a thread panicked while holding it")
+            }),
             samples,
             &state.effect_context,
             false,
@@ -206,7 +210,9 @@ pub(super) fn drain_effect_tail(state: &mut MixLoopState) -> bool {
         blended
     } else {
         run_effect_chain(
-            &mut state.effects.lock().unwrap(),
+            &mut state.effects.lock().unwrap_or_else(|_| {
+                panic!("effects lock poisoned — a thread panicked while holding it")
+            }),
             &[],
             &state.effect_context,
             true,
@@ -245,30 +251,53 @@ pub(super) fn drain_effect_tail(state: &mut MixLoopState) -> bool {
 pub(super) fn apply_effect_runtime_updates(state: &mut MixLoopState) {
     let current_reset = state.effects_reset.load(Ordering::SeqCst);
     if current_reset != state.last_effects_reset {
-        let mut effects_guard = state.effects.lock().unwrap();
+        let mut effects_guard = state.effects.lock().unwrap_or_else(|_| {
+            panic!("effects lock poisoned — a thread panicked while holding it")
+        });
         for effect in effects_guard.iter_mut() {
             effect.reset_state();
         }
         state.active_inline_transition = None;
-        state.inline_effects_update.lock().unwrap().take();
+        state
+            .inline_effects_update
+            .lock()
+            .unwrap_or_else(|_| {
+                panic!("inline effects update lock poisoned — a thread panicked while holding it")
+            })
+            .take();
         state.effect_context = rebuild_effect_context(&state.prot);
         state.last_effects_reset = current_reset;
     }
 
-    if let Some(update) = state.inline_effects_update.lock().unwrap().take() {
+    if let Some(update) = state
+        .inline_effects_update
+        .lock()
+        .unwrap_or_else(|_| {
+            panic!("inline effects update lock poisoned — a thread panicked while holding it")
+        })
+        .take()
+    {
         let transition_samples = ((update.transition_ms / 1000.0)
             * state.audio_info.sample_rate.max(1) as f32)
             .round() as usize
             * state.audio_info.channels.max(1) as usize;
         if transition_samples == 0 {
-            let mut effects_guard = state.effects.lock().unwrap();
+            let mut effects_guard = state.effects.lock().unwrap_or_else(|_| {
+                panic!("effects lock poisoned — a thread panicked while holding it")
+            });
             *effects_guard = update.effects;
             for effect in effects_guard.iter_mut() {
                 effect.warm_up(&state.effect_context);
             }
             state.active_inline_transition = None;
         } else {
-            let old_effects = state.effects.lock().unwrap().clone();
+            let old_effects = state
+                .effects
+                .lock()
+                .unwrap_or_else(|_| {
+                    panic!("effects lock poisoned — a thread panicked while holding it")
+                })
+                .clone();
             let mut new_effects = update.effects;
             for effect in new_effects.iter_mut() {
                 effect.warm_up(&state.effect_context);
@@ -288,7 +317,9 @@ pub(super) fn apply_effect_runtime_updates(state: &mut MixLoopState) {
 fn rebuild_effect_context(
     prot_locked: &std::sync::Arc<std::sync::Mutex<crate::container::prot::Prot>>,
 ) -> EffectContext {
-    let prot = prot_locked.lock().unwrap();
+    let prot = prot_locked
+        .lock()
+        .unwrap_or_else(|_| panic!("prot lock poisoned — a thread panicked while holding it"));
     EffectContext {
         sample_rate: prot.info.sample_rate,
         channels: prot.info.channels as usize,

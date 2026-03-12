@@ -8,17 +8,28 @@ use super::{Player, PlayerState};
 impl Player {
     /// Return true if playback is currently active.
     pub fn is_playing(&self) -> bool {
-        *self.state.lock().unwrap() == PlayerState::Playing
+        *self
+            .state
+            .lock()
+            .unwrap_or_else(|_| panic!("state lock poisoned — a thread panicked while holding it"))
+            == PlayerState::Playing
     }
 
     /// Return true if playback is currently paused.
     pub fn is_paused(&self) -> bool {
-        *self.state.lock().unwrap() == PlayerState::Paused
+        *self
+            .state
+            .lock()
+            .unwrap_or_else(|_| panic!("state lock poisoned — a thread panicked while holding it"))
+            == PlayerState::Paused
     }
 
     /// Get the current playback time in seconds.
     pub fn get_time(&self) -> f64 {
-        *self.ts.lock().unwrap()
+        *self
+            .ts
+            .lock()
+            .unwrap_or_else(|_| panic!("ts lock poisoned — a thread panicked while holding it"))
     }
 
     /// Return `true` when no playback worker thread is alive.
@@ -45,12 +56,17 @@ impl Player {
 
     /// Get the total duration (seconds) of the active selection.
     pub fn get_duration(&self) -> f64 {
-        *self.duration.lock().unwrap()
+        *self.duration.lock().unwrap_or_else(|_| {
+            panic!("duration lock poisoned — a thread panicked while holding it")
+        })
     }
 
     /// Get the track identifiers used for display.
     pub fn get_ids(&self) -> Vec<String> {
-        self.prot.lock().unwrap().get_ids()
+        self.prot
+            .lock()
+            .unwrap_or_else(|_| panic!("prot lock poisoned — a thread panicked while holding it"))
+            .get_ids()
     }
 
     /// Get the full timestamped shuffle schedule used by playback.
@@ -59,6 +75,9 @@ impl Player {
     /// inner groups map to logical tracks and contain all selections for each
     /// track (for example when `selections_count > 1`).
     pub fn get_shuffle_schedule(&self) -> Vec<(f64, Vec<Vec<String>>)> {
-        self.prot.lock().unwrap().get_shuffle_schedule()
+        self.prot
+            .lock()
+            .unwrap_or_else(|_| panic!("prot lock poisoned — a thread panicked while holding it"))
+            .get_shuffle_schedule()
     }
 }

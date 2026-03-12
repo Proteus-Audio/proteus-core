@@ -59,7 +59,17 @@ impl TrackDecoder {
 
 /// Spawn a decoder thread that buffers multiple container tracks.
 pub fn buffer_container_tracks(args: ContainerTrackArgs, abort: Arc<AtomicBool>) -> JoinHandle<()> {
-    let ContainerTrackArgs { file_path, track_entries, buffer_map, buffer_notify, track_weights, finished_tracks, start_time, channels, track_eos_ms } = args;
+    let ContainerTrackArgs {
+        file_path,
+        track_entries,
+        buffer_map,
+        buffer_notify,
+        track_weights,
+        finished_tracks,
+        start_time,
+        channels,
+        track_eos_ms,
+    } = args;
     let mut format = match crate::tools::decode::get_reader(&file_path) {
         Ok(f) => f,
         Err(err) => {
@@ -74,7 +84,12 @@ pub fn buffer_container_tracks(args: ContainerTrackArgs, abort: Arc<AtomicBool>)
             });
         }
     };
-    let mut track_decoders = open_container_decoders(&mut *format, &track_entries, &finished_tracks, buffer_notify.as_ref());
+    let mut track_decoders = open_container_decoders(
+        &mut *format,
+        &track_entries,
+        &finished_tracks,
+        buffer_notify.as_ref(),
+    );
     thread::spawn(move || {
         if track_decoders.is_empty() {
             warn!("no valid tracks found in container");
@@ -87,11 +102,29 @@ pub fn buffer_container_tracks(args: ContainerTrackArgs, abort: Arc<AtomicBool>)
             init_container_weights(&track_decoders, &finished_tracks, weights);
         }
         let time = Time::new(start_time.floor() as u64, start_time.fract());
-        if format.seek(SeekMode::Coarse, SeekTo::Time { time, track_id: Some(track_decoders[0].track_id) }).is_err() {
+        if format
+            .seek(
+                SeekMode::Coarse,
+                SeekTo::Time {
+                    time,
+                    track_id: Some(track_decoders[0].track_id),
+                },
+            )
+            .is_err()
+        {
             warn!("container seek failed, starting from beginning");
         }
         let eos_seconds = (track_eos_ms.max(0.0) / 1000.0) as f64;
-        let finished_ids = run_container_decode_loop(&mut *format, &mut track_decoders, channels, eos_seconds, &buffer_map, buffer_notify.as_ref(), &abort, &finished_tracks);
+        let finished_ids = run_container_decode_loop(
+            &mut *format,
+            &mut track_decoders,
+            channels,
+            eos_seconds,
+            &buffer_map,
+            buffer_notify.as_ref(),
+            &abort,
+            &finished_tracks,
+        );
         for td in &track_decoders {
             if !finished_ids.contains(&td.track_id) {
                 for &key in &td.track_keys {
@@ -139,7 +172,10 @@ fn open_container_decoders(
                 continue;
             }
         };
-        let duration = track.codec_params.n_frames.map(|f| track.codec_params.start_ts + f);
+        let duration = track
+            .codec_params
+            .n_frames
+            .map(|f| track.codec_params.start_ts + f);
         result.push(TrackDecoder {
             track_id,
             track_keys: vec![track_key],
@@ -157,7 +193,9 @@ fn init_container_weights(
     finished_tracks: &Arc<Mutex<Vec<u16>>>,
     weights: &Arc<Mutex<HashMap<u16, f32>>>,
 ) {
-    let mut w = weights.lock().unwrap();
+    let mut w = weights.lock().unwrap_or_else(|_| {
+        panic!("track weights lock poisoned — a thread panicked while holding it")
+    });
     for td in track_decoders {
         let count = td.track_keys.len() as f32;
         if let Some(&primary) = td.track_keys.first() {
@@ -230,7 +268,13 @@ fn push_decoded_container_packet(
     });
     let stereo = interleave_to_stereo(decoded, channels);
     if !stereo.is_empty() {
-        add_samples_to_buffer_map(&mut buffer_map.clone(), primary_key, stereo, abort, buffer_notify);
+        add_samples_to_buffer_map(
+            &mut buffer_map.clone(),
+            primary_key,
+            stereo,
+            abort,
+            buffer_notify,
+        );
     }
 }
 
@@ -248,32 +292,68 @@ fn run_container_decode_loop(
     let mut last_seen: HashMap<u32, f64> = HashMap::new();
     let (mut max_seen, mut logged_formats) = (0.0f64, HashMap::<u32, &'static str>::new());
     let result: Result<bool, Error> = loop {
-        if abort.load(Ordering::Relaxed) { break Ok(true); }
-        let packet = match format.next_packet() { Ok(p) => p, Err(e) => break Err(e) };
+        if abort.load(Ordering::Relaxed) {
+            break Ok(true);
+        }
+        let packet = match format.next_packet() {
+            Ok(p) => p,
+            Err(e) => break Err(e),
+        };
         let tid = packet.track_id();
-        let Some(td) = track_decoders.iter_mut().find(|td| td.track_id == tid) else { continue };
-        if let Some(s) = td.packet_position_secs(&packet) { last_seen.insert(tid, s); max_seen = max_seen.max(s); }
+        let Some(td) = track_decoders.iter_mut().find(|td| td.track_id == tid) else {
+            continue;
+        };
+        if let Some(s) = td.packet_position_secs(&packet) {
+            last_seen.insert(tid, s);
+            max_seen = max_seen.max(s);
+        }
         let pkey = td.primary_key();
         if td.is_past_end(&packet) {
-            if !finished_ids.contains(&tid) { finished_ids.push(tid); mark_track_as_finished(&mut finished_tracks.clone(), pkey); }
-            if finished_ids.len() == track_decoders.len() { break Ok(true); }
+            if !finished_ids.contains(&tid) {
+                finished_ids.push(tid);
+                mark_track_as_finished(&mut finished_tracks.clone(), pkey);
+            }
+            if finished_ids.len() == track_decoders.len() {
+                break Ok(true);
+            }
             continue;
         }
         drop(td);
-        check_eos_skew(track_decoders, &mut finished_ids, &last_seen, max_seen, eos_seconds, finished_tracks, buffer_notify);
+        check_eos_skew(
+            track_decoders,
+            &mut finished_ids,
+            &last_seen,
+            max_seen,
+            eos_seconds,
+            finished_tracks,
+            buffer_notify,
+        );
         // The decoder for `tid` was found at the top of this iteration;
         // `check_eos_skew` does not remove decoders, so it must still be present.
         let td = track_decoders
             .iter_mut()
             .find(|td| td.track_id == tid)
-            .unwrap_or_else(|| unreachable!("decoder for tid {} missing after check_eos_skew", tid));
+            .unwrap_or_else(|| {
+                unreachable!("decoder for tid {} missing after check_eos_skew", tid)
+            });
         match td.decoder.decode(&packet) {
-            Ok(decoded) => push_decoded_container_packet(td, decoded, pkey, channels, buffer_map, buffer_notify, abort, &mut logged_formats),
+            Ok(decoded) => push_decoded_container_packet(
+                td,
+                decoded,
+                pkey,
+                channels,
+                buffer_map,
+                buffer_notify,
+                abort,
+                &mut logged_formats,
+            ),
             Err(Error::DecodeError(e)) => warn!("decode error: {}", e),
             Err(e) => break Err(e),
         }
     };
-    if let Err(e) = result { warn!("error: {}", e); }
+    if let Err(e) = result {
+        warn!("error: {}", e);
+    }
     finished_ids
 }
 

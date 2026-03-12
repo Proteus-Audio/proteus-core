@@ -39,7 +39,9 @@ impl LoopState {
     pub(super) fn new(start_time: f64) -> Self {
         let timer = Arc::new(Mutex::new(timer::Timer::new()));
         {
-            let mut timer_guard = timer.lock().unwrap();
+            let mut timer_guard = timer.lock().unwrap_or_else(|_| {
+                panic!("timer lock poisoned — a thread panicked while holding it")
+            });
             timer_guard.start();
         }
         Self {
@@ -167,7 +169,10 @@ fn run_engine_receive_loop(
 // * `ctx` - Shared worker context containing duration state.
 // * `engine` - Active engine instance for this playback run.
 fn set_duration_from_engine(ctx: &ThreadContext, engine: &PlayerEngine) {
-    let mut duration = ctx.duration.lock().unwrap();
+    let mut duration = ctx
+        .duration
+        .lock()
+        .unwrap_or_else(|_| panic!("duration lock poisoned — a thread panicked while holding it"));
     *duration = engine.get_duration();
 }
 
@@ -178,7 +183,9 @@ fn set_duration_from_engine(ctx: &ThreadContext, engine: &PlayerEngine) {
 // * `ctx` - Shared worker context containing playback time state.
 // * `start_time` - Start position in seconds.
 fn set_start_time(ctx: &ThreadContext, start_time: f64) {
-    let mut time_passed = ctx.time_passed.lock().unwrap();
+    let mut time_passed = ctx.time_passed.lock().unwrap_or_else(|_| {
+        panic!("time passed lock poisoned — a thread panicked while holding it")
+    });
     *time_passed = start_time;
 }
 

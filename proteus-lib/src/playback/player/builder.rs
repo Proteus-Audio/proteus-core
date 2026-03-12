@@ -253,12 +253,24 @@ fn load_player_source(source: PlayerSource) -> Result<(Arc<Mutex<Prot>>, Info), 
             let prot = Arc::new(Mutex::new(
                 Prot::try_new(&path).map_err(PlayerInitError::ProtInitialization)?,
             ));
-            let info = prot.lock().unwrap().info.clone();
+            let info = prot
+                .lock()
+                .unwrap_or_else(|_| {
+                    panic!("prot lock poisoned — a thread panicked while holding it")
+                })
+                .info
+                .clone();
             Ok((prot, info))
         }
         PlayerSource::FilePaths(paths) => {
             let prot = Arc::new(Mutex::new(Prot::new_from_file_paths(paths)));
-            let info = Info::new_from_file_paths(prot.lock().unwrap().get_file_paths_dictionary());
+            let info = Info::new_from_file_paths(
+                prot.lock()
+                    .unwrap_or_else(|_| {
+                        panic!("prot lock poisoned — a thread panicked while holding it")
+                    })
+                    .get_file_paths_dictionary(),
+            );
             Ok((prot, info))
         }
     }
@@ -272,7 +284,11 @@ fn create_player_sink() -> Arc<Mutex<Sink>> {
 fn load_initial_effects(
     prot: &Arc<Mutex<Prot>>,
 ) -> Arc<Mutex<Vec<crate::dsp::effects::AudioEffect>>> {
-    let effects = prot.lock().unwrap().get_effects().unwrap_or_default();
+    let effects = prot
+        .lock()
+        .unwrap_or_else(|_| panic!("prot lock poisoned — a thread panicked while holding it"))
+        .get_effects()
+        .unwrap_or_default();
     Arc::new(Mutex::new(effects))
 }
 

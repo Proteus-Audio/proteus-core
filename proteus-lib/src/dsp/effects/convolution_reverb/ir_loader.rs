@@ -20,10 +20,20 @@ static REVERB_KERNEL_CACHE: OnceLock<Mutex<ReverbKernelCacheMap>> = OnceLock::ne
 /// Clear process-wide convolution caches for test/session isolation.
 pub fn clear_global_caches() {
     if let Some(cache) = IMPULSE_RESPONSE_CACHE.get() {
-        cache.lock().unwrap().clear();
+        cache
+            .lock()
+            .unwrap_or_else(|_| {
+                panic!("impulse response cache lock poisoned — a thread panicked while holding it")
+            })
+            .clear();
     }
     if let Some(cache) = REVERB_KERNEL_CACHE.get() {
-        cache.lock().unwrap().clear();
+        cache
+            .lock()
+            .unwrap_or_else(|_| {
+                panic!("reverb kernel cache lock poisoned — a thread panicked while holding it")
+            })
+            .clear();
     }
 }
 
@@ -188,7 +198,14 @@ fn build_cached_reverb(
     use super::DEFAULT_DRY_WET;
 
     let cache = REVERB_KERNEL_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
-    if let Some(template) = cache.lock().unwrap().get(&cache_key).cloned() {
+    if let Some(template) = cache
+        .lock()
+        .unwrap_or_else(|_| {
+            panic!("reverb kernel cache lock poisoned — a thread panicked while holding it")
+        })
+        .get(&cache_key)
+        .cloned()
+    {
         let mut reverb = (*template).clone();
         reverb.clear_state();
         reverb.set_dry_wet(dry_wet);
@@ -200,7 +217,9 @@ fn build_cached_reverb(
     template.clear_state();
     let template = Arc::new(template);
 
-    let mut cache_guard = cache.lock().unwrap();
+    let mut cache_guard = cache.lock().unwrap_or_else(|_| {
+        panic!("reverb kernel cache lock poisoned — a thread panicked while holding it")
+    });
     let template = cache_guard
         .entry(cache_key)
         .or_insert_with(|| template.clone())
@@ -219,12 +238,21 @@ where
     F: FnOnce() -> Result<impulse_response::ImpulseResponse, E>,
 {
     let cache = IMPULSE_RESPONSE_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
-    if let Some(cached) = cache.lock().unwrap().get(&cache_key).cloned() {
+    if let Some(cached) = cache
+        .lock()
+        .unwrap_or_else(|_| {
+            panic!("impulse response cache lock poisoned — a thread panicked while holding it")
+        })
+        .get(&cache_key)
+        .cloned()
+    {
         return Ok(cached);
     }
 
     let loaded = Arc::new(loader()?);
-    let mut cache_guard = cache.lock().unwrap();
+    let mut cache_guard = cache.lock().unwrap_or_else(|_| {
+        panic!("impulse response cache lock poisoned — a thread panicked while holding it")
+    });
     let cached = cache_guard
         .entry(cache_key)
         .or_insert_with(|| loaded.clone())

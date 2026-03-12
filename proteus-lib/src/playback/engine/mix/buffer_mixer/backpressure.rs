@@ -66,7 +66,9 @@ impl DecodeBackpressure {
             return true;
         }
 
-        let mut guard = self.state.lock().unwrap();
+        let mut guard = self.state.lock().unwrap_or_else(|_| {
+            panic!("decode backpressure state lock poisoned — a thread panicked while holding it")
+        });
         let mut wait_count = 0usize;
         loop {
             if guard.shutdown || abort.load(std::sync::atomic::Ordering::Relaxed) {
@@ -134,7 +136,9 @@ impl DecodeBackpressure {
         if attempted_samples == 0 && pushed_samples == 0 && !is_full {
             return;
         }
-        let mut guard = self.state.lock().unwrap();
+        let mut guard = self.state.lock().unwrap_or_else(|_| {
+            panic!("decode backpressure state lock poisoned — a thread panicked while holding it")
+        });
         if let Some(instance) = guard.instances.get_mut(instance_index) {
             instance.reserved_samples = instance.reserved_samples.saturating_sub(attempted_samples);
             instance.buffered_samples = instance
@@ -163,7 +167,9 @@ impl DecodeBackpressure {
         if popped_samples == 0 {
             return;
         }
-        let mut guard = self.state.lock().unwrap();
+        let mut guard = self.state.lock().unwrap_or_else(|_| {
+            panic!("decode backpressure state lock poisoned — a thread panicked while holding it")
+        });
         if let Some(instance) = guard.instances.get_mut(instance_index) {
             instance.buffered_samples = instance.buffered_samples.saturating_sub(popped_samples);
             debug!(
@@ -181,7 +187,9 @@ impl DecodeBackpressure {
 
     /// Mark an instance finished so it no longer blocks backpressure checks.
     pub(super) fn on_finished(&self, instance_index: usize) {
-        let mut guard = self.state.lock().unwrap();
+        let mut guard = self.state.lock().unwrap_or_else(|_| {
+            panic!("decode backpressure state lock poisoned — a thread panicked while holding it")
+        });
         if let Some(instance) = guard.instances.get_mut(instance_index) {
             if !instance.finished {
                 instance.finished = true;
@@ -200,7 +208,9 @@ impl DecodeBackpressure {
 
     /// Wake all waiters and force future room checks to fail.
     pub(crate) fn shutdown(&self) {
-        let mut guard = self.state.lock().unwrap();
+        let mut guard = self.state.lock().unwrap_or_else(|_| {
+            panic!("decode backpressure state lock poisoned — a thread panicked while holding it")
+        });
         guard.shutdown = true;
         debug!("decode_backpressure shutdown");
         self.cv.notify_all();
@@ -208,19 +218,31 @@ impl DecodeBackpressure {
 
     /// Return true when any decode worker is blocked waiting for room.
     pub(crate) fn has_waiters(&self) -> bool {
-        self.state.lock().unwrap().waiting_threads > 0
+        self.state
+            .lock()
+            .unwrap_or_else(|_| {
+                panic!(
+                    "decode backpressure state lock poisoned — a thread panicked while holding it"
+                )
+            })
+            .waiting_threads
+            > 0
     }
 
     /// Enable startup fairness mode with a per-instance target occupancy.
     pub(crate) fn enable_startup_priority(&self, target_samples: usize) {
-        let mut guard = self.state.lock().unwrap();
+        let mut guard = self.state.lock().unwrap_or_else(|_| {
+            panic!("decode backpressure state lock poisoned — a thread panicked while holding it")
+        });
         guard.startup_priority_target_samples = Some(target_samples.max(1));
         self.cv.notify_all();
     }
 
     /// Disable startup fairness mode and resume steady-state buffering behavior.
     pub(crate) fn disable_startup_priority(&self) {
-        let mut guard = self.state.lock().unwrap();
+        let mut guard = self.state.lock().unwrap_or_else(|_| {
+            panic!("decode backpressure state lock poisoned — a thread panicked while holding it")
+        });
         guard.startup_priority_target_samples = None;
         self.cv.notify_all();
     }

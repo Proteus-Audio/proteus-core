@@ -23,10 +23,14 @@ pub fn init_buffer_map() -> TrackBufferMap {
 ///
 /// If the track buffer has not been created yet, this returns `0`.
 pub fn buffer_remaining_space(track_buffers: &TrackBufferMap, track_key: u16) -> usize {
-    let track_buffers = track_buffers.lock().unwrap();
+    let track_buffers = track_buffers.lock().unwrap_or_else(|_| {
+        panic!("track buffers lock poisoned — a thread panicked while holding it")
+    });
     match track_buffers.get(&track_key) {
         Some(track_buffer) => {
-            let track_buffer = track_buffer.lock().unwrap();
+            let track_buffer = track_buffer.lock().unwrap_or_else(|_| {
+                panic!("track buffer lock poisoned — a thread panicked while holding it")
+            });
             track_buffer.max_len().saturating_sub(track_buffer.len())
         }
         None => 0,

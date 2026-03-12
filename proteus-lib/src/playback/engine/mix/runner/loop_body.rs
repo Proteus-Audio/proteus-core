@@ -98,7 +98,9 @@ fn take_next_samples(state: &mut MixLoopState, startup_trace: Instant) -> Option
 
 pub(super) fn teardown_mix(state: MixLoopState) {
     {
-        let mut finished = state.finished_tracks.lock().unwrap();
+        let mut finished = state.finished_tracks.lock().unwrap_or_else(|_| {
+            panic!("finished tracks lock poisoned — a thread panicked while holding it")
+        });
         finished.clear();
         for idx in 0..state.buffer_mixer.instance_count() {
             finished.push(idx as u16);
@@ -182,7 +184,9 @@ pub(super) fn apply_inline_track_mix_updates(
     buffer_mixer: &mut BufferMixer,
 ) {
     let updates = {
-        let mut pending = inline_track_mix_updates.lock().unwrap();
+        let mut pending = inline_track_mix_updates.lock().unwrap_or_else(|_| {
+            panic!("inline track mix updates lock poisoned — a thread panicked while holding it")
+        });
         std::mem::take(&mut *pending)
     };
     for update in updates {

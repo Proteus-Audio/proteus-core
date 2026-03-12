@@ -21,10 +21,14 @@ pub fn add_samples_to_buffer_map(
             return;
         }
 
-        let map = buffer_map.lock().unwrap();
+        let map = buffer_map.lock().unwrap_or_else(|_| {
+            panic!("buffer map lock poisoned — a thread panicked while holding it")
+        });
         let remaining = match map.get(&track_key) {
             Some(buffer) => {
-                let buffer = buffer.lock().unwrap();
+                let buffer = buffer.lock().unwrap_or_else(|_| {
+                    panic!("track buffer lock poisoned — a thread panicked while holding it")
+                });
                 buffer.max_len().saturating_sub(buffer.len())
             }
             None => 0,
@@ -43,7 +47,9 @@ pub fn add_samples_to_buffer_map(
 
         let take = remaining.min(samples.len() - offset);
         if let Some(buffer) = map.get(&track_key) {
-            let mut buffer = buffer.lock().unwrap();
+            let mut buffer = buffer.lock().unwrap_or_else(|_| {
+                panic!("track buffer lock poisoned — a thread panicked while holding it")
+            });
             for sample in samples[offset..offset + take].iter().copied() {
                 buffer.push(sample);
             }
@@ -59,7 +65,9 @@ pub fn add_samples_to_buffer_map(
 
 /// Record a track key as finished (idempotent).
 pub fn mark_track_as_finished(finished_tracks: &mut Arc<Mutex<Vec<u16>>>, track_key: u16) {
-    let mut finished_tracks_copy = finished_tracks.lock().unwrap();
+    let mut finished_tracks_copy = finished_tracks.lock().unwrap_or_else(|_| {
+        panic!("finished tracks lock poisoned — a thread panicked while holding it")
+    });
     if finished_tracks_copy.contains(&track_key) {
         return;
     }
