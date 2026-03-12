@@ -11,3 +11,4 @@ violations are fixed in-place; larger ones get a writeup here.
 | [x]  | SI-04 | [SI-04-dsp-god-files.md](./SI-04-dsp-god-files.md)                           | `multiband_eq.rs` (761 lines), `diffusion_reverb/mod.rs` (740 lines), and `convolution_reverb/mod.rs` (621 lines) need splitting |
 | [x]  | SI-05 | [SI-05-track-decode-god-functions.md](./SI-05-track-decode-god-functions.md) | `buffer_container_tracks` (~270 lines) and `buffer_track` (~165 lines) exceed function-length limits                             |
 | [x]  | SI-06 | [SI-06-spawn-mix-thread-god-function.md](./SI-06-spawn-mix-thread-god-function.md) | `spawn_mix_thread` (~536 lines) in `runner/mod.rs` exceeds function-length limits and keeps the file over the 600-line hard limit |
+| [ ]  | SI-07 | [SI-07-peaks-format-god-file.md](./SI-07-peaks-format-god-file.md)           | `peaks/format.rs` (690 lines) exceeds the 600-line hard limit and keeps peak IO, range math, resampling, and tests in one file |
