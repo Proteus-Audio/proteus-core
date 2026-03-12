@@ -1,7 +1,7 @@
 //! Chainable DSP effect modules.
 //!
 //! ## Internal Module Layout Convention
-//! - Each effect implements the [`DspEffect`](core::DspEffect) trait, which
+//! - Each effect implements the `DspEffect` trait (in the private `core` module), which
 //!   provides the canonical `process`, `reset_state`, and `warm_up` methods.
 //! - Split reusable algorithmic components into sibling submodules (for
 //!   example `convolution`, `impulse_response`, `reverb`) when complexity
@@ -49,10 +49,15 @@ pub use pan::{PanEffect, PanSettings};
 /// Shared context for preparing and running DSP effects.
 #[derive(Debug, Clone)]
 pub struct EffectContext {
+    /// Sample rate of the audio stream, in Hz.
     pub sample_rate: u32,
+    /// Number of interleaved audio channels in each sample buffer.
     pub channels: usize,
+    /// Filesystem path to the loaded container, used to resolve embedded attachments.
     pub container_path: Option<String>,
+    /// Specification for the impulse response used by convolution-reverb effects.
     pub impulse_response_spec: Option<ImpulseResponseSpec>,
+    /// dB level below peak at which the impulse response tail is considered silent.
     pub impulse_response_tail_db: f32,
 }
 
@@ -75,12 +80,16 @@ macro_rules! define_audio_effects {
         #[derive(Debug, Clone, Serialize, Deserialize)]
         pub enum AudioEffect {
             $(
+                /// Effect variant wrapping a [`
+                #[doc = stringify!($effect_ty)]
+                /// `] configuration and runtime state.
                 #[serde(rename = $serde_name)]
                 $variant($effect_ty),
             )*
             $(
                 #[deprecated(note = $dep_note)]
                 #[serde(rename = $dep_serde)]
+                /// Deprecated alias; use the canonical variant instead.
                 $dep_variant($dep_ty),
             )*
         }

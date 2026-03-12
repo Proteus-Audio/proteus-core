@@ -15,17 +15,22 @@ const DEFAULT_MAKEUP_DB: f32 = 0.0;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct CompressorSettings {
+    /// Signal level above which compression is applied, in dBFS.
     #[serde(
         alias = "threshold",
         alias = "threshold_db",
         deserialize_with = "deserialize_db_gain"
     )]
     pub threshold_db: f32,
+    /// Compression ratio; e.g. 4.0 means a 4:1 ratio above the threshold.
     pub ratio: f32,
+    /// Time for the compressor gain to react to a signal exceeding the threshold, in milliseconds.
     #[serde(alias = "attack_ms", alias = "attack")]
     pub attack_ms: f32,
+    /// Time for the compressor gain to recover after the signal drops below the threshold, in milliseconds.
     #[serde(alias = "release_ms", alias = "release")]
     pub release_ms: f32,
+    /// Makeup gain applied after compression to restore loudness, in dB.
     #[serde(
         alias = "makeup_db",
         alias = "makeup_gain",
@@ -70,7 +75,9 @@ impl Default for CompressorSettings {
 #[derive(Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct CompressorEffect {
+    /// Whether the compressor is active; when `false` samples pass through unmodified.
     pub enabled: bool,
+    /// Compressor parameters such as threshold, ratio, attack, and release.
     #[serde(flatten)]
     pub settings: CompressorSettings,
     #[serde(skip)]

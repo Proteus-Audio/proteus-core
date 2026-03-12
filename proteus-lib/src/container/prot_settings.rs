@@ -10,17 +10,24 @@ use crate::dsp::effects::{normalize_legacy_effect_aliases, AudioEffect};
 /// Runtime settings extracted from parsed play-settings payloads.
 #[derive(Debug, Clone, Default)]
 pub struct ProtRuntimeSettings {
+    /// Resolved specification for the impulse response used by convolution reverb.
     pub impulse_response_spec: Option<ImpulseResponseSpec>,
+    /// dB level at which the IR tail is considered silent and can be truncated.
     pub impulse_response_tail_db: Option<f32>,
+    /// DSP effect chain extracted from the settings file, if present.
     pub effects: Option<Vec<AudioEffect>>,
 }
 
 /// Failure modes while loading `play_settings.json` from a container file.
 #[derive(Debug)]
 pub enum PlaySettingsLoadError {
+    /// Failed to open the container file for reading.
     OpenFile(std::io::Error),
+    /// Failed to parse the file as a Matroska container.
     OpenMatroska(matroska::Error),
+    /// Failed to deserialize the `play_settings.json` attachment as JSON.
     ParseJson(serde_json::Error),
+    /// The `play_settings.json` attachment was not present in the container.
     MissingAttachment,
 }
 

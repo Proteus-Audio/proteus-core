@@ -8,15 +8,18 @@ use super::EffectContext;
 const DEFAULT_DURATION_MS: u64 = 100;
 const MAX_AMPLITUDE: f32 = 0.8;
 
+/// Serializable settings for the legacy delay-based reverb effect.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
-/// Serializable settings for the legacy delay-based reverb effect.
 pub struct DelayReverbSettings {
+    /// Length of the feedback delay line in milliseconds.
     pub duration_ms: u64,
+    /// Feedback amplitude (gain applied on each echo); clamped to [0.0, 0.8].
     pub amplitude: f32,
 }
 
 impl DelayReverbSettings {
+    /// Create delay reverb settings.
     pub fn new(duration_ms: u64, amplitude: f32) -> Self {
         Self {
             duration_ms: duration_ms.clamp(0, u64::MAX),
@@ -42,9 +45,12 @@ impl Default for DelayReverbSettings {
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct DelayReverbEffect {
+    /// Whether the effect is active; when `false` samples pass through unmodified.
     pub enabled: bool,
+    /// Dry/wet mix ratio (0.0 = fully dry, 1.0 = fully wet).
     #[serde(alias = "dry_wet", alias = "wet_dry")]
     pub mix: f32,
+    /// Delay reverb parameters such as delay duration and feedback amplitude.
     #[serde(flatten)]
     pub settings: DelayReverbSettings,
     #[serde(skip)]

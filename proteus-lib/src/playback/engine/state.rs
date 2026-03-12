@@ -3,16 +3,27 @@
 /// Buffering configuration for the playback engine.
 #[derive(Debug, Clone, Copy)]
 pub struct PlaybackBufferSettings {
+    /// Minimum milliseconds each track buffer must hold before playback starts.
     pub start_buffer_ms: f32,
+    /// Milliseconds before end-of-stream at which a track is considered finished.
     pub track_eos_ms: f32,
+    /// Number of pre-mixed chunks to append to the sink before audio begins.
     pub start_sink_chunks: usize,
+    /// Maximum number of mixed chunks allowed in the sink queue at any time.
     pub max_sink_chunks: usize,
+    /// Duration of leading silence (in ms) injected before the first audio frame.
     pub startup_silence_ms: f32,
+    /// Duration of the fade-in applied at engine startup, in milliseconds.
     pub startup_fade_ms: f32,
+    /// Duration of the fade-out applied before a seek operation, in milliseconds.
     pub seek_fade_out_ms: f32,
+    /// Duration of the fade-in applied after a seek operation, in milliseconds.
     pub seek_fade_in_ms: f32,
+    /// Crossfade duration (ms) used when switching inline effects mid-playback.
     pub inline_effects_transition_ms: f32,
+    /// Threshold in milliseconds above which a late-append event is logged.
     pub append_jitter_log_ms: f32,
+    /// When `true`, logs a message each time an effect boundary is crossed.
     pub effect_boundary_log: bool,
 }
 
@@ -38,23 +49,41 @@ impl PlaybackBufferSettings {
 /// Aggregated DSP chain performance metrics used by debug UI.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct DspChainMetrics {
+    /// Whether the last mix cycle exceeded its deadline.
     pub overrun: bool,
+    /// Duration of the most recent overrun, in milliseconds.
     pub overrun_ms: f64,
+    /// Running average overrun duration across all cycles, in milliseconds.
     pub avg_overrun_ms: f64,
+    /// Largest overrun duration observed since engine start, in milliseconds.
     pub max_overrun_ms: f64,
+    /// Number of active track keys currently managed by the engine.
     pub track_key_count: usize,
+    /// Number of track keys that have reached end-of-stream.
     pub finished_track_count: usize,
+    /// Number of prot (container) source keys in the current playback plan.
     pub prot_key_count: usize,
+    /// DSP throughput for the most recent cycle, in kilo-samples per second.
     pub chain_ksps: f64,
+    /// Rolling average DSP throughput, in kilo-samples per second.
     pub avg_chain_ksps: f64,
+    /// Minimum DSP throughput observed since engine start, in kilo-samples per second.
     pub min_chain_ksps: f64,
+    /// Maximum DSP throughput observed since engine start, in kilo-samples per second.
     pub max_chain_ksps: f64,
+    /// Total number of buffer underrun events since engine start.
     pub underrun_count: u64,
+    /// Whether a buffer underrun is currently active.
     pub underrun_active: bool,
+    /// Total number of inter-chunk discontinuities (pops) detected since engine start.
     pub pop_count: u64,
+    /// Total number of clipped samples detected in the output stream since engine start.
     pub clip_count: u64,
+    /// Total number of NaN samples detected in the output stream since engine start.
     pub nan_count: u64,
+    /// Total number of late-append events recorded since engine start.
     pub late_append_count: u64,
+    /// Whether a late-append condition is currently active.
     pub late_append_active: bool,
 }
 

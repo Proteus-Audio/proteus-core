@@ -10,9 +10,13 @@ use symphonia::core::probe::Hint;
 /// Errors produced while opening or preparing decoder state for media input.
 #[derive(Debug)]
 pub enum DecoderOpenError {
+    /// An I/O error occurred while opening the media source.
     Io(std::io::Error),
+    /// Symphonia could not recognize the container format.
     UnsupportedFormat(SymphoniaError),
+    /// The media source contained no audio track with a supported codec.
     NoSupportedAudioTrack,
+    /// Symphonia could not construct a decoder for the audio codec.
     UnsupportedCodec(SymphoniaError),
 }
 

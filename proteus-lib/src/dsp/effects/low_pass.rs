@@ -12,8 +12,10 @@ const DEFAULT_Q: f32 = 0.5;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct LowPassFilterSettings {
+    /// Cutoff frequency in Hz; energy above this frequency is attenuated.
     #[serde(alias = "freq", alias = "frequency_hz")]
     pub freq_hz: u32,
+    /// Quality factor controlling the sharpness of the cutoff slope.
     #[serde(alias = "bandwidth")]
     pub q: f32,
 }
@@ -38,7 +40,9 @@ impl Default for LowPassFilterSettings {
 #[derive(Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct LowPassFilterEffect {
+    /// Whether the filter is active; when `false` samples pass through unmodified.
     pub enabled: bool,
+    /// Low-pass filter parameters such as cutoff frequency and Q factor.
     #[serde(flatten)]
     pub settings: LowPassFilterSettings,
     #[serde(skip)]

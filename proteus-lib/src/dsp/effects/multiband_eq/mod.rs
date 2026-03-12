@@ -28,8 +28,11 @@ const MAX_GAIN_DB: f32 = 24.0;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct EqPointSettings {
+    /// Center frequency of the parametric band, in Hz.
     pub freq_hz: u32,
+    /// Quality factor controlling the bandwidth of the parametric band.
     pub q: f32,
+    /// Boost or cut applied at the center frequency, in decibels.
     pub gain_db: f32,
 }
 
@@ -61,8 +64,22 @@ impl Default for EqPointSettings {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum LowEdgeFilterSettings {
-    HighPass { freq_hz: u32, q: f32 },
-    LowShelf { freq_hz: u32, q: f32, gain_db: f32 },
+    /// High-pass filter that attenuates frequencies below `freq_hz`.
+    HighPass {
+        /// Cutoff frequency in Hz.
+        freq_hz: u32,
+        /// Quality factor controlling the steepness of the rolloff.
+        q: f32,
+    },
+    /// Low-shelf filter that boosts or cuts energy below `freq_hz`.
+    LowShelf {
+        /// Shelf center frequency in Hz.
+        freq_hz: u32,
+        /// Quality factor controlling the transition slope.
+        q: f32,
+        /// Gain applied in the shelf region, in decibels.
+        gain_db: f32,
+    },
 }
 
 /// Optional high-edge shaping.
@@ -72,17 +89,34 @@ pub enum LowEdgeFilterSettings {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum HighEdgeFilterSettings {
-    LowPass { freq_hz: u32, q: f32 },
-    HighShelf { freq_hz: u32, q: f32, gain_db: f32 },
+    /// Low-pass filter that attenuates frequencies above `freq_hz`.
+    LowPass {
+        /// Cutoff frequency in Hz.
+        freq_hz: u32,
+        /// Quality factor controlling the steepness of the rolloff.
+        q: f32,
+    },
+    /// High-shelf filter that boosts or cuts energy above `freq_hz`.
+    HighShelf {
+        /// Shelf center frequency in Hz.
+        freq_hz: u32,
+        /// Quality factor controlling the transition slope.
+        q: f32,
+        /// Gain applied in the shelf region, in decibels.
+        gain_db: f32,
+    },
 }
 
 /// Serialized configuration for multiband EQ.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct MultibandEqSettings {
+    /// Parametric EQ bands applied in order from low to high frequency.
     #[serde(alias = "bands", alias = "eq_points")]
     pub points: Vec<EqPointSettings>,
+    /// Optional low-edge filter (high-pass or low-shelf) applied before the parametric bands.
     pub low_edge: Option<LowEdgeFilterSettings>,
+    /// Optional high-edge filter (low-pass or high-shelf) applied after the parametric bands.
     pub high_edge: Option<HighEdgeFilterSettings>,
 }
 
@@ -119,7 +153,9 @@ impl Default for MultibandEqSettings {
 #[derive(Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct MultibandEqEffect {
+    /// Whether the EQ effect is active; when `false` samples pass through unmodified.
     pub enabled: bool,
+    /// Parametric EQ configuration including bands and edge filters.
     #[serde(flatten)]
     pub settings: MultibandEqSettings,
     #[serde(skip)]

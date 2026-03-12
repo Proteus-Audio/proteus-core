@@ -34,10 +34,15 @@ pub fn preferred_batch_samples(channels: usize) -> usize {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ConvolutionReverbSettings {
+    /// Inline IR identifier or attachment name (primary field, checked first).
     pub impulse_response: Option<String>,
+    /// Name of the IR embedded as a Matroska attachment (legacy alias).
     pub impulse_response_attachment: Option<String>,
+    /// Filesystem path to an external IR audio file (legacy alias).
     pub impulse_response_path: Option<String>,
+    /// dB level below peak at which the IR tail is considered silent and truncated.
     pub impulse_response_tail_db: Option<f32>,
+    /// Legacy alias for `impulse_response_tail_db`.
     pub impulse_response_tail: Option<f32>,
 }
 
@@ -54,9 +59,12 @@ impl ConvolutionReverbSettings {
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ConvolutionReverbEffect {
+    /// Whether the effect is active; when `false` samples pass through unmodified.
     pub enabled: bool,
+    /// Dry/wet mix ratio (0.0 = fully dry, 1.0 = fully wet).
     #[serde(alias = "wet_dry", alias = "mix")]
     pub dry_wet: f32,
+    /// Impulse response selection and tail configuration.
     #[serde(flatten)]
     pub settings: ConvolutionReverbSettings,
     #[serde(skip)]

@@ -9,15 +9,20 @@ pub use error::PeaksError;
 /// A single peak window with maximum and minimum sample amplitude.
 #[derive(Debug, Clone, Copy)]
 pub struct PeakWindow {
+    /// Maximum sample amplitude within the window (positive peak).
     pub max: f32,
+    /// Minimum sample amplitude within the window (negative peak).
     pub min: f32,
 }
 
 /// Peak data for all channels at a fixed window size.
 #[derive(Debug, Clone)]
 pub struct PeaksData {
+    /// Sample rate of the source audio, in Hz.
     pub sample_rate: u32,
+    /// Number of source samples represented by each [`PeakWindow`].
     pub window_size: u32,
+    /// Per-channel vectors of peak windows in temporal order.
     pub channels: Vec<Vec<PeakWindow>>,
 }
 

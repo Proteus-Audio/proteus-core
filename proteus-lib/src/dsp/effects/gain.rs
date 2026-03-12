@@ -11,6 +11,7 @@ const DEFAULT_GAIN: f32 = 1.0;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct GainSettings {
+    /// Linear amplitude multiplier applied to every sample (1.0 = unity gain).
     #[serde(deserialize_with = "deserialize_linear_gain")]
     pub gain: f32,
 }
@@ -32,7 +33,9 @@ impl Default for GainSettings {
 #[derive(Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct GainEffect {
+    /// Whether the gain effect is active; when `false` samples pass through unmodified.
     pub enabled: bool,
+    /// Gain parameter (linear multiplier).
     #[serde(flatten)]
     pub settings: GainSettings,
 }

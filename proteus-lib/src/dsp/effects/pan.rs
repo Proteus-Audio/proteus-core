@@ -36,7 +36,9 @@ impl Default for PanSettings {
 #[derive(Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct PanEffect {
+    /// Whether the pan effect is active; when `false` samples pass through unmodified.
     pub enabled: bool,
+    /// Pan parameter controlling the stereo position.
     #[serde(flatten)]
     pub settings: PanSettings,
 }

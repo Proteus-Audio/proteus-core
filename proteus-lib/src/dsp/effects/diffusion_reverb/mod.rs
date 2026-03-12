@@ -128,9 +128,12 @@ impl Default for DiffusionReverbSettings {
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct DiffusionReverbEffect {
+    /// Whether the effect is active; when `false` samples pass through unmodified.
     pub enabled: bool,
+    /// Dry/wet mix ratio (0.0 = fully dry, 1.0 = fully wet).
     #[serde(alias = "dry_wet", alias = "wet_dry")]
     pub mix: f32,
+    /// Diffusion reverb parameters controlling decay, diffusion, and room size.
     #[serde(flatten)]
     pub settings: DiffusionReverbSettings,
     #[serde(skip)]

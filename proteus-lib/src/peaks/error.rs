@@ -3,8 +3,11 @@ use std::fmt::{Display, Formatter};
 /// Error type for peak extraction and binary peak-file IO.
 #[derive(Debug)]
 pub enum PeaksError {
+    /// An I/O error occurred while reading or writing the peaks file.
     Io(std::io::Error),
+    /// Audio decoding failed while extracting peaks from the source file.
     Decode(String),
+    /// The peaks file header or data did not match the expected binary format.
     InvalidFormat(String),
 }
 

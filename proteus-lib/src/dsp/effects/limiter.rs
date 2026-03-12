@@ -18,20 +18,24 @@ const DEFAULT_RELEASE_MS: f32 = 100.0;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct LimiterSettings {
+    /// Signal level above which limiting is applied, in dBFS.
     #[serde(
         alias = "threshold",
         alias = "threshold_db",
         deserialize_with = "deserialize_db_gain"
     )]
     pub threshold_db: f32,
+    /// Width of the soft-knee transition zone around the threshold, in dB.
     #[serde(
         alias = "knee_width",
         alias = "knee_width_db",
         deserialize_with = "deserialize_db_gain"
     )]
     pub knee_width_db: f32,
+    /// Time for gain reduction to reach full limiting after a transient, in milliseconds.
     #[serde(alias = "attack_ms", alias = "attack")]
     pub attack_ms: f32,
+    /// Time for gain to recover after the signal falls below the threshold, in milliseconds.
     #[serde(alias = "release_ms", alias = "release")]
     pub release_ms: f32,
 }
@@ -63,7 +67,9 @@ impl Default for LimiterSettings {
 #[derive(Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct LimiterEffect {
+    /// Whether the limiter is active; when `false` samples pass through unmodified.
     pub enabled: bool,
+    /// Limiter parameters such as threshold, knee width, attack, and release.
     #[serde(flatten)]
     pub settings: LimiterSettings,
     #[serde(skip)]

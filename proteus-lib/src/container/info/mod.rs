@@ -22,8 +22,11 @@ use track_info::{gather_track_info, gather_track_info_from_file_paths};
 /// Error returned when combining metadata from audio files with incompatible formats.
 #[derive(Debug)]
 pub enum InfoError {
+    /// Track formats differ in a way that prevents mixing (e.g. mismatched sample rates).
     IncompatibleTracks(String),
+    /// Symphonia failed to probe or open a media source.
     ProbeFailed(String),
+    /// No audio tracks were found in the media source.
     NoTracksFound,
 }
 
@@ -256,18 +259,26 @@ pub fn try_get_durations_by_scan(file_path: &str) -> Result<HashMap<u32, f64>, I
 /// Aggregate codec information for a track.
 #[derive(Debug)]
 pub struct TrackInfo {
+    /// Sample rate of the audio stream, in Hz.
     pub sample_rate: u32,
+    /// Number of audio channels in the stream.
     pub channel_count: u32,
+    /// Bit depth of the PCM samples, e.g. 16 or 24.
     pub bits_per_sample: u32,
 }
 
 /// Combined container info (track list, durations, sample format).
 #[derive(Debug, Clone)]
 pub struct Info {
+    /// Ordered list of source file paths for this container or file set.
     pub file_paths: Vec<String>,
+    /// Map from track index to measured duration in seconds.
     pub duration_map: HashMap<u32, f64>,
+    /// Number of audio channels shared across all tracks.
     pub channels: u32,
+    /// Sample rate shared across all tracks, in Hz.
     pub sample_rate: u32,
+    /// Bit depth of the source PCM samples, e.g. 16 or 24.
     pub bits_per_sample: u32,
 }
 

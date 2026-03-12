@@ -21,7 +21,9 @@ use mix::{spawn_mix_thread, MixThreadArgs};
 /// Request to update the active effects chain inline during playback.
 #[derive(Debug, Clone)]
 pub struct InlineEffectsUpdate {
+    /// The new DSP effect chain to apply, in processing order.
     pub effects: Vec<crate::dsp::effects::AudioEffect>,
+    /// Duration in milliseconds to crossfade between the old and new chain.
     pub transition_ms: f32,
 }
 
@@ -38,20 +40,31 @@ impl InlineEffectsUpdate {
 /// Request to update per-slot track mix settings inline during playback.
 #[derive(Debug, Clone, Copy)]
 pub struct InlineTrackMixUpdate {
+    /// Zero-based index of the track slot whose mix parameters are being updated.
     pub slot_index: usize,
+    /// New linear gain level for the track (1.0 = unity).
     pub level: f32,
+    /// New stereo pan position (−1.0 = full left, +1.0 = full right).
     pub pan: f32,
 }
 
 /// Shared initialization inputs for [`PlayerEngine`].
 pub struct PlayerEngineConfig {
+    /// Optional externally-owned abort flag; a new flag is created if `None`.
     pub abort_option: Option<Arc<AtomicBool>>,
+    /// Wall-clock start time (in seconds) used to synchronize playback position.
     pub start_time: f64,
+    /// Shared buffer configuration applied at engine startup and during playback.
     pub buffer_settings: Arc<Mutex<PlaybackBufferSettings>>,
+    /// Shared DSP effect chain applied to the final mix output.
     pub effects: Arc<Mutex<Vec<crate::dsp::effects::AudioEffect>>>,
+    /// Shared structure into which the engine writes live DSP performance metrics.
     pub dsp_metrics: Arc<Mutex<DspChainMetrics>>,
+    /// Monotonic counter incremented each time the effect chain should be reset.
     pub effects_reset: Arc<AtomicU64>,
+    /// Pending inline effects-chain swap to apply on the next mix cycle.
     pub inline_effects_update: Arc<Mutex<Option<InlineEffectsUpdate>>>,
+    /// Pending per-track mix updates to apply on the next mix cycle.
     pub inline_track_mix_updates: Arc<Mutex<Vec<InlineTrackMixUpdate>>>,
 }
 
@@ -59,6 +72,7 @@ pub struct PlayerEngineConfig {
 /// [`crate::playback::player::Player`].
 #[derive(Debug)]
 pub struct PlayerEngine {
+    /// Set of track IDs that have decoded all samples and reached end-of-stream.
     pub finished_tracks: Arc<Mutex<Vec<u16>>>,
     start_time: f64,
     abort: Arc<AtomicBool>,

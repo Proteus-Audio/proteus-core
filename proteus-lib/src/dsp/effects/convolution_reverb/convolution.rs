@@ -203,9 +203,11 @@ mod real_fft {
     /// Overlap-add convolver based on real FFTs.
     #[derive(Clone)]
     pub struct Convolver {
+        /// FFT size used for each overlap-add block, in samples.
         pub fft_size: usize,
         ir_segments: Vec<Vec<Complex<f32>>>,
         previous_frame_q: VecDeque<Vec<Complex<f32>>>,
+        /// Overlap tail from the previous block, added to the current output.
         pub previous_tail: Vec<f32>,
         pending_output: Vec<f32>,
         r2c: Arc<dyn RealToComplex<f32>>,

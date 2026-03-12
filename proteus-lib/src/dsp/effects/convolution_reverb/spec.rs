@@ -3,7 +3,9 @@
 /// Location of an impulse response used for convolution reverb.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ImpulseResponseSpec {
+    /// IR stored as a named attachment inside the `.mka` container.
     Attachment(String),
+    /// IR stored as a standalone file at the given filesystem path.
     FilePath(String),
 }
 

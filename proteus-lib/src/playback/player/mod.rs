@@ -39,13 +39,21 @@ use crate::{
 /// `Resuming`, `Stopping`) that are resolved on the playback thread.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PlayerState {
+    /// Player has been created but playback has not yet started.
     Init,
+    /// A resume has been requested; the playback thread is fading audio back in.
     Resuming,
+    /// Audio is actively playing.
     Playing,
+    /// A pause has been requested; the playback thread is fading audio out.
     Pausing,
+    /// Playback is paused and the audio sink is silent.
     Paused,
+    /// A stop has been requested; the playback thread is winding down.
     Stopping,
+    /// Playback has stopped and the playback position is reset to the start.
     Stopped,
+    /// Playback reached end-of-stream and completed normally.
     Finished,
 }
 
@@ -116,7 +124,9 @@ pub enum PlayerSource {
 /// chain, with precedence handled in `effects::get_reverb_settings`.
 #[derive(Debug, Clone, Copy)]
 pub struct ReverbSettingsSnapshot {
+    /// Whether the reverb effect is currently enabled.
     pub enabled: bool,
+    /// Dry/wet mix ratio (0.0 = fully dry, 1.0 = fully wet).
     pub dry_wet: f32,
 }
 
@@ -129,8 +139,11 @@ const OUTPUT_STREAM_OPEN_RETRY_MS: u64 = 100;
 /// `Player` owns the playback threads, buffering state, and runtime settings
 /// such as volume and reverb configuration.
 pub struct Player {
+    /// Metadata describing the loaded container or file list.
     pub info: Info,
+    /// Track IDs that have decoded all samples and reached end-of-stream.
     pub finished_tracks: Arc<Mutex<Vec<i32>>>,
+    /// Current playback position in seconds, updated by the playback thread.
     pub ts: Arc<Mutex<f64>>,
     state: Arc<Mutex<PlayerState>>,
     abort: Arc<AtomicBool>,

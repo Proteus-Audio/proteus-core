@@ -57,12 +57,12 @@ prevent regression.
 
 ### Acceptance criteria
 
-- [ ] `cargo rustdoc -p proteus-lib --lib -- -D missing_docs` passes
-- [ ] Public functions returning `Result` include `# Errors`
-- [ ] Public panicking constructors include `# Panics`
-- [ ] Public schema/config structs document every exported field
-- [ ] Broken intra-doc links are eliminated from public docs
+- [x] `cargo rustdoc -p proteus-lib --lib -- -D missing_docs` passes
+- [x] Public functions returning `Result` include `# Errors`
+- [x] Public panicking constructors include `# Panics`
+- [x] Public schema/config structs document every exported field
+- [x] Broken intra-doc links are eliminated from public docs
 
 ## Status
 
-Open.
+Complete.

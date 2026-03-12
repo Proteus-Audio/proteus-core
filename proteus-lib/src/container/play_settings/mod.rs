@@ -13,13 +13,20 @@ pub type EffectSettings = serde_json::Value;
 /// Track-level configuration shared by newer settings versions.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SettingsTrack {
+    /// Playback volume level for this track (linear gain, 1.0 = unity).
     pub level: f32,
+    /// Stereo pan position for this track (−1.0 = full left, +1.0 = full right).
     pub pan: f32,
+    /// Ordered list of audio take IDs available for random selection on this track.
     pub ids: Vec<u32>,
+    /// Human-readable display name for this track.
     pub name: String,
+    /// Filesystem-safe version of the track name, used for file and key lookups.
     pub safe_name: String,
+    /// Number of takes to select simultaneously when building a playback plan.
     #[serde(default = "default_selections_count")]
     pub selections_count: u32,
+    /// Named shuffle points at which the track may rotate to the next selection.
     #[serde(default)]
     pub shuffle_points: Vec<String>,
 }
@@ -27,8 +34,10 @@ pub struct SettingsTrack {
 /// Shared payload used by versioned `play_settings.json` schemas.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PlaySettingsPayload {
+    /// DSP effect chain applied to the final mix, in processing order.
     #[serde(default)]
     pub effects: Vec<EffectSettings>,
+    /// Per-track volume, pan, and selection configuration.
     #[serde(default)]
     pub tracks: Vec<SettingsTrack>,
 }
@@ -36,6 +45,7 @@ pub struct PlaySettingsPayload {
 /// Top-level wrapper shared by versioned settings files.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VersionedPlaySettingsFile<T> {
+    /// The settings payload, which may be nested under a `play_settings` key or flat.
     #[serde(flatten)]
     pub settings: PlaySettingsContainer<T>,
 }
@@ -61,7 +71,12 @@ fn default_selections_count() -> u32 {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum PlaySettingsContainer<T> {
-    Nested { play_settings: T },
+    /// Settings wrapped under a `play_settings` key in the JSON object.
+    Nested {
+        /// The wrapped settings payload.
+        play_settings: T,
+    },
+    /// Settings present directly at the root of the JSON object.
     Flat(T),
 }
 
@@ -86,12 +101,19 @@ impl<T> PlaySettingsContainer<T> {
 /// Versioned settings file representation.
 #[derive(Debug, Clone)]
 pub enum PlaySettingsFile {
+    /// Legacy (pre-versioned) settings format without an `encoder_version` field.
     Legacy(PlaySettingsLegacyFile),
+    /// Version 1 settings format.
     V1(PlaySettingsV1File),
+    /// Version 2 settings format.
     V2(PlaySettingsV2File),
+    /// Version 3 settings format.
     V3(PlaySettingsV3File),
+    /// Settings with an unrecognized `encoder_version`; raw JSON is preserved.
     Unknown {
+        /// The raw `encoder_version` string parsed from the file, if present.
         encoder_version: Option<String>,
+        /// The raw JSON value preserved for round-trip serialization.
         raw: serde_json::Value,
     },
 }

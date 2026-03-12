@@ -29,6 +29,7 @@ use schedule::*;
 /// Parsed `.prot` container with resolved tracks and playback metadata.
 #[derive(Debug, Clone)]
 pub struct Prot {
+    /// Container metadata such as duration, sample rate, and channel count.
     pub info: Info,
     pub(crate) source: ProtSource,
     pub(crate) track_ids: Option<Vec<u32>>,
@@ -55,6 +56,7 @@ pub(crate) enum ProtSource {
 /// Error returned when building a [`Prot`] container instance fails.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProtError {
+    /// The container or file-path set could not be initialized; message contains details.
     Initialization(String),
 }
 

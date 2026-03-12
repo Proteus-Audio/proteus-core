@@ -12,8 +12,10 @@ const DEFAULT_THRESHOLD: f32 = 1.0;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct DistortionSettings {
+    /// Pre-distortion gain multiplier applied before hard clipping.
     #[serde(deserialize_with = "deserialize_linear_gain")]
     pub gain: f32,
+    /// Clipping threshold; samples with absolute value above this are hard-clipped.
     #[serde(deserialize_with = "deserialize_linear_gain")]
     pub threshold: f32,
 }
@@ -38,7 +40,9 @@ impl Default for DistortionSettings {
 #[derive(Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct DistortionEffect {
+    /// Whether the distortion is active; when `false` samples pass through unmodified.
     pub enabled: bool,
+    /// Distortion parameters such as pre-gain and clipping threshold.
     #[serde(flatten)]
     pub settings: DistortionSettings,
 }

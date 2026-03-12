@@ -5,6 +5,7 @@ use std::time::{Duration, Instant};
 /// A pauseable timer that accumulates elapsed duration.
 #[derive(Debug, Clone)]
 pub struct Timer {
+    /// Total accumulated elapsed time, not counting any currently running interval.
     pub time: Duration,
     start_time: Option<Instant>,
 }

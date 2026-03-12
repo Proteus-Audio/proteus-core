@@ -14,9 +14,13 @@ use crate::playback::player::PlayerState;
 /// Snapshot of playback state sent to UI consumers.
 #[derive(Clone, PartialEq)]
 pub struct Report {
+    /// Current playback position in seconds.
     pub time: f64,
+    /// Current output volume (linear gain, 1.0 = unity).
     pub volume: f32,
+    /// Total duration of the loaded content in seconds.
     pub duration: f64,
+    /// Whether playback is currently in the `Playing` state.
     pub playing: bool,
 }
 

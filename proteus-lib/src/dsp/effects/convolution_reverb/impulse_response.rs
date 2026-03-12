@@ -14,7 +14,9 @@ use rodio::{Decoder, Source};
 /// Samples are stored per-channel, interleaving is handled by consumers.
 #[derive(Debug, Clone)]
 pub struct ImpulseResponse {
+    /// Sample rate of the decoded impulse response, in Hz.
     pub sample_rate: u32,
+    /// Per-channel sample buffers; `channels[0]` is the first channel, and so on.
     pub channels: Vec<Vec<f32>>,
 }
 
@@ -45,10 +47,15 @@ impl ImpulseResponse {
 /// Errors that can occur while loading or decoding impulse responses.
 #[derive(Debug)]
 pub enum ImpulseResponseError {
+    /// An I/O error occurred while reading the IR file.
     Io(std::io::Error),
+    /// A Matroska container parsing error occurred while reading the IR attachment.
     Matroska(matroska::Error),
+    /// The rodio decoder failed to decode the IR audio data.
     Decode(rodio::decoder::DecoderError),
+    /// No attachment with the given name was found in the container.
     AttachmentNotFound(String),
+    /// The impulse response decoded to zero channels, which is not usable.
     InvalidChannels,
 }
 
