@@ -126,9 +126,19 @@ fn open_container_decoders(
             }
             continue;
         };
-        let decoder = symphonia::default::get_codecs()
+        let decoder = match symphonia::default::get_codecs()
             .make(&track.codec_params, &DecoderOptions::default())
-            .expect("unsupported codec");
+        {
+            Ok(d) => d,
+            Err(e) => {
+                warn!("unsupported codec for track {}: {}", track_id, e);
+                mark_track_as_finished(&mut finished_tracks.clone(), track_key);
+                if let Some(notify) = buffer_notify {
+                    notify.notify_all();
+                }
+                continue;
+            }
+        };
         let duration = track.codec_params.n_frames.map(|f| track.codec_params.start_ts + f);
         result.push(TrackDecoder {
             track_id,
@@ -251,7 +261,12 @@ fn run_container_decode_loop(
         }
         drop(td);
         check_eos_skew(track_decoders, &mut finished_ids, &last_seen, max_seen, eos_seconds, finished_tracks, buffer_notify);
-        let td = track_decoders.iter_mut().find(|td| td.track_id == tid).unwrap();
+        // The decoder for `tid` was found at the top of this iteration;
+        // `check_eos_skew` does not remove decoders, so it must still be present.
+        let td = track_decoders
+            .iter_mut()
+            .find(|td| td.track_id == tid)
+            .unwrap_or_else(|| unreachable!("decoder for tid {} missing after check_eos_skew", tid));
         match td.decoder.decode(&packet) {
             Ok(decoded) => push_decoded_container_packet(td, decoded, pkey, channels, buffer_map, buffer_notify, abort, &mut logged_formats),
             Err(Error::DecodeError(e)) => warn!("decode error: {}", e),
