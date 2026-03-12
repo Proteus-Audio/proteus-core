@@ -70,14 +70,24 @@ impl Reporter {
 
         loop {
             let report = Report {
-                time: *self.time.lock().unwrap_or_else(|_| panic!("time lock poisoned — a thread panicked while holding it")),
-                volume: *self.volume.lock().unwrap_or_else(|_| panic!("volume lock poisoned — a thread panicked while holding it")),
-                duration: *self.duration.lock().unwrap_or_else(|_| panic!("duration lock poisoned — a thread panicked while holding it")),
-                playing: *self.state.lock().unwrap_or_else(|_| panic!("state lock poisoned — a thread panicked while holding it")) == PlayerState::Playing,
+                time: *self.time.lock().unwrap_or_else(|_| {
+                    panic!("time lock poisoned — a thread panicked while holding it")
+                }),
+                volume: *self.volume.lock().unwrap_or_else(|_| {
+                    panic!("volume lock poisoned — a thread panicked while holding it")
+                }),
+                duration: *self.duration.lock().unwrap_or_else(|_| {
+                    panic!("duration lock poisoned — a thread panicked while holding it")
+                }),
+                playing: *self.state.lock().unwrap_or_else(|_| {
+                    panic!("state lock poisoned — a thread panicked while holding it")
+                }) == PlayerState::Playing,
             };
 
             if report != last_report {
-                (*self.report.lock().unwrap_or_else(|_| panic!("report lock poisoned — a thread panicked while holding it")))(report.clone());
+                (*self.report.lock().unwrap_or_else(|_| {
+                    panic!("report lock poisoned — a thread panicked while holding it")
+                }))(report.clone());
                 last_report = report;
             }
 
@@ -95,13 +105,22 @@ impl Reporter {
         self.finish.store(false, Ordering::Relaxed);
         let this = self.clone();
         let handle = std::thread::spawn(move || this.run());
-        *self.thread_handle.lock().unwrap_or_else(|_| panic!("thread handle lock poisoned — a thread panicked while holding it")) = Some(handle);
+        *self.thread_handle.lock().unwrap_or_else(|_| {
+            panic!("thread handle lock poisoned — a thread panicked while holding it")
+        }) = Some(handle);
     }
 
     /// Stop the background reporting thread.
     pub fn stop(&self) {
         self.finish.store(true, Ordering::Relaxed);
-        if let Some(handle) = self.thread_handle.lock().unwrap_or_else(|_| panic!("thread handle lock poisoned — a thread panicked while holding it")).take() {
+        if let Some(handle) = self
+            .thread_handle
+            .lock()
+            .unwrap_or_else(|_| {
+                panic!("thread handle lock poisoned — a thread panicked while holding it")
+            })
+            .take()
+        {
             if handle.thread().id() == std::thread::current().id() {
                 log::warn!("reporter stop called from reporter thread; skipping join");
             } else if handle.join().is_err() {

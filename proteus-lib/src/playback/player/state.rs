@@ -6,6 +6,11 @@ use std::time::Duration;
 use super::{Player, PlayerState};
 
 impl Player {
+    /// Get read-only metadata describing the active container or file list.
+    pub fn audio_info(&self) -> &crate::container::info::Info {
+        &self.info
+    }
+
     /// Return true if playback is currently active.
     pub fn is_playing(&self) -> bool {
         *self
@@ -25,11 +30,26 @@ impl Player {
     }
 
     /// Get the current playback time in seconds.
-    pub fn get_time(&self) -> f64 {
+    pub fn playback_position_secs(&self) -> f64 {
         *self
             .ts
             .lock()
             .unwrap_or_else(|_| panic!("ts lock poisoned — a thread panicked while holding it"))
+    }
+
+    /// Get the current playback time in seconds.
+    pub fn get_time(&self) -> f64 {
+        self.playback_position_secs()
+    }
+
+    /// Get the finished track identifiers as a detached snapshot.
+    pub fn finished_track_indices(&self) -> Vec<i32> {
+        self.finished_tracks
+            .lock()
+            .unwrap_or_else(|_| {
+                panic!("finished tracks lock poisoned — a thread panicked while holding it")
+            })
+            .clone()
     }
 
     /// Return `true` when no playback worker thread is alive.

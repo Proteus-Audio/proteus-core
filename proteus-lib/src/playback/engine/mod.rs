@@ -73,7 +73,7 @@ pub struct PlayerEngineConfig {
 #[derive(Debug)]
 pub struct PlayerEngine {
     /// Set of track IDs that have decoded all samples and reached end-of-stream.
-    pub finished_tracks: Arc<Mutex<Vec<u16>>>,
+    finished_tracks: Arc<Mutex<Vec<u16>>>,
     start_time: f64,
     abort: Arc<AtomicBool>,
     buffer_map: Arc<Mutex<HashMap<u16, TrackBuffer>>>,
@@ -211,6 +211,16 @@ impl PlayerEngine {
             .lock()
             .unwrap_or_else(|_| panic!("prot lock poisoned — a thread panicked while holding it"));
         *prot.get_duration()
+    }
+
+    /// Get finished engine track keys as a detached snapshot.
+    pub fn finished_track_keys(&self) -> Vec<u16> {
+        self.finished_tracks
+            .lock()
+            .unwrap_or_else(|_| {
+                panic!("finished tracks lock poisoned — a thread panicked while holding it")
+            })
+            .clone()
     }
 
     fn ready_buffer_map(&mut self, keys: &[u32]) {

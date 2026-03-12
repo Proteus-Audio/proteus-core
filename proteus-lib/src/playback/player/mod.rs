@@ -140,11 +140,11 @@ const OUTPUT_STREAM_OPEN_RETRY_MS: u64 = 100;
 /// such as volume and reverb configuration.
 pub struct Player {
     /// Metadata describing the loaded container or file list.
-    pub info: Info,
+    info: Info,
     /// Track IDs that have decoded all samples and reached end-of-stream.
-    pub finished_tracks: Arc<Mutex<Vec<i32>>>,
+    finished_tracks: Arc<Mutex<Vec<i32>>>,
     /// Current playback position in seconds, updated by the playback thread.
-    pub ts: Arc<Mutex<f64>>,
+    ts: Arc<Mutex<f64>>,
     state: Arc<Mutex<PlayerState>>,
     abort: Arc<AtomicBool>,
     playback_thread_exists: Arc<AtomicBool>,

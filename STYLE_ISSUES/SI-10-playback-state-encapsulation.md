@@ -58,12 +58,12 @@ playback engine. Replacing them with methods allows internal refactors without b
 
 ### Acceptance criteria
 
-- [ ] `Player.finished_tracks` and `Player.ts` are no longer public fields
-- [ ] Read access to timing and completion state goes through `Player` methods
-- [ ] `PlayerEngine.finished_tracks` is no longer a public field
-- [ ] `proteus-cli` callers compile and behave correctly after the change
-- [ ] Existing playback behaviors remain unchanged
+- [x] `Player.finished_tracks` and `Player.ts` are no longer public fields
+- [x] Read access to timing and completion state goes through `Player` methods
+- [x] `PlayerEngine.finished_tracks` is no longer a public field
+- [x] `proteus-cli` callers compile and behave correctly after the change
+- [x] Existing playback behaviors remain unchanged
 
 ## Status
 
-Open.
+Resolved.

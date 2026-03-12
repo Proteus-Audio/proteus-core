@@ -218,7 +218,7 @@ fn draw_status_frame(
         playing,
         effects: effect_names,
         #[cfg(feature = "debug")]
-        sample_rate: player.info.sample_rate,
+        sample_rate: player.audio_info().sample_rate,
         #[cfg(feature = "debug")]
         overrun: dsp_metrics.overrun,
         #[cfg(feature = "debug")]
