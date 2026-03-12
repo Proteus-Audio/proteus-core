@@ -148,7 +148,7 @@ pub fn load_impulse_response_from_prot_attachment_with_tail(
         .find(|attachment| attachment.name.trim_matches('"') == attachment_name)
         .ok_or_else(|| ImpulseResponseError::AttachmentNotFound(attachment_name.to_string()))?;
 
-    info!("Loading impulse bytes response from {}", attachment.name);
+    info!("loading impulse bytes response from {}", attachment.name);
 
     load_impulse_response_from_bytes_with_tail(&attachment.data, tail_db)
 }
@@ -176,7 +176,7 @@ where
     normalize_impulse_response_channels(&mut channel_samples, tail_db, true);
 
     if channel_samples.iter().any(|channel| channel.is_empty()) {
-        warn!("Impulse response includes empty channels; results may be silent.");
+        warn!("impulse response includes empty channels; results may be silent");
     }
 
     Ok(ImpulseResponse {

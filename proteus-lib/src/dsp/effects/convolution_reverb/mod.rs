@@ -1,7 +1,7 @@
 //! Convolution reverb effect wrapper for the DSP chain.
 //!
 //! Impulse response loading, caching, and reverb kernel construction live in
-//! [`ir_loader`]. The effect struct, its `DspEffect` impl, and the runtime
+//! `ir_loader`. The effect struct, its `DspEffect` impl, and the runtime
 //! buffering state are defined here.
 
 use log::info;
@@ -150,7 +150,7 @@ impl ConvolutionReverbEffect {
         );
         let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
         log::info!(
-            "Convolution reverb init: {:.2}ms (ir={:?} channels={})",
+            "convolution reverb init: {:.2}ms (ir={:?} channels={})",
             elapsed_ms,
             config.impulse_spec,
             config.channels
@@ -215,7 +215,7 @@ struct ConvolutionReverbState {
 
 impl ConvolutionReverbState {
     fn new(mut reverb: reverb::Reverb) -> Self {
-        info!("Using Convolution Reverb!");
+        info!("using convolution reverb");
         let block_samples = reverb.block_size_samples();
         reverb.set_dry_wet(DEFAULT_DRY_WET);
         Self {

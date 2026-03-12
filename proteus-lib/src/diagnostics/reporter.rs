@@ -20,7 +20,8 @@ pub struct Report {
     pub playing: bool,
 }
 
-/// Background reporter that polls the [`Player`] at fixed intervals.
+/// Background reporter that polls the [`crate::playback::player::Player`] state at fixed
+/// intervals.
 #[derive(Clone)]
 pub struct Reporter {
     time: Arc<Mutex<f64>>,

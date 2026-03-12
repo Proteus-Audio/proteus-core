@@ -205,7 +205,7 @@ impl Prot {
                     }];
                 }
                 PlaySettingsFile::Unknown { .. } => {
-                    error!("Unknown file format");
+                    error!("unknown file format");
                 }
                 _ => {
                     if let Some(tracks) = versioned_tracks(play_settings) {
@@ -217,7 +217,7 @@ impl Prot {
                 }
             },
             None => {
-                warn!("No play_settings.json found; no tracks resolved.");
+                warn!("no play_settings.json found; no tracks resolved");
             }
         }
 
@@ -235,7 +235,7 @@ impl Prot {
             Ok(play_settings) => play_settings,
             Err(PlaySettingsLoadError::MissingAttachment) => return,
             Err(err) => {
-                warn!("Unable to load play_settings.json: {}", err);
+                warn!("unable to load play_settings.json: {}", err);
                 return;
             }
         };

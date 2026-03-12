@@ -25,10 +25,9 @@ pub(super) fn send_samples(
     let samples_buffer = SamplesBuffer::new(input_channels, sample_rate, samples);
 
     if let Err(e) = sender.send((samples_buffer, length_in_seconds)) {
-        log::error!("Failed to send samples: {}", e);
+        log::error!("failed to send samples: {}", e);
         return SendStatus::Disconnected;
     }
-    // info!("Samples sent successfully of length {}", length_in_seconds);
     SendStatus::Sent
 }
 

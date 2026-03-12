@@ -225,7 +225,7 @@ fn push_decoded_container_packet(
 ) {
     logged_formats.entry(td.track_id).or_insert_with(|| {
         let fmt = decoded_format_label(&decoded);
-        info!("Decoded track {} buffer format: {}", td.track_id, fmt);
+        info!("decoded track {} buffer format: {}", td.track_id, fmt);
         fmt
     });
     let stereo = interleave_to_stereo(decoded, channels);

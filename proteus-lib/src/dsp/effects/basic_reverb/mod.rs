@@ -149,7 +149,7 @@ struct DelayReverbState {
 
 impl DelayReverbState {
     fn new(delay_samples: usize) -> Self {
-        info!("Using Delay Reverb!");
+        info!("using delay reverb");
         Self {
             delay_samples,
             delay_line: vec![0.0; delay_samples.max(1)],

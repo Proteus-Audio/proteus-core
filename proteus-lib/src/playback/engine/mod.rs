@@ -55,7 +55,8 @@ pub struct PlayerEngineConfig {
     pub inline_track_mix_updates: Arc<Mutex<Vec<InlineTrackMixUpdate>>>,
 }
 
-/// Internal playback engine used by the high-level [`Player`].
+/// Internal playback engine used by the high-level
+/// [`crate::playback::player::Player`].
 #[derive(Debug)]
 pub struct PlayerEngine {
     pub finished_tracks: Arc<Mutex<Vec<u16>>>,

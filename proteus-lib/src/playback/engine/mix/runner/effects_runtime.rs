@@ -22,7 +22,7 @@ pub(super) fn process_and_send_samples(
     startup_trace: Instant,
 ) -> bool {
     state.running_count += samples.len();
-    debug!("Processed {} samples so far!", state.running_count);
+    debug!("processed {} samples so far", state.running_count);
     if samples.len() < state.convolution_batch_samples {
         warn!(
             "Only processing {} samples! (Convolution wants {})",
@@ -172,7 +172,7 @@ fn update_debug_metrics(
 pub(super) fn drain_effect_tail(state: &mut MixLoopState) -> bool {
     #[cfg(feature = "debug")]
     let _ = pivot_buffer();
-    info!("Mix Finished!!! (in runner)");
+    info!("mix finished in runner");
     state.effect_drain_passes = state.effect_drain_passes.saturating_add(1);
     if state.effect_drain_passes > MAX_EFFECT_DRAIN_PASSES {
         warn!(

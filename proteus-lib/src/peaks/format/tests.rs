@@ -45,8 +45,7 @@ fn round_trips_full_peaks_file() {
 
     write_peaks_file(path.to_str().unwrap(), &data).expect("write");
     let read_back =
-        read_peaks_with_options(path.to_str().unwrap(), &GetPeaksOptions::default())
-            .expect("read");
+        read_peaks_with_options(path.to_str().unwrap(), &GetPeaksOptions::default()).expect("read");
 
     assert_eq!(read_back.sample_rate, 48_000);
     assert_eq!(read_back.window_size, 480);

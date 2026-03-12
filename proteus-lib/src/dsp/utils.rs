@@ -1,3 +1,5 @@
+//! Shared DSP helper utilities.
+
 /// Apply a linear gain ramp across interleaved audio frames.
 ///
 /// # Arguments
@@ -16,9 +18,9 @@ pub fn fade_interleaved_per_frame(samples: &mut [f32], channels: usize, start: f
         return;
     }
     if frames == 1 {
-        let g = end; // or start—pick your convention
+        let gain = end;
         for s in &mut samples[..channels.min(samples_len)] {
-            *s *= g;
+            *s *= gain;
         }
         return;
     }

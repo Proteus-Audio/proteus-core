@@ -31,8 +31,7 @@ pub(super) fn time_align_peaks(
         duration_samples: requested_end_sample.saturating_sub(requested_start_sample) as f64,
         samples_per_peak: f64::from(header.window_size),
         start_peak,
-        end_peak: start_peak
-            .saturating_add(peaks.channels.first().map_or(0, |c| c.len()) as u64),
+        end_peak: start_peak.saturating_add(peaks.channels.first().map_or(0, |c| c.len()) as u64),
         total_samples: total_samples(header) as f64,
         requested_start_sample,
         target_peaks,
@@ -131,8 +130,7 @@ fn weighted_peak_sum(
         }
         let peak_start = peak_idx as f64 * ctx.samples_per_peak;
         let peak_end = peak_start + ctx.samples_per_peak;
-        let overlap =
-            (clamped_end.min(peak_end) - clamped_start.max(peak_start)).max(0.0);
+        let overlap = (clamped_end.min(peak_end) - clamped_start.max(peak_start)).max(0.0);
         if overlap <= 0.0 {
             continue;
         }

@@ -145,7 +145,7 @@ impl BufferMixer {
 
         self.decode_backpressure
             .on_samples_popped(instance_index, popped_samples);
-        debug!("Popped {} samples from i{}", popped_samples, instance_index);
+        debug!("popped {} samples from i{}", popped_samples, instance_index);
 
         if popped_samples == 0 && !self.pop_warning.contains(&instance.meta.instance_id) {
             warn!(

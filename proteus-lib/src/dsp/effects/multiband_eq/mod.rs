@@ -3,7 +3,8 @@
 //! This effect applies a configurable chain of parametric EQ points plus
 //! optional edge-shaping filters for low and high frequency boundaries.
 //!
-//! Biquad filter primitives and coefficient computation live in [`biquad`].
+//! Biquad filter primitives and coefficient computation live in the private
+//! `biquad` module.
 
 use serde::{Deserialize, Serialize};
 

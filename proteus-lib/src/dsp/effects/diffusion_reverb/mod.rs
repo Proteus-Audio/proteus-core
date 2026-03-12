@@ -17,7 +17,7 @@
 //! - Use lower `mix` for insert use on full mixes; higher `mix` works better on sends/auxes.
 //!
 //! DSP primitives (`DelayLine`, `CombFilter`, `AllpassFilter`, etc.) and the
-//! runtime state struct live in [`primitives`].
+//! runtime state struct live in the private `primitives` module.
 
 use serde::{Deserialize, Serialize};
 
@@ -236,7 +236,7 @@ impl DiffusionReverbEffect {
     /// Mutable access to the diffusion reverb settings.
     ///
     /// Changing timing-related fields (`pre_delay_ms`, `room_size_ms`) will cause
-    /// the internal state to be rebuilt on the next call to [`Self::process`].
+    /// the internal state to be rebuilt on the next `process` call.
     pub fn settings_mut(&mut self) -> &mut DiffusionReverbSettings {
         &mut self.settings
     }

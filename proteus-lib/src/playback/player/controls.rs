@@ -44,7 +44,7 @@ impl Player {
         let trace_ms = current_ms();
         self.play_command_ms
             .store(trace_ms, std::sync::atomic::Ordering::Relaxed);
-        info!("Playing audio");
+        info!("playing audio");
         let thread_exists = self
             .playback_thread_exists
             .load(std::sync::atomic::Ordering::SeqCst);

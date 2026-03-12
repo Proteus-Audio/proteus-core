@@ -12,7 +12,7 @@ use super::impulse_response::ImpulseResponse;
 
 const IDENTITY_IMPULSE_RESPONSE: &[f32] = &[1.0];
 
-//   1. Power‑of‑two FFT size (e.g., 8192 or 16384).
+// 1. Power-of-two FFT size (e.g., 8192 or 16384).
 const FFT_SIZE: usize = 8192;
 // const FFT_SIZE: usize = 16384;
 // const FFT_SIZE: usize = 32768;
@@ -89,7 +89,7 @@ impl Reverb {
     /// Process an interleaved input buffer and return the mixed output.
     ///
     /// This allocates a new output buffer each call. For hot paths, prefer
-    /// [`process_into`] to reuse an existing allocation.
+    /// [`Self::process_into`] to reuse an existing allocation.
     pub fn process(&mut self, input_buffer: &[f32]) -> Vec<f32> {
         if self.dry_wet <= 0.0 {
             return input_buffer.to_vec();
@@ -116,13 +116,13 @@ impl Reverb {
         let start = Instant::now();
         let convolver = &mut self.convolvers[index];
 
-        debug!("Convolver fft size: {:?}", convolver.fft_size);
-        debug!("Channel length: {:?}", channel.len());
+        debug!("convolver fft size: {:?}", convolver.fft_size);
+        debug!("channel length: {:?}", channel.len());
 
         let processed = convolver.process(channel);
         let end = Instant::now();
         debug!(
-            "Time taken to process channel #{}: {:?}",
+            "time taken to process channel #{}: {:?}",
             index,
             end.duration_since(start)
         );

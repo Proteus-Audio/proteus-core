@@ -67,7 +67,7 @@ pub fn derive_runtime_settings(play_settings: &PlaySettingsFile) -> ProtRuntimeS
         for effect in raw_effects {
             match serde_json::from_value::<AudioEffect>(effect.clone()) {
                 Ok(effect) => decoded.push(effect),
-                Err(err) => warn!("Failed to parse effect entry: {}", err),
+                Err(err) => warn!("failed to parse effect entry: {}", err),
             }
         }
         if !decoded.is_empty() {
@@ -75,7 +75,7 @@ pub fn derive_runtime_settings(play_settings: &PlaySettingsFile) -> ProtRuntimeS
         }
     }
 
-    info!("Parsed play_settings runtime settings");
+    info!("parsed play_settings runtime settings");
     ProtRuntimeSettings {
         impulse_response_spec,
         impulse_response_tail_db,

@@ -55,7 +55,11 @@ pub(super) fn compute_requested_sample_range(
     Ok((start_sample, end_sample))
 }
 
-pub(super) fn compute_peak_range(header: &Header, start_sample: u64, end_sample: u64) -> (u64, u64) {
+pub(super) fn compute_peak_range(
+    header: &Header,
+    start_sample: u64,
+    end_sample: u64,
+) -> (u64, u64) {
     let samples_per_peak = u64::from(header.window_size);
     let start_peak = start_sample / samples_per_peak;
     let mut end_peak = end_sample.div_ceil(samples_per_peak);

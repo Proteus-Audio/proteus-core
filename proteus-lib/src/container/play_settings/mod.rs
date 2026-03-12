@@ -210,7 +210,7 @@ impl<'de> Deserialize<'de> for PlaySettingsFile {
             _ => None,
         });
 
-        info!("Encoder version: {:?}", encoder_version);
+        info!("encoder version: {:?}", encoder_version);
 
         let parsed = match encoder_version.as_deref() {
             None => serde_json::from_value::<PlaySettingsLegacyFile>(value.clone())
@@ -222,7 +222,7 @@ impl<'de> Deserialize<'de> for PlaySettingsFile {
             Some("3") => serde_json::from_value::<PlaySettingsV3File>(value.clone())
                 .map(PlaySettingsFile::V3),
             Some(version) => {
-                warn!("Unknown encoder version: {:?}", version);
+                warn!("unknown encoder version: {:?}", version);
                 return Ok(PlaySettingsFile::Unknown {
                     encoder_version,
                     raw: value,

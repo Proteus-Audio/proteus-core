@@ -24,7 +24,7 @@ pub(super) struct DiffusionReverbState {
 impl DiffusionReverbState {
     /// Create a new state instance for the current tuning and channel count.
     pub(super) fn new(tuning: super::Tuning, channels: usize) -> Self {
-        log::info!("Using Diffusion Reverb!");
+        log::info!("using diffusion reverb");
         let lanes = (0..channels)
             .map(|channel| ReverbLane::new(tuning.decorrelated(channel)))
             .collect();

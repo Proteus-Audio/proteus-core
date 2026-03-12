@@ -118,7 +118,7 @@ pub(in crate::playback::player::runtime) fn run_playback_thread(
     let drain_completed = run_drain_loop(&ctx, &mut loop_state, &engine);
 
     #[cfg(feature = "debug")]
-    log::info!("Finished drain loop!");
+    log::info!("finished drain loop");
 
     if drain_completed {
         apply_end_of_stream_action(&ctx, &loop_state);

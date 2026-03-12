@@ -208,7 +208,7 @@ pub(super) fn parse_shuffle_points(points: &[String]) -> Vec<u64> {
     for point in points {
         match parse_timestamp_ms(point) {
             Some(value) => parsed.push(value),
-            None => warn!("Invalid shuffle point timestamp: {}", point),
+            None => warn!("invalid shuffle point timestamp: {}", point),
         }
     }
     parsed.sort_unstable();
