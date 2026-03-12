@@ -45,9 +45,9 @@ peaks/
 ├── error.rs
 ├── extract.rs
 ├── format/
-│   ├── mod.rs         # thin public surface: read_peaks_with_options, write_peaks_file
+│   ├── mod.rs         # thin coordinator: validates options, delegates, re-exports
 │   ├── header.rs      # Header, read_header, write_header, constants
-│   ├── io.rs          # read_peaks_by_indices, peak row encoding/decoding helpers
+│   ├── io.rs          # write_peaks_file, read_peaks_by_indices, peak row encoding/decoding
 │   ├── query.rs       # compute_requested_sample_range, compute_peak_range
 │   ├── resample.rs    # time_align_peaks, downsample_peaks, average_reduce_channel
 │   └── tests.rs       # inline-only helpers and format-focused tests
@@ -56,7 +56,7 @@ peaks/
 ### Recommended extraction steps
 
 1. Move header constants and `Header` parsing/serialization into `format/header.rs`
-2. Move byte-level read/write loops into `format/io.rs`
+2. Move `write_peaks_file` and `read_peaks_by_indices` (and their byte-level helpers) into `format/io.rs`; re-export public functions from `format/mod.rs`
 3. Move range selection helpers into `format/query.rs`
 4. Split `time_align_peaks` into smaller helpers in `format/resample.rs`
    Suggested helpers:
@@ -69,12 +69,20 @@ peaks/
 
 ### Acceptance criteria
 
-- [ ] `cargo test -p proteus-lib peaks::` passes
-- [ ] `cargo check --all-features` reports no new warnings
-- [ ] Every file under `proteus-lib/src/peaks/format/` is `<= 400` lines
-- [ ] `time_align_peaks` is reduced to `<= 80` lines or replaced by smaller helpers
-- [ ] Binary file compatibility remains unchanged for existing `.peaks` files
+- [x] `cargo test -p proteus-lib peaks::` passes
+- [x] `cargo check --all-features` reports no new warnings
+- [x] Every file under `proteus-lib/src/peaks/format/` is `<= 400` lines
+- [x] `time_align_peaks` is reduced to `<= 80` lines or replaced by smaller helpers
+- [x] Binary file compatibility remains unchanged for existing `.peaks` files
+
+### Validation notes
+
+Final file sizes: `mod.rs` 75, `header.rs` 96, `io.rs` 98, `query.rs` 75, `resample.rs` 175, `tests.rs` 248 — all under 400.
+
+`time_align_peaks` reduced to 36 lines (was 92). Replaced the inner bin loop with `aligned_bin_peak` (~25 lines) and the overlap-weighted accumulator with `weighted_peak_sum` (~22 lines), plus `empty_aligned_channels` and `aligned_channel_peaks` helpers.
+
+10 peaks tests pass; zero new warnings.
 
 ## Status
 
-Open.
+Complete.
