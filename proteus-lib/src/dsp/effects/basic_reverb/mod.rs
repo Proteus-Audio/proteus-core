@@ -10,6 +10,7 @@ const MAX_AMPLITUDE: f32 = 0.8;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
+/// Serializable settings for the legacy delay-based reverb effect.
 pub struct DelayReverbSettings {
     pub duration_ms: u64,
     pub amplitude: f32,
@@ -216,9 +217,11 @@ fn delay_samples(sample_rate: u32, channels: usize, duration_ms: u64) -> usize {
 }
 
 #[deprecated(note = "Use DelayReverbSettings instead.")]
+/// Backward-compatible alias for [`DelayReverbSettings`].
 pub type BasicReverbSettings = DelayReverbSettings;
 
 #[deprecated(note = "Use DelayReverbEffect instead.")]
+/// Backward-compatible alias for [`DelayReverbEffect`].
 pub type BasicReverbEffect = DelayReverbEffect;
 
 #[cfg(test)]

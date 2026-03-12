@@ -1,3 +1,5 @@
+//! Optional log-file helpers used by debug and buffer-visualization features.
+
 #[cfg(feature = "debug")]
 pub mod pivot_buffer_trace;
 
@@ -25,11 +27,13 @@ fn append_to_log(message: &str) -> io::Result<()> {
 }
 
 #[cfg(feature = "buffer-map")]
+/// Append one message to the buffer-map debug log file in the current directory.
 pub fn log(message: &str) -> io::Result<()> {
     append_to_log(message)
 }
 
 #[cfg(feature = "buffer-map")]
+/// Truncate the buffer-map debug log file in the current directory.
 pub fn clear_logfile() -> io::Result<()> {
     let filepath = std::env::current_dir()?;
     let log_path = filepath.join("log.txt");

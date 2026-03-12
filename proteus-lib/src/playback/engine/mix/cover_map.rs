@@ -1,9 +1,11 @@
+/// Direction of a transition segment in a computed cover map.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TransitionDirection {
     Up,
     Down,
 }
 
+/// Segment kind emitted by [`map_cover`] when building overlap/underlay regions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Cover {
     Overlap((usize, usize)),

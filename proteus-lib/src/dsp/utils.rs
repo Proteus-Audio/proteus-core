@@ -1,5 +1,15 @@
+/// Apply a linear gain ramp across interleaved audio frames.
+///
+/// # Arguments
+///
+/// * `samples` - Interleaved audio samples to scale in place.
+/// * `channels` - Channel count used to interpret frame boundaries.
+/// * `start` - Gain applied to the first frame.
+/// * `end` - Gain applied to the final frame.
 pub fn fade_interleaved_per_frame(samples: &mut [f32], channels: usize, start: f32, end: f32) {
-    assert!(channels > 0);
+    if channels == 0 {
+        return;
+    }
     let samples_len = samples.len();
     let frames = samples_len / channels;
     if frames == 0 {
@@ -40,5 +50,12 @@ mod tests {
         let mut samples = vec![2.0_f32, -2.0];
         fade_interleaved_per_frame(&mut samples, 2, 0.2, 0.5);
         assert_eq!(samples, vec![1.0, -1.0]);
+    }
+
+    #[test]
+    fn fade_interleaved_per_frame_ignores_zero_channels() {
+        let mut samples = vec![2.0_f32, -2.0];
+        fade_interleaved_per_frame(&mut samples, 0, 0.2, 0.5);
+        assert_eq!(samples, vec![2.0, -2.0]);
     }
 }

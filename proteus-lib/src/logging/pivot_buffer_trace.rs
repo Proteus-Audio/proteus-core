@@ -37,6 +37,16 @@ fn parse_item_line(line: &str) -> Result<(String, String), String> {
     Ok((frame, item))
 }
 
+/// Reformat the buffer-map debug log into a pivoted, timestamp-aligned layout.
+///
+/// # Returns
+///
+/// Returns `Ok(())` after writing the formatted output file.
+///
+/// # Errors
+///
+/// Returns an error if the input file cannot be read, the log format is invalid,
+/// or the output file cannot be written.
 pub fn pivot_buffer() -> Result<(), Box<dyn std::error::Error>> {
     let in_path = String::from("log.txt");
     let out_path = Some(String::from("log-fmt.txt"));
