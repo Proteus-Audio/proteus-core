@@ -1,8 +1,8 @@
 //! Helpers for parsing and converting linear and dB gain values.
 
 use rodio::math::{db_to_linear, linear_to_db};
-use serde::de::{Error as DeError, Visitor};
 use serde::Deserializer;
+use serde::de::{Error as DeError, Visitor};
 use std::fmt;
 
 /// Deserialize a linear gain value that may be expressed in dB.

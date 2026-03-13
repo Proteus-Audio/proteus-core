@@ -25,7 +25,7 @@ use super::EffectContext;
 
 mod primitives;
 
-use primitives::{delay_samples, DiffusionReverbState};
+use primitives::{DiffusionReverbState, delay_samples};
 
 const DEFAULT_PRE_DELAY_MS: u64 = 12;
 const DEFAULT_ROOM_SIZE_MS: u64 = 48;

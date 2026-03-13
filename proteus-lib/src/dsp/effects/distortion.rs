@@ -2,8 +2,8 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::core::level::deserialize_linear_gain;
 use super::EffectContext;
+use super::core::level::deserialize_linear_gain;
 
 const DEFAULT_GAIN: f32 = 1.0;
 const DEFAULT_THRESHOLD: f32 = 1.0;
@@ -128,11 +128,7 @@ mod tests {
 }
 
 fn sanitize_gain(gain: f32) -> f32 {
-    if gain.is_finite() {
-        gain
-    } else {
-        DEFAULT_GAIN
-    }
+    if gain.is_finite() { gain } else { DEFAULT_GAIN }
 }
 
 fn sanitize_threshold(threshold: f32) -> f32 {

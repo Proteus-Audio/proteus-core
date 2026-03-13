@@ -25,12 +25,6 @@ pub mod low_pass;
 pub mod multiband_eq;
 pub mod pan;
 
-#[allow(deprecated)]
-#[deprecated(note = "Use DelayReverbEffect instead.")]
-pub use basic_reverb::BasicReverbEffect;
-#[allow(deprecated)]
-#[deprecated(note = "Use DelayReverbSettings instead.")]
-pub use basic_reverb::BasicReverbSettings;
 pub use basic_reverb::{DelayReverbEffect, DelayReverbSettings};
 pub use compressor::{CompressorEffect, CompressorSettings};
 pub use convolution_reverb::{ConvolutionReverbEffect, ConvolutionReverbSettings};
@@ -70,10 +64,7 @@ pub struct EffectContext {
 macro_rules! define_audio_effects {
     (
         effects {
-            $( $variant:ident($effect_ty:ident, $serde_name:literal) ),* $(,)?
-        }
-        deprecated {
-            $( $dep_variant:ident($dep_ty:ident, $dep_serde:literal, $dep_note:literal) => $canonical:ident ),* $(,)?
+            $( $variant:ident($effect_ty:ident, $serde_name:literal $(, aliases = [$($serde_alias:literal),* $(,)?])? ) ),* $(,)?
         }
     ) => {
         /// Configured audio effect that can process interleaved samples.
@@ -84,41 +75,28 @@ macro_rules! define_audio_effects {
                 #[doc = stringify!($effect_ty)]
                 /// `] configuration and runtime state.
                 #[serde(rename = $serde_name)]
+                $( $( #[serde(alias = $serde_alias)] )* )?
                 $variant($effect_ty),
-            )*
-            $(
-                #[deprecated(note = $dep_note)]
-                #[serde(rename = $dep_serde)]
-                /// Deprecated alias; use the canonical variant instead.
-                $dep_variant($dep_ty),
             )*
         }
 
         impl AudioEffect {
-            /// Convert deprecated aliases to the canonical runtime variant.
-            #[allow(deprecated)]
+            /// Preserve the historical alias-normalization hook for runtime callers.
             pub fn normalize_legacy_alias(self) -> Self {
-                match self {
-                    $( AudioEffect::$dep_variant(effect) => AudioEffect::$canonical(effect), )*
-                    effect => effect,
-                }
+                self
             }
 
             /// Canonical display label shared across CLI and runtime debug surfaces.
-            #[allow(deprecated)]
             pub fn display_name(&self) -> &'static str {
                 match self {
                     $( AudioEffect::$variant(_) => stringify!($variant), )*
-                    $( AudioEffect::$dep_variant(_) => stringify!($canonical), )*
                 }
             }
 
             /// Return a mutable reference to the inner effect as a trait object.
-            #[allow(deprecated)]
             fn as_dsp_effect(&mut self) -> &mut dyn core::DspEffect {
                 match self {
                     $( AudioEffect::$variant(effect) => effect, )*
-                    $( AudioEffect::$dep_variant(effect) => effect, )*
                 }
             }
 
@@ -155,7 +133,7 @@ macro_rules! define_audio_effects {
 
 define_audio_effects! {
     effects {
-        DelayReverb(DelayReverbEffect, "DelayReverbSettings"),
+        DelayReverb(DelayReverbEffect, "DelayReverbSettings", aliases = ["BasicReverbSettings"]),
         DiffusionReverb(DiffusionReverbEffect, "DiffusionReverbSettings"),
         ConvolutionReverb(ConvolutionReverbEffect, "ConvolutionReverbSettings"),
         LowPassFilter(LowPassFilterEffect, "LowPassFilterSettings"),
@@ -166,9 +144,6 @@ define_audio_effects! {
         Limiter(LimiterEffect, "LimiterSettings"),
         MultibandEq(MultibandEqEffect, "MultibandEqSettings"),
         Pan(PanEffect, "PanSettings"),
-    }
-    deprecated {
-        BasicReverb(DelayReverbEffect, "BasicReverbSettings", "Use AudioEffect::DelayReverb instead.") => DelayReverb,
     }
 }
 
@@ -208,37 +183,19 @@ impl AudioEffect {
     }
 
     /// Mutable access to the delay reverb effect, if present.
-    #[allow(deprecated)]
     pub fn as_delay_reverb_mut(&mut self) -> Option<&mut DelayReverbEffect> {
         match self {
             AudioEffect::DelayReverb(effect) => Some(effect),
-            AudioEffect::BasicReverb(effect) => Some(effect),
             _ => None,
         }
     }
 
     /// Immutable access to the delay reverb effect, if present.
-    #[allow(deprecated)]
     pub fn as_delay_reverb(&self) -> Option<&DelayReverbEffect> {
         match self {
             AudioEffect::DelayReverb(effect) => Some(effect),
-            AudioEffect::BasicReverb(effect) => Some(effect),
             _ => None,
         }
-    }
-
-    /// Mutable access to the basic reverb effect, if present.
-    #[deprecated(note = "Use as_delay_reverb_mut instead.")]
-    #[allow(deprecated)]
-    pub fn as_basic_reverb_mut(&mut self) -> Option<&mut BasicReverbEffect> {
-        self.as_delay_reverb_mut()
-    }
-
-    /// Immutable access to the basic reverb effect, if present.
-    #[deprecated(note = "Use as_delay_reverb instead.")]
-    #[allow(deprecated)]
-    pub fn as_basic_reverb(&self) -> Option<&BasicReverbEffect> {
-        self.as_delay_reverb()
     }
 }
 

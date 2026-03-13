@@ -222,14 +222,6 @@ fn delay_samples(sample_rate: u32, channels: usize, duration_ms: u64) -> usize {
     samples as usize
 }
 
-#[deprecated(note = "Use DelayReverbSettings instead.")]
-/// Backward-compatible alias for [`DelayReverbSettings`].
-pub type BasicReverbSettings = DelayReverbSettings;
-
-#[deprecated(note = "Use DelayReverbEffect instead.")]
-/// Backward-compatible alias for [`DelayReverbEffect`].
-pub type BasicReverbEffect = DelayReverbEffect;
-
 #[cfg(test)]
 mod tests {
     use super::*;

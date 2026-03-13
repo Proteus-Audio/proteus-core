@@ -1,9 +1,9 @@
 //! Container demux decode worker (single demuxer feeding multiple track decoders).
 
 use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::sync::mpsc;
+use std::sync::Arc;
 use std::thread;
 use std::thread::JoinHandle;
 use std::time::Instant;
@@ -17,7 +17,7 @@ use symphonia::core::units::{Time, TimeBase};
 use super::super::super::buffer_mixer::{DecodeBackpressure, SourceKey};
 use super::super::super::decoder_events::DecodeWorkerEvent;
 use super::{
-    ForwardInfra, StartupLog, forward_decoded_packet, interleaved_samples, packet_ts_seconds,
+    forward_decoded_packet, interleaved_samples, packet_ts_seconds, ForwardInfra, StartupLog,
 };
 
 /// Spawn a single demux decode worker that services multiple container track ids.

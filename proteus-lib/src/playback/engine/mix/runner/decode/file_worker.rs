@@ -1,8 +1,8 @@
 //! Standalone-file decode worker.
 
-use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::sync::mpsc;
+use std::sync::Arc;
 use std::thread;
 use std::thread::JoinHandle;
 use std::time::Instant;
@@ -18,7 +18,7 @@ use crate::tools::decode::open_file;
 use super::super::super::buffer_mixer::{DecodeBackpressure, SourceKey};
 use super::super::super::decoder_events::DecodeWorkerEvent;
 use super::{
-    ForwardInfra, StartupLog, forward_decoded_packet, interleaved_samples, packet_ts_seconds,
+    forward_decoded_packet, interleaved_samples, packet_ts_seconds, ForwardInfra, StartupLog,
 };
 
 /// Spawn a decode worker for one standalone audio file source.

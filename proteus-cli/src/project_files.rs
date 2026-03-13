@@ -170,8 +170,6 @@ pub fn default_effects_chain_disabled() -> Vec<AudioEffect> {
 fn disable_effect(mut effect: AudioEffect) -> AudioEffect {
     match &mut effect {
         AudioEffect::DelayReverb(e) => e.enabled = false,
-        #[allow(deprecated)]
-        AudioEffect::BasicReverb(e) => e.enabled = false,
         AudioEffect::DiffusionReverb(e) => e.enabled = false,
         AudioEffect::ConvolutionReverb(e) => e.enabled = false,
         AudioEffect::LowPassFilter(e) => e.enabled = false,
@@ -330,7 +328,7 @@ fn is_supported_audio_file(path: &Path) -> bool {
 mod tests {
     use super::*;
     use std::io::Write;
-    use tempfile::{tempdir, NamedTempFile};
+    use tempfile::{NamedTempFile, tempdir};
 
     #[test]
     fn load_effects_json_parses_effects() {

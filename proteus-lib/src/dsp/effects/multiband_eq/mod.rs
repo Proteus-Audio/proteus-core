@@ -377,10 +377,12 @@ mod tests {
 
         assert_eq!(output.len(), samples.len());
         assert!(output.iter().all(|value| value.is_finite()));
-        assert!(output
-            .iter()
-            .zip(samples.iter())
-            .any(|(out, input)| (*out - *input).abs() > 1e-6));
+        assert!(
+            output
+                .iter()
+                .zip(samples.iter())
+                .any(|(out, input)| (*out - *input).abs() > 1e-6)
+        );
     }
 
     #[test]
