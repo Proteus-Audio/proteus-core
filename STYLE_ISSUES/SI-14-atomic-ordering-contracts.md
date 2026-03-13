@@ -17,6 +17,13 @@ The playback runtime uses atomics as cross-thread state signals, but the orderin
 The most obvious remaining problem is `buffering_done`, which is written and read across threads
 using `Ordering::Relaxed`.
 
+### Additional roadmap context
+
+The roadmap calls out two specific flag families that need an explicit contract:
+
+- `playback_thread_exists`: lifecycle visibility between thread startup/join and external control
+- `buffering_done`: worker-to-caller publication of producer-complete state
+
 ### Why this matters
 
 - Cross-thread readiness flags should have a documented happens-before contract
@@ -45,6 +52,7 @@ let done = buffering_done.load(Ordering::Acquire);
 ### Acceptance criteria
 
 - [ ] Every cross-thread playback atomic has a documented ordering contract
+- [ ] `playback_thread_exists` uses a consistent, documented load/store ordering at all call sites
 - [ ] `buffering_done` no longer uses `Relaxed` for cross-thread publication/observation
 - [ ] Ordering choices are centralized behind helper methods or tightly scoped wrappers
 - [ ] Startup/shutdown/buffering tests cover the intended state transitions

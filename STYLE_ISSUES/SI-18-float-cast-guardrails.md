@@ -28,7 +28,7 @@ The surrounding logic should normally keep this non-negative, but the invariant 
 ### Recommended remediation
 
 1. Clamp intermediate frame offsets explicitly before integer conversion:
-   `max(0.0)` before the cast
+   `(((value).max(0.0)).floor() as usize)` rather than relying on implicit non-negativity
 2. Extract the conversion into a small helper so the invariant is named and reused
 3. Add tests around boundary cases:
    - exact overlap start

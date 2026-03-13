@@ -91,8 +91,8 @@ Every effect in the chain allocates a fresh `Vec<f32>` per chunk. For a chain of
 
 `println!("Info: {:?}", info)` is called during normal object construction in a library crate. This bypasses the `log` crate, cannot be suppressed by callers, and pollutes host process output.
 
-- [ ] Remove the `println!` call (or replace with `log::debug!` if diagnostic value is needed)
-- [ ] Search the rest of `proteus-lib` for any other `println!`/`eprintln!` calls in non-test code and remove them
+- [x] Remove the `println!` call (or replace with `log::debug!` if diagnostic value is needed)
+- [x] Search the rest of `proteus-lib` for any other `println!`/`eprintln!` calls in non-test code and remove them
 
 ### 2.4 Address effects mutex held during full DSP chain execution
 
@@ -110,7 +110,7 @@ The shared effects mutex is locked and held across the entire `run_effect_chain`
 If any thread panics while holding a mutex, all subsequent `.lock().unwrap()` calls on that mutex also panic. This causes cascade failures.
 
 - [ ] For the most critical mutexes (effects chain, player state, sink), replace `.lock().unwrap()` with `.lock().unwrap_or_else(|e| e.into_inner())` or add explicit poisoning recovery
-- [ ] At minimum, replace all plain `.lock().unwrap()` with `.lock().expect("<context about what this mutex guards>")` so failures produce useful diagnostics
+- [x] At minimum, replace all plain `.lock().unwrap()` with `.lock().expect("<context about what this mutex guards>")` so failures produce useful diagnostics
 
 ---
 
@@ -143,7 +143,7 @@ The worker uses `recv_timeout(Duration::from_millis(20))` as its main loop inter
 Seek failures return silently with no log entry and no signal to the caller. Decode errors within the loop are bound to `_result` and dropped.
 
 - [ ] On seek failure, emit a `log::warn!` with the error and path
-- [ ] On decode errors within the loop, emit a `log::debug!` or `log::warn!`; distinguish I/O/EOF from true errors
+- [x] On decode errors within the loop, emit a `log::debug!` or `log::warn!`; distinguish I/O/EOF from true errors
 - [ ] Consider whether persistent decode errors should terminate the track (send a finished signal) rather than silently continuing
 
 ### 3.4 Fix decode worker error handling — distinguish EOF from real errors
@@ -222,25 +222,25 @@ These items do not affect correctness today but accumulate technical debt and ma
 
 The crate compiles with a large warning set that makes real regressions harder to notice.
 
-- [ ] Remove `ShuffleRuntimePlan` and `build_runtime_shuffle_plan` from `container/prot.rs`
-- [ ] Remove `OutputStageArgs` and `produce_output_samples` from `playback/engine/mix/output_stage.rs`
-- [ ] Remove `SourceSpawner` from `playback/engine/mix/source_spawner.rs`
-- [ ] Remove or activate `add_samples_to_buffer_map_nonblocking` in `track/buffer.rs`
-- [ ] Fix `track/mod.rs` re-exports that are unused and not re-exported from `lib.rs`
+- [x] Remove `ShuffleRuntimePlan` and `build_runtime_shuffle_plan` from `container/prot.rs`
+- [x] Remove `OutputStageArgs` and `produce_output_samples` from `playback/engine/mix/output_stage.rs`
+- [x] Remove `SourceSpawner` from `playback/engine/mix/source_spawner.rs`
+- [x] Remove or activate `add_samples_to_buffer_map_nonblocking` in `track/buffer.rs`
+- [x] Fix `track/mod.rs` re-exports that are unused and not re-exported from `lib.rs`
 - [ ] Remove unused functions from the internal `logging` module
-- [ ] Remove unused buffer diagnostics helpers in `playback/engine/mix/buffer_mixer/helpers.rs`
-- [ ] Remove the commented-out `PartialEq` block in `container/info.rs` lines 211–222
+- [x] Remove unused buffer diagnostics helpers in `playback/engine/mix/buffer_mixer/helpers.rs`
+- [x] Remove the commented-out `PartialEq` block in `container/info.rs` lines 211–222
 - [ ] Run `cargo clippy` and address all dead code warnings
 
 ### 4.2 Split oversized files by responsibility
 
 Files that mix multiple concerns make changes harder to review and test safely. Target: no file over ~400 lines.
 
-- [ ] **`container/prot.rs` (1,741 lines):** Extract shuffle schedule generation, runtime planning, track-mix settings, and combination counting into separate submodules
-- [ ] **`playback/player/runtime/worker/runner.rs` (749 lines):** Extract sink management, timing, start-gate logic, and metrics aggregation into separate modules
-- [ ] **`playback/engine/mix/buffer_mixer/mod.rs` (846 lines):** Extract instance management and the main mix loop into submodules
-- [ ] **`container/info.rs` (614 lines):** Separate metadata probing, duration scanning, and format reduction into distinct modules
-- [ ] **`playback/engine/mix/runner/mod.rs` (650 lines):** Extract decode worker spawning and the main mix loop body
+- [x] **`container/prot.rs` (1,741 lines):** Extract shuffle schedule generation, runtime planning, track-mix settings, and combination counting into separate submodules
+- [x] **`playback/player/runtime/worker/runner.rs` (749 lines):** Extract sink management, timing, start-gate logic, and metrics aggregation into separate modules
+- [x] **`playback/engine/mix/buffer_mixer/mod.rs` (846 lines):** Extract instance management and the main mix loop into submodules
+- [x] **`container/info.rs` (614 lines):** Separate metadata probing, duration scanning, and format reduction into distinct modules
+- [x] **`playback/engine/mix/runner/mod.rs` (650 lines):** Extract decode worker spawning and the main mix loop body
 
 ### 4.3 Complete or remove `BasicReverb` deprecation
 
@@ -248,15 +248,15 @@ Files that mix multiple concerns make changes harder to review and test safely. 
 
 The `BasicReverb` variant is deprecated but still matched with `#[allow(deprecated)]` in `process()`, `reset_state()`, and `warm_up()`. Deprecation without a removal plan is noise.
 
-- [ ] Decide: is `BasicReverb` being removed in the next version, or is it staying?
-- [ ] If removing: replace all matches with the `DelayReverb` arm and delete the variant
+- [x] Decide: is `BasicReverb` being removed in the next version, or is it staying?
+- [x] If removing: replace all matches with the `DelayReverb` arm and delete the variant
 - [ ] If keeping: document the timeline in a comment and leave a note in the changelog
 
 ### 4.4 Reduce public API surface
 
 Exposing internal types makes future refactoring a breaking change.
 
-- [ ] Make `RuntimeInstanceMeta`, `RuntimeInstancePlan`, `ActiveWindow`, and `ShuffleSource` in `container/prot.rs` `pub(crate)` or module-private
+- [x] Make `RuntimeInstanceMeta`, `RuntimeInstancePlan`, `ActiveWindow`, and `ShuffleSource` in `container/prot.rs` `pub(crate)` or module-private
 - [ ] Make `TrackBuffer` and `TrackBufferMap` in `audio/buffer.rs` `pub(crate)` (they are internal engine types)
 - [ ] Give `EffectContext` private fields and a constructor that validates invariants (non-zero channels, non-zero sample rate)
 - [ ] Make `PlaySettingsLegacy`, `PlaySettingsV1`, etc. `pub(crate)` — the versioned deserialization is an internal concern
@@ -303,32 +303,32 @@ cargo run -p proteus-cli --features debug -- <test.prot>  # verify no new warnin
 
 ## Summary Table
 
-| Phase | Item | Severity | Files |
-|---|---|---|---|
-| 1 | Panics in `reduce_track_infos` | Critical | `container/info.rs` 471, 478, 488, 512 |
-| 1 | File-open panic in `get_probe_result_from_string` | Critical | `container/info.rs` 71–73 |
-| 1 | `catch_unwind` as error handling | Critical | `container/info.rs` 152–162 |
-| 1 | Decoder selection bug (`tracks()[0]`) | Critical | `tools/tools.rs` 64–72 |
-| 1 | Panic on no decodable audio track | Critical | `track/single.rs` 57–71 |
-| 2 | Atomic ordering inconsistency | High | `runtime/thread.rs`, `settings.rs`, `worker/runner.rs` |
-| 2 | Per-chunk `Vec` allocations in effect chain | High | `mix/effects.rs` 17–27 |
-| 2 | `println!` in `Prot::new` | High | `container/prot.rs` 83 |
-| 2 | Effects mutex held during DSP chain | High | `mix/runner/mod.rs` ~482 |
-| 2 | `.lock().unwrap()` cascade failure risk | High | Throughout |
-| 3 | 20ms/5ms polling in playback worker | Medium | `worker/runner.rs` 115, 510 |
-| 3 | `Condvar::wait` without timeout | Medium | `buffer_mixer/backpressure.rs` 114 |
-| 3 | Silent seek and decode failures | Medium | `track/single.rs` 92, 99–108 |
-| 3 | Decode worker collapses errors to EOS | Medium | `decode/file_worker.rs`, `container_worker.rs` |
-| 3 | Single-container always does full-file scan | Medium | `container/info.rs` 572 |
-| 3 | O(n) `VecDeque::drain` in premix | Medium | `playback/engine/premix.rs` 52 |
-| 3 | HashMap lookups in inner mixing loop | Medium | `mix/track_mix.rs` 82–95 |
-| 3 | `SamplesBuffer` double-clone | Medium | `audio/samples.rs` 19–27 |
-| 3 | Track weighting unimplemented (standalone) | Medium | `track/single.rs` 46 |
-| 3 | Float-to-`usize` without sign guard | Medium | `buffer_mixer/helpers.rs` 129–132 |
-| 4 | Remove all identified dead code | Low | Multiple |
-| 4 | Split oversized files | Low | `prot.rs`, `runner.rs`, `buffer_mixer/mod.rs`, `info.rs` |
-| 4 | Complete/remove `BasicReverb` deprecation | Low | `dsp/effects/mod.rs` |
-| 4 | Reduce public API surface | Low | `prot.rs`, `audio/buffer.rs`, `dsp/effects/mod.rs`, `play_settings/mod.rs` |
-| 4 | Unify EOS detection between decode paths | Low | `track/single.rs`, `track/container.rs` |
-| 4 | Fix `instance_needs_data()` naming | Low | `buffer_mixer/helpers.rs` 143–149 |
-| 4 | Extract shared DSP utilities | Low | Multiple effect files |
+| Phase | Completed | Item | Severity | Files |
+|---|---|---|---|---|
+| 1 | Yes | Panics in `reduce_track_infos` | Critical | `container/info.rs` 471, 478, 488, 512 |
+| 1 | Yes | File-open panic in `get_probe_result_from_string` | Critical | `container/info.rs` 71–73 |
+| 1 | Yes | `catch_unwind` as error handling | Critical | `container/info.rs` 152–162 |
+| 1 | No | Decoder selection bug (`tracks()[0]`) | Critical | `tools/tools.rs` 64–72 |
+| 1 | Yes | Panic on no decodable audio track | Critical | `track/single.rs` 57–71 |
+| 2 | No | Atomic ordering inconsistency | High | `runtime/thread.rs`, `settings.rs`, `worker/runner.rs` |
+| 2 | No | Per-chunk `Vec` allocations in effect chain | High | `mix/effects.rs` 17–27 |
+| 2 | Yes | `println!` in `Prot::new` | High | `container/prot.rs` 83 |
+| 2 | No | Effects mutex held during DSP chain | High | `mix/runner/mod.rs` ~482 |
+| 2 | No | `.lock().unwrap()` cascade failure risk | High | Throughout |
+| 3 | No | 20ms/5ms polling in playback worker | Medium | `worker/runner.rs` 115, 510 |
+| 3 | No | `Condvar::wait` without timeout | Medium | `buffer_mixer/backpressure.rs` 114 |
+| 3 | No | Silent seek and decode failures | Medium | `track/single.rs` 92, 99–108 |
+| 3 | No | Decode worker collapses errors to EOS | Medium | `decode/file_worker.rs`, `container_worker.rs` |
+| 3 | No | Single-container always does full-file scan | Medium | `container/info.rs` 572 |
+| 3 | No | O(n) `VecDeque::drain` in premix | Medium | `playback/engine/premix.rs` 52 |
+| 3 | No | HashMap lookups in inner mixing loop | Medium | `mix/track_mix.rs` 82–95 |
+| 3 | No | `SamplesBuffer` double-clone | Medium | `audio/samples.rs` 19–27 |
+| 3 | No | Track weighting unimplemented (standalone) | Medium | `track/single.rs` 46 |
+| 3 | No | Float-to-`usize` without sign guard | Medium | `buffer_mixer/helpers.rs` 129–132 |
+| 4 | No | Remove all identified dead code | Low | Multiple |
+| 4 | Yes | Split oversized files | Low | `prot.rs`, `runner.rs`, `buffer_mixer/mod.rs`, `info.rs` |
+| 4 | Yes | Complete/remove `BasicReverb` deprecation | Low | `dsp/effects/mod.rs` |
+| 4 | No | Reduce public API surface | Low | `prot.rs`, `audio/buffer.rs`, `dsp/effects/mod.rs`, `play_settings/mod.rs` |
+| 4 | No | Unify EOS detection between decode paths | Low | `track/single.rs`, `track/container.rs` |
+| 4 | No | Fix `instance_needs_data()` naming | Low | `buffer_mixer/helpers.rs` 143–149 |
+| 4 | No | Extract shared DSP utilities | Low | Multiple effect files |

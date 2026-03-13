@@ -26,6 +26,8 @@ Nothing prevents callers from constructing impossible or unsupported combination
 - Public mutable fields leak invariants into every caller
 - DSP code should not have to defensively re-validate context structure everywhere
 - The current shape makes future refactoring or validation changes harder to introduce
+- This is one part of the roadmap's broader public-API-surface reduction work; other internal
+  buffer and play-settings types still need separate visibility cleanup
 
 ### Recommended remediation
 

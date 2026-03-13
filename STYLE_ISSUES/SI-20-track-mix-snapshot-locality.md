@@ -33,6 +33,8 @@ is correct, but the data layout is still lookup-oriented rather than iteration-o
    ```
 2. Convert the `HashMap` snapshots into this dense list once per chunk or whenever the active set
    changes
+   The roadmap's preferred concrete implementation is "parallel `Vec`s indexed by position", which
+   is a valid alternative if it proves simpler than a descriptor struct.
 3. Keep the actual sample loop working over slices and scalars only
 4. Reuse the same resolved descriptor shape for both active and fading mixes where possible
 5. Add a benchmark or at least a focused regression test for parity with existing output

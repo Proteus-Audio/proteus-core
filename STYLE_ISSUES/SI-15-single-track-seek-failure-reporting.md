@@ -21,6 +21,14 @@ if format.seek(...).is_err() {
 
 That means a seek failure is indistinguishable from a normal exhausted track at the caller level.
 
+### Additional roadmap context
+
+The roadmap groups this with decode-loop observability more broadly:
+
+- seek failure should log path and error
+- decode failures should be surfaced distinctly from normal EOF
+- repeated decode failures should have an intentional policy rather than default loop behavior
+
 ### Why this matters
 
 - Playback can fail silently with no clear explanation for the caller or logs
@@ -37,6 +45,8 @@ That means a seek failure is indistinguishable from a normal exhausted track at 
 5. Ensure any waiter/condvar notification still happens on failure so the runtime does not stall
 6. Add a regression test that injects or simulates a seek failure and asserts a reported failure
    rather than a silent finish
+7. Decide whether repeated decode errors for a track should terminate that track after a threshold
+   instead of warning indefinitely and continuing forever
 
 ### Acceptance criteria
 
@@ -44,6 +54,7 @@ That means a seek failure is indistinguishable from a normal exhausted track at 
 - [ ] Callers can distinguish decode failure from normal end-of-stream
 - [ ] Buffer waiters are still notified on failure paths
 - [ ] A regression test covers the failed-seek startup path
+- [ ] The policy for repeated decode failures is intentional and documented
 
 ## Status
 

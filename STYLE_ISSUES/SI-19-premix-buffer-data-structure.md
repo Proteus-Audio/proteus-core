@@ -30,6 +30,8 @@ the front.
 
 1. Replace the internal `VecDeque<f32>` with a true ring-buffer structure or explicit head/tail
    indices over a contiguous `Vec<f32>`
+   The roadmap specifically points out that `dasp_ring_buffer` is already a dependency, so reuse of
+   that crate is preferred over introducing another queue abstraction.
 2. Provide APIs that copy directly into a caller-provided output slice where possible
 3. If returning owned chunk vectors remains necessary, still avoid front-drain shifting by reading
    from the ring into a pre-sized output buffer
@@ -41,6 +43,7 @@ the front.
 - [ ] `PremixBuffer::pop_chunk` no longer relies on `VecDeque::drain(0..take)`
 - [ ] The premix buffer uses O(1) amortized front-consumption semantics
 - [ ] Ordering and partial-chunk behavior are covered by tests
+- [ ] Chunk pop semantics remain identical to the current buffer from the caller's perspective
 
 ## Status
 

@@ -29,6 +29,8 @@ the chain. In steady-state playback this is allocator traffic on the real-time t
 - Real-time audio code should avoid allocator dependence during steady-state playback
 - Allocation churn increases latency variance and raises drop-out risk under CPU pressure
 - The current API shape prevents local optimization because every caller must accept owned output
+- The roadmap explicitly calls out a representative five-effect stereo chain at 48 kHz, where this
+  design translates into six heap allocations per chunk
 
 ### Recommended remediation
 
@@ -49,6 +51,8 @@ the chain. In steady-state playback this is allocator traffic on the real-time t
 5. Keep the old owned-return API only as a temporary internal shim during migration, then delete it
 6. Re-run the effect warm-up path and drain path to ensure tail-producing effects still behave the
    same with caller-owned output buffers
+7. Benchmark or instrument the before/after path so the refactor demonstrates reduced allocation
+   pressure rather than only changing API shape
 
 ### Acceptance criteria
 
@@ -57,6 +61,7 @@ the chain. In steady-state playback this is allocator traffic on the real-time t
 - [ ] `AudioEffect` and effect implementations no longer require returning a fresh `Vec<f32>`
 - [ ] Drain/tail behavior remains correct for reverb and convolution effects
 - [ ] Playback output matches existing behavior in functional tests and smoke playback runs
+- [ ] A benchmark or instrumentation pass demonstrates reduced hot-path allocation pressure
 
 ## Status
 

@@ -33,14 +33,16 @@ For the implementation path:
 1. Read the current track weight before pushing decoded samples
 2. Apply the weight once per sample block before enqueueing to the track buffer
 3. Use the same default behavior as container playback (`1.0` when no explicit weight exists)
-4. Add tests comparing weighted standalone output with the expected scaled samples
-5. Document the mode parity in the relevant public API comments
+4. Add a regression test that verifies a `0.5` weight produces half-amplitude samples
+5. Remove the placeholder underscore from `_track_weights` once the parameter is actually used
+6. Document the mode parity in the relevant public API comments
 
 ### Acceptance criteria
 
 - [ ] Standalone playback either applies track weights correctly or rejects unsupported weighting explicitly
 - [ ] Standalone and container playback have documented, intentional weighting behavior
 - [ ] Regression tests cover non-default weights in standalone mode
+- [ ] `_track_weights` is no longer ignored or intentionally marked unused
 
 ## Status
 

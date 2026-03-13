@@ -31,6 +31,7 @@ unbounded.
 4. Keep `notify_all` behavior on all state transitions that may free room
 5. Add a test that verifies a waiter wakes and exits when shutdown is set without requiring a
    successful producer notification path
+6. Add a test for the failure mode where the notifying thread exits without ever issuing a notify
 
 Example direction:
 
@@ -48,6 +49,7 @@ if timeout.timed_out() {
 - [ ] Waiters reliably exit on shutdown/abort even if no producer notifies them
 - [ ] Timeout wakeups include enough logging to debug stalls
 - [ ] Tests cover timeout-based shutdown behavior
+- [ ] Tests cover the "notifier exited without notifying" failure path
 
 ## Status
 
