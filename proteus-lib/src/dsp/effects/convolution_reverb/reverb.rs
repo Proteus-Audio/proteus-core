@@ -12,10 +12,8 @@ use super::impulse_response::ImpulseResponse;
 
 const IDENTITY_IMPULSE_RESPONSE: &[f32] = &[1.0];
 
-// 1. Power-of-two FFT size (e.g., 8192 or 16384).
+// Power-of-two FFT size; increasing improves frequency resolution at the cost of latency.
 const FFT_SIZE: usize = 8192;
-// const FFT_SIZE: usize = 16384;
-// const FFT_SIZE: usize = 32768;
 
 /// Preferred processing batch size in interleaved samples.
 pub fn preferred_batch_samples(channels: usize) -> usize {

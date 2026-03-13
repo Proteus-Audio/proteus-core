@@ -1,16 +1,18 @@
 //! Buffering implementation for a single audio track.
 
-use log::{info, warn};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 use std::thread::JoinHandle;
+
 use symphonia::core::audio::AudioBufferRef;
 use symphonia::core::codecs::{Decoder, CODEC_TYPE_NULL};
 use symphonia::core::errors::Error;
 use symphonia::core::formats::{FormatReader, SeekMode, SeekTo};
 use symphonia::core::units::Time;
+
+use log::{info, warn};
 
 use crate::audio::buffer::TrackBufferMap;
 use crate::audio::decode::{decoded_format_label, process_channel};

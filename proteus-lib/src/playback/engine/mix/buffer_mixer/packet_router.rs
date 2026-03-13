@@ -3,12 +3,44 @@
 use log::{debug, info, warn};
 
 use crate::dsp::utils::fade_interleaved_per_frame;
-use crate::playback::engine::mix::cover_map::{map_cover, Cover, TransitionDirection};
+use crate::playback::engine::mix::cover_map::{Cover, TransitionDirection, map_cover};
 
 use super::backpressure::DecodeBackpressure;
 use super::routing_helpers::{packet_overlap_samples, push_owned_slice, push_slice, push_zeros};
 use super::routing_time::{instance_past_window_ts, samples_to_ms};
 use super::{BufferInstance, BufferMixer, RouteDecision, SectionWriteResult, SourceKey};
+
+struct PacketCtx<'a> {
+    samples: &'a [f32],
+    source: &'a SourceKey,
+    packet_ts: f64,
+    frame_count: usize,
+}
+
+struct MixerParams {
+    sample_rate: u32,
+    channels: usize,
+    crossfade_ms: usize,
+}
+
+#[derive(Clone, Copy)]
+struct TransitionCtx {
+    cover_transition: usize,
+    sample_rate: u32,
+    channels: usize,
+}
+
+struct TransitionWindow {
+    direction: TransitionDirection,
+    start_sample: usize,
+    end_sample: usize,
+}
+
+#[derive(Clone, Copy)]
+struct InstanceRouteCtx<'a> {
+    instance_index: usize,
+    decode_backpressure: &'a DecodeBackpressure,
+}
 
 impl BufferMixer {
     /// Route one decoded packet into schedule-owned instance buffers.
@@ -34,22 +66,27 @@ impl BufferMixer {
         }
 
         let mut decision = RouteDecision::default();
-        let sample_rate = self.sample_rate;
-        let channels = self.channels;
-        let crossfade_ms = self.crossfade_ms;
+        let params = MixerParams {
+            sample_rate: self.sample_rate,
+            channels: self.channels,
+            crossfade_ms: self.crossfade_ms,
+        };
         let decode_backpressure = self.decode_backpressure.as_ref();
         for (instance_index, instance) in self.instances.iter_mut().enumerate() {
-            let result = route_packet_to_instance(
-                instance_index,
-                instance,
+            let packet = PacketCtx {
                 samples,
-                &source,
+                source: &source,
                 packet_ts,
                 frame_count,
-                sample_rate,
-                channels,
-                crossfade_ms,
-                decode_backpressure,
+            };
+            let result = route_packet_to_instance(
+                instance,
+                &packet,
+                &params,
+                InstanceRouteCtx {
+                    instance_index,
+                    decode_backpressure,
+                },
             );
             if result.wrote_real {
                 decision
@@ -68,14 +105,11 @@ impl BufferMixer {
         decision
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn route_cover_section(
         section: Cover,
         samples: &[f32],
         packet_ts: f64,
-        cover_transition: usize,
-        sample_rate: u32,
-        channels: usize,
+        ctx: TransitionCtx,
         decode_backpressure: &DecodeBackpressure,
         instance_index: usize,
         instance: &mut BufferInstance,
@@ -99,13 +133,13 @@ impl BufferMixer {
             Cover::Transition((direction, (start_sample, end_sample))) => Self::write_transition(
                 samples,
                 packet_ts,
-                cover_transition,
-                sample_rate,
-                channels,
+                ctx,
                 decode_backpressure,
-                direction,
-                start_sample,
-                end_sample,
+                TransitionWindow {
+                    direction,
+                    start_sample,
+                    end_sample,
+                },
                 instance_index,
                 instance,
             ),
@@ -192,20 +226,20 @@ impl BufferMixer {
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn write_transition(
         samples: &[f32],
         packet_ts: f64,
-        cover_transition: usize,
-        sample_rate: u32,
-        channels: usize,
+        ctx: TransitionCtx,
         decode_backpressure: &DecodeBackpressure,
-        direction: TransitionDirection,
-        start_sample: usize,
-        end_sample: usize,
+        window: TransitionWindow,
         instance_index: usize,
         instance: &mut BufferInstance,
     ) -> SectionWriteResult {
+        let TransitionWindow {
+            direction,
+            start_sample,
+            end_sample,
+        } = window;
         if start_sample >= end_sample || end_sample > samples.len() {
             return SectionWriteResult::default();
         }
@@ -213,25 +247,26 @@ impl BufferMixer {
         let slice_length = end_sample - start_sample;
         info!(
             "Transition starting at: {}",
-            packet_ts + (samples_to_ms(start_sample, sample_rate, channels) as f64 / 1000.0)
+            packet_ts
+                + (samples_to_ms(start_sample, ctx.sample_rate, ctx.channels) as f64 / 1000.0)
         );
 
         let (ramp_start, ramp_end) = match direction {
             TransitionDirection::Up => {
-                let starting_val =
-                    (cover_transition as f32 - slice_length as f32) / cover_transition as f32;
+                let starting_val = (ctx.cover_transition as f32 - slice_length as f32)
+                    / ctx.cover_transition as f32;
                 (starting_val, 1.0)
             }
             TransitionDirection::Down => {
-                let ending_val =
-                    (cover_transition as f32 - slice_length as f32) / cover_transition as f32;
+                let ending_val = (ctx.cover_transition as f32 - slice_length as f32)
+                    / ctx.cover_transition as f32;
                 (1.0, ending_val)
             }
         };
         info!("ramp: {:?}", (ramp_start, ramp_end));
 
         let mut slice = samples[start_sample..end_sample].to_vec();
-        fade_interleaved_per_frame(&mut slice, channels, ramp_start, ramp_end);
+        fade_interleaved_per_frame(&mut slice, ctx.channels, ramp_start, ramp_end);
 
         let push = push_owned_slice(
             &mut instance.buffer,
@@ -288,53 +323,58 @@ impl BufferMixer {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 fn route_packet_to_instance(
-    instance_index: usize,
     instance: &mut BufferInstance,
-    samples: &[f32],
-    source: &SourceKey,
-    packet_ts: f64,
-    frame_count: usize,
-    sample_rate: u32,
-    channels: usize,
-    crossfade_ms: usize,
-    decode_backpressure: &DecodeBackpressure,
+    packet: &PacketCtx<'_>,
+    params: &MixerParams,
+    route: InstanceRouteCtx<'_>,
 ) -> SectionWriteResult {
-    if instance.finished || SourceKey::from(&instance.meta.source_key) != *source {
+    if instance.finished || SourceKey::from(&instance.meta.source_key) != *packet.source {
         return SectionWriteResult::default();
     }
 
-    if finish_instance_if_past_window(instance_index, instance, packet_ts, decode_backpressure) {
+    if finish_instance_if_past_window(
+        route.instance_index,
+        instance,
+        packet.packet_ts,
+        route.decode_backpressure,
+    ) {
         return SectionWriteResult::default();
     }
 
     let overlap = packet_overlap_samples(
-        packet_ts,
-        frame_count,
-        sample_rate,
-        channels,
+        packet.packet_ts,
+        packet.frame_count,
+        params.sample_rate,
+        params.channels,
         &instance.meta.active_windows,
     );
-    let cover_transition = crossfade_ms * sample_rate as usize / 1000;
-    let cover = map_cover(&overlap, samples.len(), Some(cover_transition));
+    let cover_transition = params.crossfade_ms * params.sample_rate as usize / 1000;
+    let cover = map_cover(&overlap, packet.samples.len(), Some(cover_transition));
 
     debug!(
         "Instance {} / Track {} / Time {} / Overlap {:?} / Cover {:?}",
-        instance.meta.instance_id, instance.meta.logical_track_index, packet_ts, overlap, cover,
+        instance.meta.instance_id,
+        instance.meta.logical_track_index,
+        packet.packet_ts,
+        overlap,
+        cover,
     );
 
     let mut write_result = SectionWriteResult::default();
+    let transition = TransitionCtx {
+        cover_transition,
+        sample_rate: params.sample_rate,
+        channels: params.channels,
+    };
     for section in cover {
         let result = BufferMixer::route_cover_section(
             section,
-            samples,
-            packet_ts,
-            cover_transition,
-            sample_rate,
-            channels,
-            decode_backpressure,
-            instance_index,
+            packet.samples,
+            packet.packet_ts,
+            transition,
+            route.decode_backpressure,
+            route.instance_index,
             instance,
         );
         write_result.wrote_real |= result.wrote_real;

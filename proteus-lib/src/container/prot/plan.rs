@@ -6,7 +6,9 @@ use crate::container::play_settings::PlaySettingsFile;
 
 use super::helpers::*;
 use super::schedule::seconds_to_ms;
-use super::types::{RuntimeInstancePlan, ShuffleScheduleEntry, ShuffleSource};
+use super::types::{
+    RuntimeInstancePlan, SegmentRange, ShuffleScheduleEntry, ShuffleSource, SlotPlacement,
+};
 use super::{versioned_tracks, Prot, ProtSource};
 
 impl Prot {
@@ -257,7 +259,8 @@ fn normalize_schedule_sources(schedule: &mut [ShuffleScheduleEntry], slot_count:
 fn collect_event_boundaries(schedule: &[ShuffleScheduleEntry], start_ms: u64) -> Vec<u64> {
     schedule
         .iter()
-        .filter_map(|entry| (entry.at_ms >= start_ms).then(|| entry.at_ms - start_ms))
+        .filter(|entry| entry.at_ms >= start_ms)
+        .map(|entry| entry.at_ms - start_ms)
         .collect()
 }
 
@@ -276,11 +279,14 @@ fn collect_runtime_instances(
             .get(slot_index)
             .copied()
             .unwrap_or((slot_index, 0));
-        next_instance_id = collect_slot_instances(
-            schedule,
+        let placement = SlotPlacement {
             slot_index,
             logical_track_index,
             selection_index,
+        };
+        next_instance_id = collect_slot_instances(
+            schedule,
+            placement,
             start_ms,
             next_instance_id,
             &mut occurrence_counters,
@@ -291,12 +297,9 @@ fn collect_runtime_instances(
     instances
 }
 
-#[allow(clippy::too_many_arguments)]
 fn collect_slot_instances(
     schedule: &[ShuffleScheduleEntry],
-    slot_index: usize,
-    logical_track_index: usize,
-    selection_index: usize,
+    placement: SlotPlacement,
     start_ms: u64,
     mut next_instance_id: usize,
     occurrence_counters: &mut HashMap<(usize, usize), usize>,
@@ -306,7 +309,7 @@ fn collect_slot_instances(
     let mut current_start = 0_u64;
 
     for entry in schedule {
-        let Some(source) = entry.sources.get(slot_index).cloned() else {
+        let Some(source) = entry.sources.get(placement.slot_index).cloned() else {
             continue;
         };
 
@@ -319,12 +322,12 @@ fn collect_slot_instances(
             Some(active_source) => {
                 next_instance_id = push_runtime_instance(
                     next_instance_id,
-                    logical_track_index,
-                    slot_index,
-                    selection_index,
+                    &placement,
                     active_source,
-                    current_start,
-                    Some(entry.at_ms),
+                    SegmentRange {
+                        start_ms: current_start,
+                        end_ms: Some(entry.at_ms),
+                    },
                     start_ms,
                     occurrence_counters,
                     instances,
@@ -338,12 +341,12 @@ fn collect_slot_instances(
     if let Some(source) = current_source.as_ref() {
         next_instance_id = push_runtime_instance(
             next_instance_id,
-            logical_track_index,
-            slot_index,
-            selection_index,
+            &placement,
             source,
-            current_start,
-            None,
+            SegmentRange {
+                start_ms: current_start,
+                end_ms: None,
+            },
             start_ms,
             occurrence_counters,
             instances,
@@ -353,27 +356,20 @@ fn collect_slot_instances(
     next_instance_id
 }
 
-#[allow(clippy::too_many_arguments)]
 fn push_runtime_instance(
     next_instance_id: usize,
-    logical_track_index: usize,
-    slot_index: usize,
-    selection_index: usize,
+    placement: &SlotPlacement,
     source: &ShuffleSource,
-    segment_start_ms: u64,
-    segment_end_ms: Option<u64>,
+    range: SegmentRange,
     start_ms: u64,
     occurrence_counters: &mut HashMap<(usize, usize), usize>,
     instances: &mut Vec<super::types::RuntimeInstanceMeta>,
 ) -> usize {
     if let Some(meta) = build_segment_instance(
         next_instance_id,
-        logical_track_index,
-        slot_index,
-        selection_index,
+        placement,
         source,
-        segment_start_ms,
-        segment_end_ms,
+        range,
         start_ms,
         occurrence_counters,
     ) {

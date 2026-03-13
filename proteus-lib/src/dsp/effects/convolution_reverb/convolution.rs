@@ -3,6 +3,7 @@
 //! Two implementations are provided:
 //! - `real_fft` (default / feature `real-fft`): real FFT using `realfft`.
 //! - `complex_fft` (feature `complex-fft`): full complex FFT using `rustfft`.
+//!
 //! Note: when both features are enabled, `real_fft` is used.
 
 #[cfg(all(feature = "complex-fft", not(feature = "real-fft")))]

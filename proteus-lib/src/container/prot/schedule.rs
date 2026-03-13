@@ -81,6 +81,13 @@ pub(super) fn build_id_shuffle_schedule(
     (schedule, longest_duration)
 }
 
+struct ScheduleBuildState<'a> {
+    shuffle_timestamps: &'a mut BTreeSet<u64>,
+    slot_candidates: &'a mut Vec<Vec<String>>,
+    slot_points: &'a mut Vec<HashSet<u64>>,
+    current_paths: &'a mut Vec<String>,
+}
+
 pub(super) fn build_paths_shuffle_schedule(
     tracks: &[PathsTrack],
     info: &Info,
@@ -99,14 +106,17 @@ pub(super) fn build_paths_shuffle_schedule(
     shuffle_timestamps.insert(0);
 
     for track in tracks {
+        let mut state = ScheduleBuildState {
+            shuffle_timestamps: &mut shuffle_timestamps,
+            slot_candidates: &mut slot_candidates,
+            slot_points: &mut slot_points,
+            current_paths: &mut current_paths,
+        };
         longest_duration = append_path_track_slots(
             track,
             info,
             &dictionary_lookup,
-            &mut shuffle_timestamps,
-            &mut slot_candidates,
-            &mut slot_points,
-            &mut current_paths,
+            &mut state,
             longest_duration,
         );
     }
@@ -152,15 +162,11 @@ pub(super) fn build_paths_shuffle_schedule(
     (schedule, longest_duration)
 }
 
-#[allow(clippy::too_many_arguments)]
 fn append_path_track_slots(
     track: &PathsTrack,
     info: &Info,
     dictionary_lookup: &std::collections::HashMap<&str, u32>,
-    shuffle_timestamps: &mut BTreeSet<u64>,
-    slot_candidates: &mut Vec<Vec<String>>,
-    slot_points: &mut Vec<HashSet<u64>>,
-    current_paths: &mut Vec<String>,
+    state: &mut ScheduleBuildState<'_>,
     mut longest_duration: f64,
 ) -> f64 {
     if track.file_paths.is_empty() {
@@ -174,16 +180,16 @@ fn append_path_track_slots(
 
     let points = parse_shuffle_points(&track.shuffle_points);
     for point in &points {
-        shuffle_timestamps.insert(*point);
+        state.shuffle_timestamps.insert(*point);
     }
     let point_set: HashSet<u64> = points.into_iter().collect();
     for _ in 0..selections {
-        slot_candidates.push(track.file_paths.clone());
-        slot_points.push(point_set.clone());
+        state.slot_candidates.push(track.file_paths.clone());
+        state.slot_points.push(point_set.clone());
         let choice = random_path(&track.file_paths);
         longest_duration =
             update_longest_duration_for_path(info, dictionary_lookup, &choice, longest_duration);
-        current_paths.push(choice);
+        state.current_paths.push(choice);
     }
 
     longest_duration

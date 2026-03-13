@@ -3,10 +3,11 @@
 //! This module prepares shared state, resets per-run counters, and spawns the
 //! worker loop that performs decoding handoff and sink append operations.
 
-use log::debug;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread;
+
+use log::debug;
 
 use super::super::Player;
 use super::now_ms;

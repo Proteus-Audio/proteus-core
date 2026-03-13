@@ -6,7 +6,9 @@ use crate::container::info::Info;
 use crate::container::play_settings::{PlaySettingsLegacy, SettingsTrack};
 
 use super::schedule::parse_shuffle_points;
-use super::types::{ActiveWindow, PathsTrack, RuntimeInstanceMeta, ShuffleSource};
+use super::types::{
+    ActiveWindow, PathsTrack, RuntimeInstanceMeta, SegmentRange, ShuffleSource, SlotPlacement,
+};
 
 pub(super) fn sanitize_level(level: f32) -> f32 {
     if level.is_finite() {
@@ -96,20 +98,16 @@ pub(super) fn build_slot_layout(
     (layout, logical_track_count.max(slot_spans.len()))
 }
 
-#[allow(clippy::too_many_arguments)]
 pub(super) fn build_segment_instance(
     instance_id: usize,
-    logical_track_index: usize,
-    slot_index: usize,
-    selection_index: usize,
+    placement: &SlotPlacement,
     source: &ShuffleSource,
-    segment_start_ms: u64,
-    segment_end_ms: Option<u64>,
+    range: SegmentRange,
     start_ms: u64,
     occurrence_counters: &mut HashMap<(usize, usize), usize>,
 ) -> Option<RuntimeInstanceMeta> {
-    let clipped_start = segment_start_ms.max(start_ms);
-    let clipped_end = segment_end_ms.map(|end| end.max(start_ms));
+    let clipped_start = range.start_ms.max(start_ms);
+    let clipped_end = range.end_ms.map(|end| end.max(start_ms));
     if let Some(end) = clipped_end {
         if end <= clipped_start {
             return None;
@@ -118,20 +116,20 @@ pub(super) fn build_segment_instance(
 
     let relative_start = clipped_start.saturating_sub(start_ms);
     let relative_end = clipped_end.map(|end| end.saturating_sub(start_ms));
-    let key = (logical_track_index, selection_index);
+    let key = (placement.logical_track_index, placement.selection_index);
     let occurrence_index = occurrence_counters.get(&key).copied().unwrap_or(0);
     occurrence_counters.insert(key, occurrence_index + 1);
 
     Some(RuntimeInstanceMeta {
         instance_id,
-        logical_track_index,
-        slot_index,
+        logical_track_index: placement.logical_track_index,
+        slot_index: placement.slot_index,
         source_key: source.clone(),
         active_windows: vec![ActiveWindow {
             start_ms: relative_start,
             end_ms: relative_end,
         }],
-        selection_index,
+        selection_index: placement.selection_index,
         occurrence_index,
     })
 }

@@ -12,8 +12,22 @@ use crate::playback::engine::{DspChainMetrics, InlineEffectsUpdate, InlineTrackM
 
 use super::super::buffer_mixer::{BufferMixer, DecodeBackpressure};
 use super::super::decoder_events::DecodeWorkerEvent;
-use super::super::types::ActiveInlineTransition;
+use super::super::types::{ActiveInlineTransition, MixThreadArgs};
 use super::decode::DecodeWorkerJoinGuard;
+
+/// Precomputed mixing buffer sizes.
+pub(super) struct MixBufferSizes {
+    pub start_samples: usize,
+    pub min_mix_samples: usize,
+    pub convolution_batch_samples: usize,
+}
+
+/// Decode infrastructure built during startup.
+pub(super) struct MixDecodeHandle {
+    pub decode_backpressure: Arc<DecodeBackpressure>,
+    pub packet_rx: mpsc::Receiver<DecodeWorkerEvent>,
+    pub decode_workers: DecodeWorkerJoinGuard,
+}
 
 pub(super) struct MixLoopState {
     pub(super) abort: Arc<AtomicBool>,
@@ -62,48 +76,35 @@ pub(super) struct MixLoopState {
 }
 
 impl MixLoopState {
-    #[allow(clippy::too_many_arguments)]
     pub(super) fn new(
+        args: MixThreadArgs,
         sender: mpsc::SyncSender<(SamplesBuffer, f64)>,
-        audio_info: Info,
-        buffer_notify: Arc<Condvar>,
-        effects_reset: Arc<AtomicU64>,
-        inline_effects_update: Arc<Mutex<Option<InlineEffectsUpdate>>>,
-        inline_track_mix_updates: Arc<Mutex<Vec<InlineTrackMixUpdate>>>,
-        finished_tracks: Arc<Mutex<Vec<u16>>>,
-        prot: Arc<Mutex<Prot>>,
-        abort: Arc<AtomicBool>,
-        effects: Arc<Mutex<Vec<AudioEffect>>>,
-        dsp_metrics: Arc<Mutex<DspChainMetrics>>,
         buffer_mixer: BufferMixer,
-        decode_backpressure: Arc<DecodeBackpressure>,
-        packet_rx: mpsc::Receiver<DecodeWorkerEvent>,
-        decode_workers: DecodeWorkerJoinGuard,
         effect_context: EffectContext,
-        convolution_batch_samples: usize,
-        start_samples: usize,
-        min_mix_samples: usize,
+        sizes: MixBufferSizes,
+        decode_handle: MixDecodeHandle,
     ) -> Self {
-        let last_effects_reset = effects_reset.load(std::sync::atomic::Ordering::SeqCst);
+        let last_effects_reset = args.effects_reset.load(std::sync::atomic::Ordering::SeqCst);
+        let start_samples = sizes.start_samples;
         Self {
-            abort,
-            packet_rx,
+            abort: args.abort,
+            packet_rx: decode_handle.packet_rx,
             buffer_mixer,
-            decode_backpressure,
-            effects,
+            decode_backpressure: decode_handle.decode_backpressure,
+            effects: args.effects,
             effect_context,
             sender,
-            buffer_notify,
-            audio_info,
-            dsp_metrics,
-            inline_track_mix_updates,
-            inline_effects_update,
-            effects_reset,
-            prot,
-            finished_tracks,
-            convolution_batch_samples,
+            buffer_notify: args.buffer_notify,
+            audio_info: args.audio_info,
+            dsp_metrics: args.dsp_metrics,
+            inline_track_mix_updates: args.inline_track_mix_updates,
+            inline_effects_update: args.inline_effects_update,
+            effects_reset: args.effects_reset,
+            prot: args.prot,
+            finished_tracks: args.finished_tracks,
+            convolution_batch_samples: sizes.convolution_batch_samples,
             start_samples,
-            min_mix_samples,
+            min_mix_samples: sizes.min_mix_samples,
             started: start_samples == 0,
             last_effects_reset,
             active_inline_transition: None,
@@ -116,7 +117,7 @@ impl MixLoopState {
             logged_start_gate: false,
             logged_first_take_samples: false,
             logged_first_output_send: false,
-            decode_workers,
+            decode_workers: decode_handle.decode_workers,
             #[cfg(feature = "debug")]
             alpha: 0.1,
             #[cfg(feature = "debug")]

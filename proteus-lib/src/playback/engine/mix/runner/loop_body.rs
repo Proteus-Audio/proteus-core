@@ -90,7 +90,7 @@ fn take_next_samples(state: &mut MixLoopState, startup_trace: Instant) -> Option
         let missing = batch.saturating_sub(state.pending_mix_samples.len());
         state
             .pending_mix_samples
-            .extend(std::iter::repeat(0.0).take(missing));
+            .extend(std::iter::repeat_n(0.0_f32, missing));
         return Some(std::mem::take(&mut state.pending_mix_samples));
     }
     None

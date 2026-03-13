@@ -66,3 +66,16 @@ impl PathsTrack {
         }
     }
 }
+
+/// Slot identity within the schedule layout.
+pub(super) struct SlotPlacement {
+    pub slot_index: usize,
+    pub logical_track_index: usize,
+    pub selection_index: usize,
+}
+
+/// Relative segment time range in milliseconds.
+pub(super) struct SegmentRange {
+    pub start_ms: u64,
+    pub end_ms: Option<u64>,
+}

@@ -1,9 +1,9 @@
 //! Container demux decode worker (single demuxer feeding multiple track decoders).
 
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::sync::mpsc;
-use std::sync::Arc;
 use std::thread;
 use std::thread::JoinHandle;
 use std::time::Instant;
@@ -16,7 +16,9 @@ use symphonia::core::units::{Time, TimeBase};
 
 use super::super::super::buffer_mixer::{DecodeBackpressure, SourceKey};
 use super::super::super::decoder_events::DecodeWorkerEvent;
-use super::{forward_decoded_packet, interleaved_samples, packet_ts_seconds};
+use super::{
+    ForwardInfra, StartupLog, forward_decoded_packet, interleaved_samples, packet_ts_seconds,
+};
 
 /// Spawn a single demux decode worker that services multiple container track ids.
 pub(crate) fn spawn_container_decode_worker(
@@ -63,6 +65,12 @@ fn run_container_decode_worker(
     };
 
     seek_container_reader(format.as_mut(), start_time, &file_path, &sender, &decoders);
+    let infra = ForwardInfra {
+        sender: &sender,
+        decode_backpressure: decode_backpressure.as_ref(),
+        abort: abort.as_ref(),
+        startup_trace,
+    };
     decode_container_packets(
         format.as_mut(),
         &mut decoders,
@@ -70,10 +78,7 @@ fn run_container_decode_worker(
         &sample_rates,
         start_time,
         channels,
-        &sender,
-        abort.as_ref(),
-        decode_backpressure.as_ref(),
-        startup_trace,
+        infra,
     );
     finish_container_sources(&wanted, &sender);
 }
@@ -178,7 +183,6 @@ fn seek_container_reader(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 fn decode_container_packets(
     format: &mut dyn symphonia::core::formats::FormatReader,
     decoders: &mut HashMap<u32, Box<dyn Decoder>>,
@@ -186,22 +190,21 @@ fn decode_container_packets(
     sample_rates: &HashMap<u32, Option<u32>>,
     start_time: f64,
     channels: u8,
-    sender: &mpsc::SyncSender<DecodeWorkerEvent>,
-    abort: &std::sync::atomic::AtomicBool,
-    decode_backpressure: &DecodeBackpressure,
-    startup_trace: Instant,
+    infra: ForwardInfra<'_>,
 ) {
-    let mut logged_first_ready = false;
-    let mut logged_first_send = false;
+    let mut log = StartupLog {
+        logged_first_ready: false,
+        logged_first_send: false,
+    };
     loop {
-        if abort.load(Ordering::Relaxed) {
+        if infra.abort.load(Ordering::Relaxed) {
             break;
         }
 
         let packet = match format.next_packet() {
             Ok(packet) => packet,
             Err(_) => {
-                let _ = sender.send(DecodeWorkerEvent::StreamExhausted);
+                let _ = infra.sender.send(DecodeWorkerEvent::StreamExhausted);
                 break;
             }
         };
@@ -217,35 +220,20 @@ fn decode_container_packets(
             start_time,
         );
         if !decode_and_forward_container_packet(
-            decoder,
-            &packet,
-            track_id,
-            channels,
-            sender,
-            abort,
-            decode_backpressure,
-            startup_trace,
-            &mut logged_first_ready,
-            &mut logged_first_send,
-            packet_ts,
+            decoder, &packet, track_id, channels, &infra, &mut log, packet_ts,
         ) {
             break;
         }
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 fn decode_and_forward_container_packet(
     decoder: &mut Box<dyn Decoder>,
     packet: &symphonia::core::formats::Packet,
     track_id: u32,
     channels: u8,
-    sender: &mpsc::SyncSender<DecodeWorkerEvent>,
-    abort: &std::sync::atomic::AtomicBool,
-    decode_backpressure: &DecodeBackpressure,
-    startup_trace: Instant,
-    logged_first_ready: &mut bool,
-    logged_first_send: &mut bool,
+    infra: &ForwardInfra<'_>,
+    log: &mut StartupLog,
     packet_ts: f64,
 ) -> bool {
     match decoder.decode(packet) {
@@ -259,16 +247,12 @@ fn decode_and_forward_container_packet(
                 SourceKey::TrackId(track_id),
                 packet_ts,
                 samples,
-                sender,
-                decode_backpressure,
-                abort,
-                startup_trace,
-                logged_first_ready,
-                logged_first_send,
+                infra,
+                log,
             )
         }
         Err(Error::DecodeError(err)) => {
-            let _ = sender.send(DecodeWorkerEvent::SourceError {
+            let _ = infra.sender.send(DecodeWorkerEvent::SourceError {
                 source_key: SourceKey::TrackId(track_id),
                 recoverable: true,
                 message: err.to_string(),
@@ -276,7 +260,7 @@ fn decode_and_forward_container_packet(
             true
         }
         Err(err) => {
-            let _ = sender.send(DecodeWorkerEvent::SourceError {
+            let _ = infra.sender.send(DecodeWorkerEvent::SourceError {
                 source_key: SourceKey::TrackId(track_id),
                 recoverable: false,
                 message: err.to_string(),

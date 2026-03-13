@@ -1,8 +1,9 @@
 //! Decode backpressure state and synchronization.
 
-use log::debug;
 use std::collections::HashMap;
 use std::sync::{Condvar, Mutex};
+
+use log::debug;
 
 use super::{BufferInstance, SourceKey};
 
@@ -248,6 +249,13 @@ impl DecodeBackpressure {
     }
 }
 
+struct SourceRoomAccum<'a> {
+    saw_unfinished: &'a mut bool,
+    all_have_target_room: &'a mut bool,
+    source_has_startup_deficit: &'a mut bool,
+    parts: &'a mut Option<Vec<String>>,
+}
+
 #[derive(Debug, Clone)]
 struct SourceRoomStatus {
     allowed: bool,
@@ -280,15 +288,18 @@ fn source_room_status(
     let mut parts = include_details.then(Vec::new);
 
     for instance_index in instance_indices {
+        let mut accum = SourceRoomAccum {
+            saw_unfinished: &mut saw_unfinished,
+            all_have_target_room: &mut all_have_target_room,
+            source_has_startup_deficit: &mut source_has_startup_deficit,
+            parts: &mut parts,
+        };
         update_source_room_state(
             state.instances.get(*instance_index),
             *instance_index,
             startup_target,
             required_samples,
-            &mut saw_unfinished,
-            &mut all_have_target_room,
-            &mut source_has_startup_deficit,
-            &mut parts,
+            &mut accum,
         );
     }
 
@@ -337,38 +348,34 @@ fn source_room_status(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 fn update_source_room_state(
     instance: Option<&DecodeBackpressureInstance>,
     instance_index: usize,
     startup_target: Option<usize>,
     required_samples: usize,
-    saw_unfinished: &mut bool,
-    all_have_target_room: &mut bool,
-    source_has_startup_deficit: &mut bool,
-    parts: &mut Option<Vec<String>>,
+    accum: &mut SourceRoomAccum<'_>,
 ) {
     let Some(instance) = instance else {
         return;
     };
     if instance.finished {
-        if let Some(parts) = parts.as_mut() {
+        if let Some(parts) = accum.parts.as_mut() {
             parts.push(format!("i{}:finished", instance_index));
         }
         return;
     }
 
-    *saw_unfinished = true;
+    *accum.saw_unfinished = true;
     let occupied = occupied_samples(instance);
     let free = instance.capacity_samples.saturating_sub(occupied);
     if startup_target.is_some_and(|target| occupied < target.min(instance.capacity_samples.max(1)))
     {
-        *source_has_startup_deficit = true;
+        *accum.source_has_startup_deficit = true;
     }
 
     let target_room = required_samples.min(instance.capacity_samples.max(1));
-    *all_have_target_room &= free >= target_room;
-    if let Some(parts) = parts.as_mut() {
+    *accum.all_have_target_room &= free >= target_room;
+    if let Some(parts) = accum.parts.as_mut() {
         parts.push(format!(
             "i{}:buf={} res={} /{} free={} target={}",
             instance_index,

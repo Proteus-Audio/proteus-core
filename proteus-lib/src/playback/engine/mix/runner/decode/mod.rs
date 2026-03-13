@@ -4,17 +4,30 @@ mod container_worker;
 mod file_worker;
 
 use std::thread::JoinHandle;
-use std::time::Instant;
 
 use log::{debug, info, warn};
 use symphonia::core::audio::AudioBufferRef;
 use symphonia::core::units::TimeBase;
 
-use super::super::buffer_mixer::{DecodeBackpressure, SourceKey};
+use super::super::buffer_mixer::SourceKey;
 use super::super::decoder_events::{DecodeWorkerEvent, DecodedPacket};
 
 pub(super) use container_worker::spawn_container_decode_worker;
 pub(super) use file_worker::spawn_file_decode_worker;
+
+/// Shared decode-worker context passed to `forward_decoded_packet`.
+pub(super) struct ForwardInfra<'a> {
+    pub sender: &'a std::sync::mpsc::SyncSender<super::super::decoder_events::DecodeWorkerEvent>,
+    pub decode_backpressure: &'a super::super::buffer_mixer::DecodeBackpressure,
+    pub abort: &'a std::sync::atomic::AtomicBool,
+    pub startup_trace: std::time::Instant,
+}
+
+/// Per-worker startup logging state.
+pub(super) struct StartupLog {
+    pub logged_first_ready: bool,
+    pub logged_first_send: bool,
+}
 
 /// Ensures decode workers are joined during mix-thread teardown.
 #[derive(Default)]
@@ -91,12 +104,8 @@ pub(super) fn forward_decoded_packet(
     source_key: SourceKey,
     packet_ts: f64,
     samples: Vec<f32>,
-    sender: &std::sync::mpsc::SyncSender<DecodeWorkerEvent>,
-    decode_backpressure: &DecodeBackpressure,
-    abort: &std::sync::atomic::AtomicBool,
-    startup_trace: Instant,
-    logged_first_ready: &mut bool,
-    logged_first_send: &mut bool,
+    infra: &ForwardInfra<'_>,
+    log: &mut StartupLog,
 ) -> bool {
     debug!(
         "{} decode packet ready: source={:?} ts={:.6} samples={}",
@@ -105,19 +114,22 @@ pub(super) fn forward_decoded_packet(
         packet_ts,
         samples.len()
     );
-    if !*logged_first_ready {
-        *logged_first_ready = true;
+    if !log.logged_first_ready {
+        log.logged_first_ready = true;
         info!(
             "mix startup trace: {} worker first decoded packet ready in {}ms (source={:?} ts={:.6} samples={})",
             worker_label,
-            startup_trace.elapsed().as_millis(),
+            infra.startup_trace.elapsed().as_millis(),
             source_key,
             packet_ts,
             samples.len()
         );
     }
 
-    if !decode_backpressure.wait_for_source_room(&source_key, samples.len(), abort) {
+    if !infra
+        .decode_backpressure
+        .wait_for_source_room(&source_key, samples.len(), infra.abort)
+    {
         debug!(
             "{} decode wait interrupted: source={:?} ts={:.6} samples={}",
             worker_label,
@@ -135,7 +147,8 @@ pub(super) fn forward_decoded_packet(
         packet_ts,
         samples.len()
     );
-    if sender
+    if infra
+        .sender
         .send(DecodeWorkerEvent::Packet(DecodedPacket {
             source_key: source_key.clone(),
             packet_ts,
@@ -145,12 +158,12 @@ pub(super) fn forward_decoded_packet(
     {
         return false;
     }
-    if !*logged_first_send {
-        *logged_first_send = true;
+    if !log.logged_first_send {
+        log.logged_first_send = true;
         info!(
             "mix startup trace: {} worker first packet sent in {}ms (source={:?})",
             worker_label,
-            startup_trace.elapsed().as_millis(),
+            infra.startup_trace.elapsed().as_millis(),
             source_key
         );
     }

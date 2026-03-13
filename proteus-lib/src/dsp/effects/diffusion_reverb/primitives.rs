@@ -10,6 +10,17 @@ const DRAIN_SILENCE_EPSILON: f32 = 1.0e-6;
 // Require a short run of silent frames before declaring the tail finished.
 const DRAIN_SILENT_FRAMES_TO_STOP: usize = 128;
 
+// Maps the [0,1] diffusion control to separate input/output allpass coefficients.
+// The base and slope values were tuned to balance early smear against late-tail density.
+const INPUT_DIFFUSION_BASE: f32 = 0.25;
+const INPUT_DIFFUSION_SLOPE: f32 = 0.35;
+const INPUT_DIFFUSION_MIN: f32 = 0.1;
+const INPUT_DIFFUSION_MAX: f32 = 0.7;
+const OUTPUT_DIFFUSION_BASE: f32 = 0.2;
+const OUTPUT_DIFFUSION_SLOPE: f32 = 0.45;
+const OUTPUT_DIFFUSION_MIN: f32 = 0.1;
+const OUTPUT_DIFFUSION_MAX: f32 = 0.8;
+
 #[derive(Clone)]
 /// Runtime state for the diffusion reverb effect.
 ///
@@ -56,8 +67,7 @@ impl DiffusionReverbState {
         out: &mut Vec<f32>,
     ) {
         let channels = self.channels.max(1);
-        let input_diffusion = (0.25 + diffusion * 0.35).clamp(0.1, 0.7);
-        let output_diffusion = (0.2 + diffusion * 0.45).clamp(0.1, 0.8);
+        let (input_diffusion, output_diffusion) = diffusion_coeffs(diffusion);
 
         for frame in samples.chunks_exact(channels) {
             for (channel, &sample) in frame.iter().enumerate() {
@@ -81,8 +91,7 @@ impl DiffusionReverbState {
 
     /// Drain the buffered reverb tail by feeding silence through all lanes.
     pub(super) fn drain_tail(&mut self, decay: f32, damping: f32, diffusion: f32) -> Vec<f32> {
-        let input_diffusion = (0.25 + diffusion * 0.35).clamp(0.1, 0.7);
-        let output_diffusion = (0.2 + diffusion * 0.45).clamp(0.1, 0.8);
+        let (input_diffusion, output_diffusion) = diffusion_coeffs(diffusion);
         let max_tail_frames = self
             .tuning
             .max_delay
@@ -340,6 +349,18 @@ impl OnePoleLowpass {
         self.state = input * (1.0 - smoothing) + self.state * smoothing;
         self.state
     }
+}
+
+/// Map the normalised `diffusion` control to `(input_coeff, output_coeff)`.
+///
+/// Separate coefficients let early smearing (input) and late-tail smoothing
+/// (output) be balanced independently.
+fn diffusion_coeffs(diffusion: f32) -> (f32, f32) {
+    let input = (INPUT_DIFFUSION_BASE + diffusion * INPUT_DIFFUSION_SLOPE)
+        .clamp(INPUT_DIFFUSION_MIN, INPUT_DIFFUSION_MAX);
+    let output = (OUTPUT_DIFFUSION_BASE + diffusion * OUTPUT_DIFFUSION_SLOPE)
+        .clamp(OUTPUT_DIFFUSION_MIN, OUTPUT_DIFFUSION_MAX);
+    (input, output)
 }
 
 /// Convert milliseconds to per-channel sample counts.

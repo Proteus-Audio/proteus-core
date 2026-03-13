@@ -16,84 +16,79 @@ use super::super::types::MixThreadArgs;
 use super::decode::{
     spawn_container_decode_worker, spawn_file_decode_worker, DecodeWorkerJoinGuard,
 };
-use super::state::MixLoopState;
+use super::state::{MixBufferSizes, MixDecodeHandle, MixLoopState};
+
+struct SpawnDecodeArgs {
+    container_path: Option<String>,
+    start_time: f64,
+    channels: u8,
+    startup_gate_samples: usize,
+}
+
+struct DecodeSources {
+    container_path: Option<String>,
+    track_ids: HashSet<u32>,
+    file_paths: HashSet<String>,
+    start_time: f64,
+    channels: u8,
+}
 
 pub(super) fn setup_mix_state(
     args: MixThreadArgs,
     sender: mpsc::SyncSender<(SamplesBuffer, f64)>,
     startup_trace: Instant,
 ) -> Option<MixLoopState> {
-    let MixThreadArgs {
-        audio_info,
-        buffer_notify,
-        effects_reset,
-        inline_effects_update,
-        inline_track_mix_updates,
-        finished_tracks,
-        prot,
-        abort,
-        start_time,
-        buffer_settings,
-        effects,
-        dsp_metrics,
-    } = args;
     info!("mix startup trace: thread start");
 
-    let startup = prepare_runtime_startup(&prot, start_time);
+    let startup = prepare_runtime_startup(&args.prot, args.start_time);
     info!(
         "mix startup trace: runtime plan built in {}ms (instances={})",
         startup_trace.elapsed().as_millis(),
         startup.instance_plan.instances.len()
     );
     if startup.instance_plan.instances.is_empty() {
-        abort.store(true, Ordering::SeqCst);
+        args.abort.store(true, Ordering::SeqCst);
         return None;
     }
 
-    let (start_samples, min_mix_samples, convolution_batch_samples) =
-        compute_mix_buffer_sizes(&audio_info, &buffer_settings, &effects);
+    let sizes = compute_mix_buffer_sizes(&args.audio_info, &args.buffer_settings, &args.effects);
     let track_mix_by_logical = build_track_mix_map(
         &startup.instance_plan.instances,
         &startup.track_mix_settings_by_slot,
     );
-    let track_buffer_size = ((audio_info.sample_rate as usize * 10)
-        * audio_info.channels.max(1) as usize)
-        .max(start_samples * 2);
+    let track_buffer_size = ((args.audio_info.sample_rate as usize * 10)
+        * args.audio_info.channels.max(1) as usize)
+        .max(sizes.start_samples * 2);
     let buffer_mixer = BufferMixer::new(
         startup.instance_plan,
-        audio_info.sample_rate,
-        audio_info.channels.max(1) as usize,
+        args.audio_info.sample_rate,
+        args.audio_info.channels.max(1) as usize,
         track_buffer_size,
         track_mix_by_logical,
-        min_mix_samples,
+        sizes.min_mix_samples,
     );
     info!(
         "mix startup trace: buffer_mixer ready in {}ms (track_buffer_size={} min_mix_samples={} start_samples={})",
         startup_trace.elapsed().as_millis(),
         track_buffer_size,
-        min_mix_samples,
-        start_samples
+        sizes.min_mix_samples,
+        sizes.start_samples
     );
 
+    let spawn_args = SpawnDecodeArgs {
+        container_path: startup.container_path,
+        start_time: args.start_time,
+        channels: args.audio_info.channels as u8,
+        startup_gate_samples: sizes.start_samples.max(sizes.min_mix_samples),
+    };
+
     Some(finalize_mix_startup(
+        args,
         sender,
-        audio_info,
-        buffer_notify,
-        effects_reset,
-        inline_effects_update,
-        inline_track_mix_updates,
-        finished_tracks,
-        prot,
-        abort,
-        effects,
-        dsp_metrics,
         buffer_mixer,
-        startup.container_path,
         startup.effect_context,
-        start_time,
-        convolution_batch_samples,
-        start_samples,
-        min_mix_samples,
+        sizes,
+        spawn_args,
         startup_trace,
     ))
 }
@@ -126,65 +121,43 @@ fn prepare_runtime_startup(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 fn finalize_mix_startup(
+    args: MixThreadArgs,
     sender: mpsc::SyncSender<(SamplesBuffer, f64)>,
-    audio_info: crate::container::info::Info,
-    buffer_notify: Arc<std::sync::Condvar>,
-    effects_reset: Arc<std::sync::atomic::AtomicU64>,
-    inline_effects_update: Arc<
-        std::sync::Mutex<Option<crate::playback::engine::InlineEffectsUpdate>>,
-    >,
-    inline_track_mix_updates: Arc<
-        std::sync::Mutex<Vec<crate::playback::engine::InlineTrackMixUpdate>>,
-    >,
-    finished_tracks: Arc<std::sync::Mutex<Vec<u16>>>,
-    prot: Arc<std::sync::Mutex<crate::container::prot::Prot>>,
-    abort: Arc<std::sync::atomic::AtomicBool>,
-    effects: Arc<std::sync::Mutex<Vec<AudioEffect>>>,
-    dsp_metrics: Arc<std::sync::Mutex<crate::playback::engine::DspChainMetrics>>,
     buffer_mixer: BufferMixer,
-    container_path: Option<String>,
     effect_context: EffectContext,
-    start_time: f64,
-    convolution_batch_samples: usize,
-    start_samples: usize,
-    min_mix_samples: usize,
+    sizes: MixBufferSizes,
+    spawn_args: SpawnDecodeArgs,
     startup_trace: Instant,
 ) -> MixLoopState {
     let decode_backpressure = buffer_mixer.decode_backpressure();
     let (packet_rx, decode_workers) = spawn_mix_decode_workers(
         &buffer_mixer,
-        container_path,
-        start_time,
-        audio_info.channels as u8,
-        start_samples.max(min_mix_samples),
+        spawn_args,
         &decode_backpressure,
-        &abort,
+        &args.abort,
         startup_trace,
     );
-    warm_up_effects(&effects, &effect_context, min_mix_samples, startup_trace);
+    warm_up_effects(
+        &args.effects,
+        &effect_context,
+        sizes.min_mix_samples,
+        startup_trace,
+    );
 
-    MixLoopState::new(
-        sender,
-        audio_info,
-        buffer_notify,
-        effects_reset,
-        inline_effects_update,
-        inline_track_mix_updates,
-        finished_tracks,
-        prot,
-        abort,
-        effects,
-        dsp_metrics,
-        buffer_mixer,
+    let decode_handle = MixDecodeHandle {
         decode_backpressure,
         packet_rx,
         decode_workers,
+    };
+
+    MixLoopState::new(
+        args,
+        sender,
+        buffer_mixer,
         effect_context,
-        convolution_batch_samples,
-        start_samples,
-        min_mix_samples,
+        sizes,
+        decode_handle,
     )
 }
 
@@ -192,7 +165,7 @@ fn compute_mix_buffer_sizes(
     audio_info: &crate::container::info::Info,
     buffer_settings: &Arc<std::sync::Mutex<crate::playback::engine::PlaybackBufferSettings>>,
     effects: &Arc<std::sync::Mutex<Vec<AudioEffect>>>,
-) -> (usize, usize, usize) {
+) -> MixBufferSizes {
     const MIN_MIX_MS: f32 = 30.0;
     let start_buffer_ms = buffer_settings
         .lock()
@@ -217,7 +190,11 @@ fn compute_mix_buffer_sizes(
         min_mix_samples =
             min_mix_samples.div_ceil(convolution_batch_samples) * convolution_batch_samples;
     }
-    (start_samples, min_mix_samples, convolution_batch_samples)
+    MixBufferSizes {
+        start_samples,
+        min_mix_samples,
+        convolution_batch_samples,
+    }
 }
 
 fn build_track_mix_map(
@@ -262,10 +239,7 @@ fn warm_up_effects(
 
 fn spawn_mix_decode_workers(
     buffer_mixer: &BufferMixer,
-    container_path: Option<String>,
-    start_time: f64,
-    channels: u8,
-    startup_gate_samples: usize,
+    spawn_args: SpawnDecodeArgs,
     decode_backpressure: &Arc<DecodeBackpressure>,
     abort: &Arc<AtomicBool>,
     startup_trace: Instant,
@@ -274,15 +248,22 @@ fn spawn_mix_decode_workers(
     let mut decode_workers = DecodeWorkerJoinGuard::default();
     let sources = buffer_mixer.sources();
     let (track_ids, file_paths) = partition_sources(&sources);
-    maybe_enable_startup_priority(decode_backpressure, &file_paths, startup_gate_samples);
+    maybe_enable_startup_priority(
+        decode_backpressure,
+        &file_paths,
+        spawn_args.startup_gate_samples,
+    );
+    let sources_bundle = DecodeSources {
+        container_path: spawn_args.container_path,
+        track_ids,
+        file_paths,
+        start_time: spawn_args.start_time,
+        channels: spawn_args.channels,
+    };
     spawn_decode_workers(
         &mut decode_workers,
         packet_tx.clone(),
-        container_path,
-        track_ids,
-        file_paths,
-        start_time,
-        channels,
+        sources_bundle,
         abort,
         decode_backpressure,
     );
@@ -317,36 +298,31 @@ fn maybe_enable_startup_priority(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 fn spawn_decode_workers(
     decode_workers: &mut DecodeWorkerJoinGuard,
     packet_tx: mpsc::SyncSender<DecodeWorkerEvent>,
-    container_path: Option<String>,
-    track_ids: HashSet<u32>,
-    file_paths: HashSet<String>,
-    start_time: f64,
-    channels: u8,
+    sources: DecodeSources,
     abort: &Arc<AtomicBool>,
     decode_backpressure: &Arc<DecodeBackpressure>,
 ) {
-    if !track_ids.is_empty() {
-        if let Some(path) = container_path {
+    if !sources.track_ids.is_empty() {
+        if let Some(path) = sources.container_path {
             decode_workers.push(spawn_container_decode_worker(
                 path,
-                track_ids.into_iter().collect(),
-                start_time,
-                channels,
+                sources.track_ids.into_iter().collect(),
+                sources.start_time,
+                sources.channels,
                 packet_tx.clone(),
                 abort.clone(),
                 decode_backpressure.clone(),
             ));
         }
     }
-    for path in file_paths {
+    for path in sources.file_paths {
         decode_workers.push(spawn_file_decode_worker(
             path,
-            start_time,
-            channels,
+            sources.start_time,
+            sources.channels,
             packet_tx.clone(),
             abort.clone(),
             decode_backpressure.clone(),

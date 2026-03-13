@@ -1,9 +1,10 @@
 //! Playback-thread lifecycle helpers.
 
-use log::{debug, warn};
 use std::sync::atomic::Ordering;
 use std::thread;
 use std::time::{Duration, Instant};
+
+use log::{debug, warn};
 
 use super::{Player, PlayerState};
 use crate::playback::engine::DspChainMetrics;

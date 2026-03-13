@@ -1,8 +1,8 @@
 //! Standalone-file decode worker.
 
+use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::sync::mpsc;
-use std::sync::Arc;
 use std::thread;
 use std::thread::JoinHandle;
 use std::time::Instant;
@@ -17,7 +17,9 @@ use crate::tools::decode::open_file;
 
 use super::super::super::buffer_mixer::{DecodeBackpressure, SourceKey};
 use super::super::super::decoder_events::DecodeWorkerEvent;
-use super::{forward_decoded_packet, interleaved_samples, packet_ts_seconds};
+use super::{
+    ForwardInfra, StartupLog, forward_decoded_packet, interleaved_samples, packet_ts_seconds,
+};
 
 /// Spawn a decode worker for one standalone audio file source.
 pub(crate) fn spawn_file_decode_worker(
@@ -65,6 +67,12 @@ fn run_file_decode_worker(
         &source_key,
         &sender,
     );
+    let infra = ForwardInfra {
+        sender: &sender,
+        decode_backpressure: decode_backpressure.as_ref(),
+        abort: abort.as_ref(),
+        startup_trace,
+    };
     decode_file_packets(
         &mut decoder,
         format.as_mut(),
@@ -72,10 +80,7 @@ fn run_file_decode_worker(
         start_time,
         channels,
         &source_key,
-        &sender,
-        abort.as_ref(),
-        decode_backpressure.as_ref(),
-        startup_trace,
+        infra,
     );
     let _ = sender.send(DecodeWorkerEvent::SourceFinished { source_key });
 }
@@ -155,7 +160,6 @@ fn seek_file_reader(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 fn decode_file_packets(
     decoder: &mut Box<dyn symphonia::core::codecs::Decoder>,
     format: &mut dyn symphonia::core::formats::FormatReader,
@@ -163,17 +167,16 @@ fn decode_file_packets(
     start_time: f64,
     channels: u8,
     source_key: &SourceKey,
-    sender: &mpsc::SyncSender<DecodeWorkerEvent>,
-    abort: &std::sync::atomic::AtomicBool,
-    decode_backpressure: &DecodeBackpressure,
-    startup_trace: Instant,
+    infra: ForwardInfra<'_>,
 ) {
-    let mut logged_first_ready = false;
-    let mut logged_first_send = false;
+    let mut log = StartupLog {
+        logged_first_ready: false,
+        logged_first_send: false,
+    };
     let time_base = track.codec_params.time_base;
     let sample_rate = track.codec_params.sample_rate;
     loop {
-        if abort.load(Ordering::Relaxed) {
+        if infra.abort.load(Ordering::Relaxed) {
             break;
         }
 
@@ -187,35 +190,20 @@ fn decode_file_packets(
 
         let packet_ts = packet_ts_seconds(packet.ts(), time_base, sample_rate, start_time);
         if !decode_and_forward_file_packet(
-            decoder,
-            &packet,
-            channels,
-            source_key,
-            sender,
-            abort,
-            decode_backpressure,
-            startup_trace,
-            &mut logged_first_ready,
-            &mut logged_first_send,
-            packet_ts,
+            decoder, &packet, channels, source_key, &infra, &mut log, packet_ts,
         ) {
             break;
         }
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 fn decode_and_forward_file_packet(
     decoder: &mut Box<dyn symphonia::core::codecs::Decoder>,
     packet: &symphonia::core::formats::Packet,
     channels: u8,
     source_key: &SourceKey,
-    sender: &mpsc::SyncSender<DecodeWorkerEvent>,
-    abort: &std::sync::atomic::AtomicBool,
-    decode_backpressure: &DecodeBackpressure,
-    startup_trace: Instant,
-    logged_first_ready: &mut bool,
-    logged_first_send: &mut bool,
+    infra: &ForwardInfra<'_>,
+    log: &mut StartupLog,
     packet_ts: f64,
 ) -> bool {
     match decoder.decode(packet) {
@@ -224,21 +212,10 @@ fn decode_and_forward_file_packet(
             if samples.is_empty() {
                 return true;
             }
-            forward_decoded_packet(
-                "file",
-                source_key.clone(),
-                packet_ts,
-                samples,
-                sender,
-                decode_backpressure,
-                abort,
-                startup_trace,
-                logged_first_ready,
-                logged_first_send,
-            )
+            forward_decoded_packet("file", source_key.clone(), packet_ts, samples, infra, log)
         }
         Err(Error::DecodeError(err)) => {
-            let _ = sender.send(DecodeWorkerEvent::SourceError {
+            let _ = infra.sender.send(DecodeWorkerEvent::SourceError {
                 source_key: source_key.clone(),
                 recoverable: true,
                 message: err.to_string(),
@@ -246,7 +223,7 @@ fn decode_and_forward_file_packet(
             true
         }
         Err(err) => {
-            let _ = sender.send(DecodeWorkerEvent::SourceError {
+            let _ = infra.sender.send(DecodeWorkerEvent::SourceError {
                 source_key: source_key.clone(),
                 recoverable: false,
                 message: err.to_string(),
