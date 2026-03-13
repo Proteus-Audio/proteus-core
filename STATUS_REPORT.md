@@ -222,31 +222,31 @@ The test suite for `AudioEffect` covers both round-trip serialization and aliase
 
 ## Summary Table
 
-| Severity | Issue                                                                                                     |
-| -------- | --------------------------------------------------------------------------------------------------------- |
-| Critical | Panics on mismatched track sample rates / channel layouts / bit depth (`container/info.rs` 471, 478, 488) |
-| Critical | `catch_unwind` used as error handling for expected error conditions                                       |
-| High     | Panic if container has no decodable audio track (`track/single.rs`)                                       |
-| High     | Panic on file permission error (`container/info.rs` line 73)                                              |
-| High     | Per-chunk Vec allocations in the effect chain hot path                                                    |
-| High     | Atomic ordering inconsistency on `playback_thread_exists` and `buffering_done`                            |
-| Medium   | Silent seek failure with no log or signal                                                                 |
-| Medium   | Decode errors silently discarded in decode loop                                                           |
-| Medium   | Track weighting unimplemented for standalone file mode (TODO)                                             |
-| Medium   | `Condvar::wait()` without timeout in backpressure                                                         |
-| Medium   | Float-to-usize cast without explicit sign guard                                                           |
-| Medium   | O(n) `VecDeque::drain` in premix buffer                                                                   |
-| Medium   | HashMap lookups inside tight mixing loop                                                                  |
-| Low      | `runner.rs` 749 lines, multiple concerns                                                                  |
-| Low      | ~50 `.lock().unwrap()` calls, no poisoning strategy                                                       |
-| Low      | Dead code (`add_samples_to_buffer_map_nonblocking`)                                                       |
-| Low      | Deprecated `BasicReverb` variant still actively matched                                                   |
-| Low      | Internal mixing types (`RuntimeInstancePlan` etc.) exposed publicly                                       |
-| Low      | `EffectContext` with fully public fields, no invariant enforcement                                        |
-| Good     | Virtual zero-fill aligned buffer                                                                          |
-| Good     | Convolution IR and kernel caching                                                                         |
-| Good     | Per-channel diffusion reverb decorrelation                                                                |
-| Good     | Versioned play settings with graceful fallback                                                            |
-| Good     | Backpressure / decode throttle design                                                                     |
-| Good     | Numeric stability guards in DSP code                                                                      |
-| Good     | Effect chain interface with `drain` flag and `warm_up`                                                    |
+| Severity | Completed | Issue                                                                                                     |
+| -------- | --------- | --------------------------------------------------------------------------------------------------------- |
+| Critical | Yes       | Panics on mismatched track sample rates / channel layouts / bit depth (`container/info.rs` 471, 478, 488) |
+| Critical | Yes       | `catch_unwind` used as error handling for expected error conditions                                       |
+| High     | Yes       | Panic if container has no decodable audio track (`track/single.rs`)                                       |
+| High     | Yes       | Panic on file permission error (`container/info.rs` line 73)                                              |
+| High     | No        | Per-chunk Vec allocations in the effect chain hot path                                                    |
+| High     | No        | Atomic ordering inconsistency on `playback_thread_exists` and `buffering_done`                            |
+| Medium   | No        | Silent seek failure with no log or signal                                                                 |
+| Medium   | Yes       | Decode errors silently discarded in decode loop                                                           |
+| Medium   | No        | Track weighting unimplemented for standalone file mode (TODO)                                             |
+| Medium   | No        | `Condvar::wait()` without timeout in backpressure                                                         |
+| Medium   | No        | Float-to-usize cast without explicit sign guard                                                           |
+| Medium   | No        | O(n) `VecDeque::drain` in premix buffer                                                                   |
+| Medium   | No        | HashMap lookups inside tight mixing loop                                                                  |
+| Low      | Yes       | `runner.rs` 749 lines, multiple concerns                                                                  |
+| Low      | No        | ~50 `.lock().unwrap()` calls, no poisoning strategy                                                       |
+| Low      | Yes       | Dead code (`add_samples_to_buffer_map_nonblocking`)                                                       |
+| Low      | Yes       | Deprecated `BasicReverb` variant still actively matched                                                   |
+| Low      | Yes       | Internal mixing types (`RuntimeInstancePlan` etc.) exposed publicly                                       |
+| Low      | No        | `EffectContext` with fully public fields, no invariant enforcement                                        |
+| Good     | n/a       | Virtual zero-fill aligned buffer                                                                          |
+| Good     | n/a       | Convolution IR and kernel caching                                                                         |
+| Good     | n/a       | Per-channel diffusion reverb decorrelation                                                                |
+| Good     | n/a       | Versioned play settings with graceful fallback                                                            |
+| Good     | n/a       | Backpressure / decode throttle design                                                                     |
+| Good     | n/a       | Numeric stability guards in DSP code                                                                      |
+| Good     | n/a       | Effect chain interface with `drain` flag and `warm_up`                                                    |
