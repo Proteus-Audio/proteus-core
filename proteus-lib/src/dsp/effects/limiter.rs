@@ -103,6 +103,28 @@ impl super::core::DspEffect for LimiterEffect {
         state.process(samples)
     }
 
+    fn process_into(
+        &mut self,
+        input: &[f32],
+        output: &mut Vec<f32>,
+        context: &EffectContext,
+        _drain: bool,
+    ) {
+        if !self.enabled {
+            output.extend_from_slice(input);
+            return;
+        }
+        self.ensure_state(context);
+        let Some(state) = self.state.as_mut() else {
+            output.extend_from_slice(input);
+            return;
+        };
+        if input.is_empty() {
+            return;
+        }
+        state.process_into(input, output);
+    }
+
     fn reset_state(&mut self) {
         if let Some(state) = self.state.as_mut() {
             state.reset();
@@ -172,6 +194,20 @@ impl LimiterState {
             }
         }
         output
+    }
+
+    fn process_into(&mut self, samples: &[f32], output: &mut Vec<f32>) {
+        {
+            let inner = self.limiter.inner_mut();
+            inner.push_samples(samples);
+        }
+        for _ in 0..samples.len() {
+            if let Some(sample) = self.limiter.next() {
+                output.push(sample);
+            } else {
+                break;
+            }
+        }
     }
 
     fn reset(&mut self) {

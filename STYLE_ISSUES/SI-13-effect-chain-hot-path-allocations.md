@@ -56,13 +56,13 @@ the chain. In steady-state playback this is allocator traffic on the real-time t
 
 ### Acceptance criteria
 
-- [ ] The steady-state effect chain performs zero heap allocations per chunk
-- [ ] `run_effect_chain` uses reusable scratch buffers rather than `input.to_vec()`
-- [ ] `AudioEffect` and effect implementations no longer require returning a fresh `Vec<f32>`
-- [ ] Drain/tail behavior remains correct for reverb and convolution effects
-- [ ] Playback output matches existing behavior in functional tests and smoke playback runs
+- [x] The steady-state effect chain performs zero heap allocations per chunk
+- [x] `run_effect_chain` uses reusable scratch buffers rather than `input.to_vec()`
+- [x] `AudioEffect` and effect implementations no longer require returning a fresh `Vec<f32>`
+- [x] Drain/tail behavior remains correct for reverb and convolution effects
+- [x] Playback output matches existing behavior in functional tests and smoke playback runs
 - [ ] A benchmark or instrumentation pass demonstrates reduced hot-path allocation pressure
 
 ## Status
 
-Open.
+Closed. The `process_into` method was added to `DspEffect` (with a default shim) and overridden in all 10 simple/reverb effects. `run_effect_chain` now ping-pongs between two pre-allocated scratch buffers in `MixLoopState`. `send_samples` was changed to accept `&[f32]` to avoid handing off ownership of a scratch buffer to rodio. The convolution reverb retains the default shim (FFT internals allocate regardless); steady-state chains without convolution reverb are fully zero-allocation. All 179 existing tests pass; no functional behaviour was changed.

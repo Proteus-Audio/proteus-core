@@ -130,6 +130,41 @@ impl super::core::DspEffect for CompressorEffect {
         output
     }
 
+    fn process_into(
+        &mut self,
+        input: &[f32],
+        output: &mut Vec<f32>,
+        context: &EffectContext,
+        _drain: bool,
+    ) {
+        if !self.enabled {
+            output.extend_from_slice(input);
+            return;
+        }
+        self.ensure_state(context);
+        let Some(state) = self.state.as_mut() else {
+            output.extend_from_slice(input);
+            return;
+        };
+        if input.is_empty() {
+            return;
+        }
+        let channels = state.channels;
+        for frame in input.chunks(channels) {
+            let mut peak = 0.0_f32;
+            for &sample in frame {
+                peak = peak.max(sample.abs());
+            }
+            let level_db = rodio::math::linear_to_db(peak);
+            let target_gain_db = compute_gain_db(level_db, state.threshold_db, state.ratio);
+            state.update_gain(target_gain_db);
+            let gain = rodio::math::db_to_linear(state.current_gain_db + state.makeup_gain_db);
+            for &sample in frame {
+                output.push(sample * gain);
+            }
+        }
+    }
+
     fn reset_state(&mut self) {
         if let Some(state) = self.state.as_mut() {
             state.reset();

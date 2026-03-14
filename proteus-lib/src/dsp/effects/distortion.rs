@@ -77,6 +77,24 @@ impl super::core::DspEffect for DistortionEffect {
         out
     }
 
+    fn process_into(
+        &mut self,
+        input: &[f32],
+        output: &mut Vec<f32>,
+        _context: &EffectContext,
+        _drain: bool,
+    ) {
+        if !self.enabled {
+            output.extend_from_slice(input);
+            return;
+        }
+        let gain = sanitize_gain(self.settings.gain);
+        let threshold = sanitize_threshold(self.settings.threshold);
+        for &sample in input {
+            output.push((sample * gain).clamp(-threshold, threshold));
+        }
+    }
+
     fn reset_state(&mut self) {}
 }
 

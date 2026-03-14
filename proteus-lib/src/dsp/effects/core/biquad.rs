@@ -100,6 +100,32 @@ impl BiquadState {
         out
     }
 
+    /// Process interleaved samples through the biquad filter, appending output to `output`.
+    ///
+    /// The caller must clear `output` before calling if a fresh result is needed.
+    /// No allocation is performed when `output` already has sufficient capacity.
+    pub(crate) fn process_into(&mut self, samples: &[f32], output: &mut Vec<f32>) {
+        if samples.is_empty() {
+            return;
+        }
+        let channels = self.channels;
+        for (idx, &sample) in samples.iter().enumerate() {
+            let ch = idx % channels;
+            let result = self.coeffs.b0 * sample
+                + self.coeffs.b1 * self.x_n1[ch]
+                + self.coeffs.b2 * self.x_n2[ch]
+                - self.coeffs.a1 * self.y_n1[ch]
+                - self.coeffs.a2 * self.y_n2[ch];
+
+            self.x_n2[ch] = self.x_n1[ch];
+            self.x_n1[ch] = sample;
+            self.y_n2[ch] = self.y_n1[ch];
+            self.y_n1[ch] = result;
+
+            output.push(result);
+        }
+    }
+
     pub(crate) fn reset(&mut self) {
         self.x_n1.fill(0.0);
         self.x_n2.fill(0.0);
@@ -188,6 +214,17 @@ mod tests {
         assert_eq!(sanitize_q(f32::INFINITY), 0.5);
         assert_eq!(sanitize_q(0.01), 0.1);
         assert_eq!(sanitize_q(20.0), 10.0);
+    }
+
+    #[test]
+    fn biquad_process_into_matches_process() {
+        let mut state_a = BiquadState::new(BiquadKind::LowPass, 48_000, 2, 1_200, 0.707);
+        let mut state_b = BiquadState::new(BiquadKind::LowPass, 48_000, 2, 1_200, 0.707);
+        let input = vec![0.0_f32, 1.0, 0.5, -0.5, -1.0, 0.25];
+        let expected = state_a.process(&input);
+        let mut got = Vec::new();
+        state_b.process_into(&input, &mut got);
+        assert_eq!(got, expected);
     }
 
     #[test]

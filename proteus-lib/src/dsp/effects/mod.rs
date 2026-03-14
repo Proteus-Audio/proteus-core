@@ -118,6 +118,24 @@ macro_rules! define_audio_effects {
                 self.as_dsp_effect().process(samples, context, drain)
             }
 
+            /// Process the provided samples through the effect, appending output to `output`.
+            ///
+            /// # Arguments
+            /// - `input`: Interleaved input samples.
+            /// - `output`: Caller-owned buffer to append processed samples into; clear before
+            ///   calling if a fresh result is needed.
+            /// - `context`: Environment details (sample rate, channels, etc.).
+            /// - `drain`: When true, flush any buffered tail data.
+            pub fn process_into(
+                &mut self,
+                input: &[f32],
+                output: &mut Vec<f32>,
+                context: &EffectContext,
+                drain: bool,
+            ) {
+                self.as_dsp_effect().process_into(input, output, context, drain)
+            }
+
             /// Reset any internal state maintained by the effect.
             pub fn reset_state(&mut self) {
                 self.as_dsp_effect().reset_state();

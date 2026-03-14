@@ -212,6 +212,49 @@ impl crate::dsp::effects::core::DspEffect for DiffusionReverbEffect {
         output
     }
 
+    fn process_into(
+        &mut self,
+        input: &[f32],
+        output: &mut Vec<f32>,
+        context: &EffectContext,
+        drain: bool,
+    ) {
+        self.ensure_state(context);
+        if !self.enabled || self.mix <= 0.0 {
+            output.extend_from_slice(input);
+            return;
+        }
+        let Some(state) = self.state.as_mut() else {
+            output.extend_from_slice(input);
+            return;
+        };
+        if input.is_empty() {
+            if drain {
+                if self.tail_drained {
+                    return;
+                }
+                self.tail_drained = true;
+                let tail = state.drain_tail(
+                    self.settings.decay(),
+                    self.settings.damping(),
+                    self.settings.diffusion(),
+                );
+                output.extend(tail);
+            }
+            return;
+        }
+        self.tail_drained = false;
+        let mix = self.mix.clamp(0.0, 1.0);
+        state.process_samples(
+            input,
+            mix,
+            self.settings.decay(),
+            self.settings.damping(),
+            self.settings.diffusion(),
+            output,
+        );
+    }
+
     fn reset_state(&mut self) {
         if let Some(state) = self.state.as_mut() {
             state.reset();

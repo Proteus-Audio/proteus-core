@@ -41,14 +41,14 @@ pub(super) fn process_and_send_samples(
     };
     #[cfg(feature = "debug")]
     let dsp_start = Instant::now();
-    let processed = process_effects(samples.as_slice(), state);
+    process_effects(samples.as_slice(), state);
     #[cfg(feature = "debug")]
-    update_debug_metrics(state, dsp_start, audio_time_ms, processed.len());
+    update_debug_metrics(state, dsp_start, audio_time_ms, state.effect_scratch_a.len());
     match output_stage::send_samples(
         &state.sender,
         state.audio_info.channels as u16,
         state.audio_info.sample_rate,
-        processed,
+        &state.effect_scratch_a,
     ) {
         output_stage::SendStatus::Sent => {
             if !state.logged_first_output_send {
@@ -75,35 +75,50 @@ pub(super) fn process_and_send_samples(
     true
 }
 
-fn process_effects(samples: &[f32], state: &mut MixLoopState) -> Vec<f32> {
+fn process_effects(samples: &[f32], state: &mut MixLoopState) {
     if let Some(transition) = state.active_inline_transition.as_mut() {
-        let old_out = run_effect_chain(
+        // Run old effects chain; result ends up in scratch_a.
+        run_effect_chain(
             &mut transition.old_effects,
             samples,
             &state.effect_context,
             false,
+            &mut state.effect_scratch_a,
+            &mut state.effect_scratch_b,
         );
-        let new_out = run_effect_chain(
+        // During a transition we need both outputs simultaneously, so we save
+        // old_out in a temporary Vec. Transitions are non-steady-state so this
+        // single allocation per chunk is acceptable.
+        let old_out: Vec<f32> = state.effect_scratch_a.clone();
+
+        // Run new effects chain; result ends up in scratch_a.
+        run_effect_chain(
             &mut transition.new_effects,
             samples,
             &state.effect_context,
             false,
+            &mut state.effect_scratch_a,
+            &mut state.effect_scratch_b,
         );
-        let len = old_out.len().max(new_out.len());
-        let mut blended = Vec::with_capacity(len);
+
+        let len = old_out.len().max(state.effect_scratch_a.len());
+        state.effect_scratch_b.clear();
+        state.effect_scratch_b.reserve(len);
+        let mix = if transition.total_samples == 0 {
+            1.0
+        } else {
+            let done = transition
+                .total_samples
+                .saturating_sub(transition.remaining_samples);
+            (done as f32 / transition.total_samples as f32).clamp(0.0, 1.0)
+        };
         for i in 0..len {
             let o = old_out.get(i).copied().unwrap_or(0.0);
-            let n = new_out.get(i).copied().unwrap_or(0.0);
-            let mix = if transition.total_samples == 0 {
-                1.0
-            } else {
-                let done = transition
-                    .total_samples
-                    .saturating_sub(transition.remaining_samples);
-                (done as f32 / transition.total_samples as f32).clamp(0.0, 1.0)
-            };
-            blended.push((o * (1.0 - mix)) + (n * mix));
+            let n = state.effect_scratch_a.get(i).copied().unwrap_or(0.0);
+            state.effect_scratch_b.push((o * (1.0 - mix)) + (n * mix));
         }
+        std::mem::swap(&mut state.effect_scratch_a, &mut state.effect_scratch_b);
+
         transition.remaining_samples = transition
             .remaining_samples
             .saturating_sub(samples.len().max(1));
@@ -113,7 +128,6 @@ fn process_effects(samples: &[f32], state: &mut MixLoopState) -> Vec<f32> {
             }) = transition.new_effects.clone();
             state.active_inline_transition = None;
         }
-        blended
     } else {
         run_effect_chain(
             &mut state.effects.lock().unwrap_or_else(|_| {
@@ -122,7 +136,9 @@ fn process_effects(samples: &[f32], state: &mut MixLoopState) -> Vec<f32> {
             samples,
             &state.effect_context,
             false,
-        )
+            &mut state.effect_scratch_a,
+            &mut state.effect_scratch_b,
+        );
     }
 }
 
@@ -186,28 +202,36 @@ pub(super) fn drain_effect_tail(state: &mut MixLoopState) -> bool {
         return false;
     }
 
-    let drained = if let Some(transition) = state.active_inline_transition.as_mut() {
-        let old_out = run_effect_chain(
+    if let Some(transition) = state.active_inline_transition.as_mut() {
+        run_effect_chain(
             &mut transition.old_effects,
             &[],
             &state.effect_context,
             true,
+            &mut state.effect_scratch_a,
+            &mut state.effect_scratch_b,
         );
-        let new_out = run_effect_chain(
+        let old_out: Vec<f32> = state.effect_scratch_a.clone();
+
+        run_effect_chain(
             &mut transition.new_effects,
             &[],
             &state.effect_context,
             true,
+            &mut state.effect_scratch_a,
+            &mut state.effect_scratch_b,
         );
-        let len = old_out.len().max(new_out.len());
-        let mut blended = Vec::with_capacity(len);
+
+        let len = old_out.len().max(state.effect_scratch_a.len());
+        state.effect_scratch_b.clear();
         for i in 0..len {
-            blended.push(
-                (old_out.get(i).copied().unwrap_or(0.0) + new_out.get(i).copied().unwrap_or(0.0))
+            state.effect_scratch_b.push(
+                (old_out.get(i).copied().unwrap_or(0.0)
+                    + state.effect_scratch_a.get(i).copied().unwrap_or(0.0))
                     * 0.5,
             );
         }
-        blended
+        std::mem::swap(&mut state.effect_scratch_a, &mut state.effect_scratch_b);
     } else {
         run_effect_chain(
             &mut state.effects.lock().unwrap_or_else(|_| {
@@ -216,13 +240,19 @@ pub(super) fn drain_effect_tail(state: &mut MixLoopState) -> bool {
             &[],
             &state.effect_context,
             true,
-        )
-    };
-    if drained.is_empty() {
+            &mut state.effect_scratch_a,
+            &mut state.effect_scratch_b,
+        );
+    }
+
+    if state.effect_scratch_a.is_empty() {
         return false;
     }
 
-    let max_abs = drained.iter().fold(0.0_f32, |acc, s| acc.max(s.abs()));
+    let max_abs = state
+        .effect_scratch_a
+        .iter()
+        .fold(0.0_f32, |acc, s| acc.max(s.abs()));
     if max_abs <= DRAIN_SILENCE_EPSILON {
         state.effect_drain_silent_passes = state.effect_drain_silent_passes.saturating_add(1);
     } else {
@@ -237,7 +267,7 @@ pub(super) fn drain_effect_tail(state: &mut MixLoopState) -> bool {
         &state.sender,
         state.audio_info.channels as u16,
         state.audio_info.sample_rate,
-        drained,
+        &state.effect_scratch_a,
     ) {
         output_stage::SendStatus::Sent => true,
         output_stage::SendStatus::Empty => false,

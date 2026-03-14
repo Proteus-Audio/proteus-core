@@ -83,6 +83,30 @@ impl super::core::DspEffect for PanEffect {
         out
     }
 
+    fn process_into(
+        &mut self,
+        input: &[f32],
+        output: &mut Vec<f32>,
+        context: &EffectContext,
+        _drain: bool,
+    ) {
+        if !self.enabled || input.is_empty() || context.channels != 2 {
+            output.extend_from_slice(input);
+            return;
+        }
+        let pan = sanitize_pan(self.settings.pan);
+        let theta =
+            ((pan + 1.0) * std::f32::consts::FRAC_PI_4).clamp(0.0, std::f32::consts::FRAC_PI_2);
+        let left_gain = theta.cos();
+        let right_gain = theta.sin();
+        let mut chunks = input.chunks_exact(2);
+        for frame in &mut chunks {
+            output.push(frame[0] * left_gain);
+            output.push(frame[1] * right_gain);
+        }
+        output.extend_from_slice(chunks.remainder());
+    }
+
     fn reset_state(&mut self) {}
 }
 

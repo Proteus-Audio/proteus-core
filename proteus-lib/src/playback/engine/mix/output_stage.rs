@@ -15,14 +15,14 @@ pub(super) fn send_samples(
     sender: &mpsc::SyncSender<(SamplesBuffer, f64)>,
     input_channels: u16,
     sample_rate: u32,
-    samples: Vec<f32>,
+    samples: &[f32],
 ) -> SendStatus {
     if samples.is_empty() {
         return SendStatus::Empty;
     }
 
     let length_in_seconds = samples.len() as f64 / sample_rate as f64 / input_channels as f64;
-    let samples_buffer = SamplesBuffer::new(input_channels, sample_rate, samples);
+    let samples_buffer = SamplesBuffer::new(input_channels, sample_rate, samples.to_vec());
 
     if let Err(e) = sender.send((samples_buffer, length_in_seconds)) {
         log::error!("failed to send samples: {}", e);
@@ -38,7 +38,7 @@ mod tests {
     #[test]
     fn send_samples_returns_empty_for_empty_buffers() {
         let (tx, _rx) = mpsc::sync_channel(1);
-        let status = send_samples(&tx, 2, 48_000, Vec::new());
+        let status = send_samples(&tx, 2, 48_000, &[]);
         assert!(matches!(status, SendStatus::Empty));
     }
 
@@ -46,7 +46,7 @@ mod tests {
     fn send_samples_returns_disconnected_when_receiver_is_gone() {
         let (tx, rx) = mpsc::sync_channel(1);
         drop(rx);
-        let status = send_samples(&tx, 2, 48_000, vec![0.1, -0.1]);
+        let status = send_samples(&tx, 2, 48_000, &[0.1, -0.1]);
         assert!(matches!(status, SendStatus::Disconnected));
     }
 }

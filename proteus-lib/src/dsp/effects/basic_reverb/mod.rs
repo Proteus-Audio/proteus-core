@@ -107,6 +107,37 @@ impl crate::dsp::effects::core::DspEffect for DelayReverbEffect {
         output
     }
 
+    fn process_into(
+        &mut self,
+        input: &[f32],
+        output: &mut Vec<f32>,
+        context: &EffectContext,
+        drain: bool,
+    ) {
+        self.ensure_state(context);
+        if !self.enabled || self.mix <= 0.0 {
+            output.extend_from_slice(input);
+            return;
+        }
+        let Some(state) = self.state.as_mut() else {
+            output.extend_from_slice(input);
+            return;
+        };
+        let amplitude = if self.mix > 0.0 {
+            self.mix.clamp(0.0, MAX_AMPLITUDE)
+        } else {
+            self.settings.amplitude()
+        };
+        if input.is_empty() {
+            if drain {
+                let tail = state.drain_tail(amplitude);
+                output.extend(tail);
+            }
+            return;
+        }
+        state.process_samples(input, amplitude, output);
+    }
+
     fn reset_state(&mut self) {
         if let Some(state) = self.state.as_mut() {
             state.reset();

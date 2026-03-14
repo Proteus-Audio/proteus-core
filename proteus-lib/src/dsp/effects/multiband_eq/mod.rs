@@ -211,6 +211,42 @@ impl super::core::DspEffect for MultibandEqEffect {
         output
     }
 
+    fn process_into(
+        &mut self,
+        input: &[f32],
+        output: &mut Vec<f32>,
+        context: &EffectContext,
+        _drain: bool,
+    ) {
+        if !self.enabled {
+            output.extend_from_slice(input);
+            return;
+        }
+        self.ensure_state(context);
+        let Some(state) = self.state.as_mut() else {
+            output.extend_from_slice(input);
+            return;
+        };
+        if input.is_empty() {
+            return;
+        }
+        let channels = state.channels;
+        for (idx, &sample) in input.iter().enumerate() {
+            let ch = idx % channels;
+            let mut y = sample;
+            if let Some(filter) = state.low_edge.as_mut() {
+                y = filter.process_sample(ch, y);
+            }
+            for point in &mut state.points {
+                y = point.process_sample(ch, y);
+            }
+            if let Some(filter) = state.high_edge.as_mut() {
+                y = filter.process_sample(ch, y);
+            }
+            output.push(y);
+        }
+    }
+
     fn reset_state(&mut self) {
         if let Some(state) = self.state.as_mut() {
             state.reset();
