@@ -48,9 +48,12 @@ impl Player {
         drop(finished_tracks);
 
         self.abort = Arc::new(AtomicBool::new(false));
-        self.playback_thread_exists.store(true, Ordering::SeqCst);
+        // Release: publish the true state to any Acquire load on the worker thread.
+        self.playback_thread_exists.store(true, Ordering::Release);
         let playback_id = self.playback_id.fetch_add(1, Ordering::SeqCst) + 1;
-        self.buffering_done.store(false, Ordering::SeqCst);
+        // Release: reset buffering_done before spawn so the worker sees false
+        // (thread::spawn also establishes happens-before, but be explicit).
+        self.buffering_done.store(false, Ordering::Release);
         let now_ms_value = now_ms();
         self.last_chunk_ms.store(now_ms_value, Ordering::Relaxed);
         self.last_time_update_ms
@@ -75,7 +78,9 @@ impl Player {
                 false
             };
             let Some(stream) = output_stream.as_ref() else {
-                self.playback_thread_exists.store(false, Ordering::SeqCst);
+                // Release: publish false to any Acquire load (early-exit path,
+                // no thread was ever spawned for this run).
+                self.playback_thread_exists.store(false, Ordering::Release);
                 return;
             };
             (stream.mixer().clone(), opened_now)

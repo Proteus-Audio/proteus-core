@@ -147,11 +147,24 @@ pub struct Player {
     ts: Arc<Mutex<f64>>,
     state: Arc<Mutex<PlayerState>>,
     abort: Arc<AtomicBool>,
+    /// Worker-liveness flag.
+    ///
+    /// **Ordering contract (acquire/release):**
+    /// - Spawner stores `true` with `Release` before `thread::spawn`.
+    /// - `PlaybackThreadGuard::drop` stores `false` with `Release` when the
+    ///   worker exits.
+    /// - All external loads use `Acquire` via [`Player::thread_finished`].
     playback_thread_exists: Arc<AtomicBool>,
     playback_thread_handle: Arc<Mutex<Option<JoinHandle<()>>>>,
     playback_id: Arc<AtomicU64>,
     duration: Arc<Mutex<f64>>,
     prot: Arc<Mutex<Prot>>,
+    /// First-chunk publication flag.
+    ///
+    /// **Ordering contract (acquire/release):**
+    /// - Worker stores `true` with `Release` in `update_sink` on the first
+    ///   chunk append.
+    /// - Observers load with `Acquire` in `wait_for_audio_heard`.
     audio_heard: Arc<AtomicBool>,
     play_command_ms: Arc<AtomicU64>,
     volume: Arc<Mutex<f32>>,
@@ -166,8 +179,17 @@ pub struct Player {
     dsp_metrics: Arc<Mutex<DspChainMetrics>>,
     effects_reset: Arc<AtomicU64>,
     output_meter: Arc<Mutex<OutputMeter>>,
+    /// Producer-buffering-complete publication flag.
+    ///
+    /// **Ordering contract (acquire/release):**
+    /// - Worker stores `true` with `Release` in `mark_buffering_complete`
+    ///   once all audio data has been enqueued.
+    /// - Observers load with `Acquire` via [`Player::debug_buffering_done`].
+    /// - Spawner resets to `false` with `Release` before each new run.
     buffering_done: Arc<AtomicBool>,
+    /// Last-chunk wall-clock marker (ms). Diagnostic only; `Relaxed` ordering.
     last_chunk_ms: Arc<AtomicU64>,
+    /// Last time-update wall-clock marker (ms). Diagnostic only; `Relaxed` ordering.
     last_time_update_ms: Arc<AtomicU64>,
     next_resume_fade_ms: Arc<Mutex<Option<f32>>>,
     end_of_stream_action: Arc<Mutex<EndOfStreamAction>>,

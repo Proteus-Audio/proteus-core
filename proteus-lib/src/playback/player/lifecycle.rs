@@ -74,7 +74,9 @@ impl Player {
         }
         let start = Instant::now();
         loop {
-            if self.audio_heard.load(Ordering::Relaxed) {
+            // Acquire: synchronize-with the Release store in update_sink so that
+        // any sink state written before audio_heard was set is visible here.
+        if self.audio_heard.load(Ordering::Acquire) {
                 return true;
             }
             if self.thread_finished() {
@@ -122,7 +124,7 @@ pub(super) fn drop_cleanup(player: &mut Player) {
             .stop();
     }
 
-    if player.playback_thread_exists.load(Ordering::SeqCst) {
+    if player.playback_thread_exists.load(Ordering::Acquire) {
         player.stop_and_join_playback_thread();
     } else {
         player.abort.store(true, Ordering::SeqCst);
