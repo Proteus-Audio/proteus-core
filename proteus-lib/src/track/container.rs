@@ -1,4 +1,15 @@
 //! Buffering implementation for multiple tracks in a shared container stream.
+//!
+//! This is a legacy module retained for reference and tests. The active
+//! playback path uses `playback::engine::mix::runner::decode::container_worker`
+//! instead.
+//!
+//! # Weighting
+//!
+//! `track_weights` is a bookkeeping map populated during container setup to
+//! record the count of duplicate track keys for a given physical track. The
+//! weights are **not** applied at the sample level here — actual per-track gain
+//! application happens in the mix layer (`playback::engine::mix::track_mix`).
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -15,7 +26,7 @@ use symphonia::core::units::{Time, TimeBase};
 use log::{info, warn};
 
 use crate::audio::buffer::TrackBufferMap;
-use crate::audio::decode::{decoded_format_label, process_channel};
+use crate::audio::decode::process_channel;
 
 use super::buffer::{add_samples_to_buffer_map, mark_track_as_finished};
 
@@ -55,12 +66,15 @@ impl TrackDecoder {
     }
 
     fn is_past_end(&self, packet: &Packet) -> bool {
-        self.duration.map_or(false, |dur| packet.ts() >= dur)
+        self.duration.is_some_and(|dur| packet.ts() >= dur)
     }
 }
 
 /// Spawn a decoder thread that buffers multiple container tracks.
-pub fn buffer_container_tracks(args: ContainerTrackArgs, abort: Arc<AtomicBool>) -> JoinHandle<()> {
+pub fn buffer_container_tracks(
+    args: ContainerTrackArgs,
+    abort: Arc<AtomicBool>,
+) -> JoinHandle<()> {
     let ContainerTrackArgs {
         file_path,
         track_entries,
@@ -224,6 +238,7 @@ fn interleave_to_stereo(decoded: AudioBufferRef<'_>, channels: u8) -> Vec<f32> {
     ch1.into_iter().zip(ch2).flat_map(|(l, r)| [l, r]).collect()
 }
 
+#[allow(clippy::too_many_arguments)]
 fn check_eos_skew(
     track_decoders: &[TrackDecoder],
     finished_ids: &mut Vec<u32>,
@@ -253,20 +268,20 @@ fn check_eos_skew(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn push_decoded_container_packet(
-    td: &mut TrackDecoder,
+    track_id: u32,
     decoded: AudioBufferRef<'_>,
     primary_key: u16,
     channels: u8,
     buffer_map: &TrackBufferMap,
     buffer_notify: Option<&Arc<Condvar>>,
     abort: &Arc<AtomicBool>,
-    logged_formats: &mut HashMap<u32, &'static str>,
+    logged_formats: &mut HashMap<u32, bool>,
 ) {
-    logged_formats.entry(td.track_id).or_insert_with(|| {
-        let fmt = decoded_format_label(&decoded);
-        info!("decoded track {} buffer format: {}", td.track_id, fmt);
-        fmt
+    logged_formats.entry(track_id).or_insert_with(|| {
+        info!("decoded track {} buffer ready", track_id);
+        true
     });
     let stereo = interleave_to_stereo(decoded, channels);
     if !stereo.is_empty() {
@@ -280,9 +295,10 @@ fn push_decoded_container_packet(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_container_decode_loop(
     format: &mut dyn FormatReader,
-    track_decoders: &mut Vec<TrackDecoder>,
+    track_decoders: &mut [TrackDecoder],
     channels: u8,
     eos_seconds: f64,
     buffer_map: &TrackBufferMap,
@@ -292,7 +308,7 @@ fn run_container_decode_loop(
 ) -> Vec<u32> {
     let mut finished_ids: Vec<u32> = Vec::new();
     let mut last_seen: HashMap<u32, f64> = HashMap::new();
-    let (mut max_seen, mut logged_formats) = (0.0f64, HashMap::<u32, &'static str>::new());
+    let (mut max_seen, mut logged_formats) = (0.0f64, HashMap::<u32, bool>::new());
     let result: Result<bool, Error> = loop {
         if abort.load(Ordering::Relaxed) {
             break Ok(true);
@@ -320,7 +336,7 @@ fn run_container_decode_loop(
             }
             continue;
         }
-        drop(td);
+        let _ = td;
         check_eos_skew(
             track_decoders,
             &mut finished_ids,
@@ -338,9 +354,10 @@ fn run_container_decode_loop(
             .unwrap_or_else(|| {
                 unreachable!("decoder for tid {} missing after check_eos_skew", tid)
             });
+        let tid_for_log = td.track_id;
         match td.decoder.decode(&packet) {
             Ok(decoded) => push_decoded_container_packet(
-                td,
+                tid_for_log,
                 decoded,
                 pkey,
                 channels,

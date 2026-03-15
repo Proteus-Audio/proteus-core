@@ -50,12 +50,25 @@ The roadmap groups this with decode-loop observability more broadly:
 
 ### Acceptance criteria
 
-- [ ] Seek failure produces a structured diagnostic, not silent early return
-- [ ] Callers can distinguish decode failure from normal end-of-stream
-- [ ] Buffer waiters are still notified on failure paths
-- [ ] A regression test covers the failed-seek startup path
-- [ ] The policy for repeated decode failures is intentional and documented
+- [x] Seek failure produces a structured diagnostic, not silent early return
+- [x] Callers can distinguish decode failure from normal end-of-stream
+- [x] Buffer waiters are still notified on failure paths
+- [x] A regression test covers the failed-seek startup path
+- [x] The policy for repeated decode failures is intentional and documented
+
+## Resolution
+
+`buffer_track` now returns `JoinHandle<TrackDecodeOutcome>` with three variants:
+`Completed`, `Aborted`, and `Failed(String)`. Seek failures log the file path,
+start time, and track id at `warn` level, notify condvar waiters, and return
+`Failed`. A `finish()` helper ensures all exit paths mark finished and notify.
+
+Per-packet `DecodeError` variants are logged at `warn` and the loop continues
+(documented as intentional — transient codec errors are recoverable). Non-recoverable
+errors break the loop and produce `Failed`.
+
+Regression test `buffer_track_notifies_condvar_on_failure` covers the failure path.
 
 ## Status
 
-Open.
+Closed.
