@@ -1,11 +1,15 @@
 //! Ring-buffer helpers for track sample delivery.
+//!
+//! This is a legacy buffering module retained for the standalone track decode
+//! path. It is not wired into the active playback engine.
+#![allow(dead_code)]
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
-use crate::audio::buffer::{buffer_remaining_space, TrackBufferMap};
+use crate::audio::buffer::TrackBufferMap;
 
 /// Push samples into the per-track ring buffer, blocking when full.
 pub fn add_samples_to_buffer_map(
