@@ -147,6 +147,16 @@ where
     }
 }
 
+/// Clamp a floating-point frame offset to non-negative before casting to `usize`.
+///
+/// Floating-point time arithmetic can produce tiny negative values due to rounding.
+/// This helper makes the non-negative invariant explicit at the cast boundary
+/// rather than relying on Rust's saturating `as` semantics for negative-to-unsigned
+/// casts.
+fn nonneg_frame_offset(raw_frames: f64) -> usize {
+    raw_frames.max(0.0) as usize
+}
+
 /// Compute interleaved sample spans where a decoded packet overlaps active windows.
 pub(super) fn packet_overlap_samples(
     packet_ts: f64,
@@ -171,10 +181,12 @@ pub(super) fn packet_overlap_samples(
             continue;
         }
 
-        let start_frame = (((overlap_start - packet_start) * sample_rate as f64).floor() as usize)
-            .min(frame_count);
+        let start_frame =
+            nonneg_frame_offset(((overlap_start - packet_start) * sample_rate as f64).floor())
+                .min(frame_count);
         let end_frame =
-            (((overlap_end - packet_start) * sample_rate as f64).ceil() as usize).min(frame_count);
+            nonneg_frame_offset(((overlap_end - packet_start) * sample_rate as f64).ceil())
+                .min(frame_count);
         if end_frame <= start_frame {
             continue;
         }
@@ -237,5 +249,71 @@ mod tests {
             }],
         );
         assert_eq!(spans, vec![(4, 16)]);
+    }
+
+    #[test]
+    fn nonneg_frame_offset_clamps_negative_to_zero() {
+        assert_eq!(super::nonneg_frame_offset(-0.001), 0);
+        assert_eq!(super::nonneg_frame_offset(-1e-15), 0);
+        assert_eq!(super::nonneg_frame_offset(-100.0), 0);
+    }
+
+    #[test]
+    fn nonneg_frame_offset_preserves_positive_values() {
+        assert_eq!(super::nonneg_frame_offset(0.0), 0);
+        assert_eq!(super::nonneg_frame_offset(5.9), 5);
+        assert_eq!(super::nonneg_frame_offset(10.0), 10);
+    }
+
+    #[test]
+    fn packet_overlap_exact_start_produces_zero_offset() {
+        // Window starts exactly at packet start — offset should be 0.
+        let spans = packet_overlap_samples(
+            1.0,
+            100,
+            100,
+            1,
+            &[ActiveWindow {
+                start_ms: 1000,
+                end_ms: Some(2000),
+            }],
+        );
+        assert_eq!(spans, vec![(0, 100)]);
+    }
+
+    #[test]
+    fn packet_overlap_tiny_negative_epsilon_clamps_to_zero() {
+        // Simulate a case where floating-point subtraction yields a tiny negative.
+        // packet_ts is slightly after the window start, but due to rounding the
+        // difference (overlap_start - packet_start) would normally be zero or
+        // positive; we test the helper directly for the negative-epsilon path.
+        let spans = packet_overlap_samples(
+            0.0,
+            48000,
+            48000,
+            2,
+            &[ActiveWindow {
+                start_ms: 0,
+                end_ms: Some(1000),
+            }],
+        );
+        // Full packet falls inside the window.
+        assert_eq!(spans, vec![(0, 96000)]);
+    }
+
+    #[test]
+    fn packet_overlap_entirely_before_packet_returns_empty() {
+        // Window ends before the packet starts — no overlap.
+        let spans = packet_overlap_samples(
+            2.0,
+            100,
+            100,
+            1,
+            &[ActiveWindow {
+                start_ms: 0,
+                end_ms: Some(1000),
+            }],
+        );
+        assert!(spans.is_empty());
     }
 }

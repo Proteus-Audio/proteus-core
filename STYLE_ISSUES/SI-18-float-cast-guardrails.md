@@ -38,10 +38,10 @@ The surrounding logic should normally keep this non-negative, but the invariant 
 
 ### Acceptance criteria
 
-- [ ] No float-to-`usize` cast in overlap math relies on implicit non-negativity
-- [ ] Boundary-condition tests cover small negative floating-point inputs
-- [ ] The helper remains behaviorally identical for valid inputs
+- [x] No float-to-`usize` cast in overlap math relies on implicit non-negativity
+- [x] Boundary-condition tests cover small negative floating-point inputs
+- [x] The helper remains behaviorally identical for valid inputs
 
 ## Status
 
-Open.
+Done.
