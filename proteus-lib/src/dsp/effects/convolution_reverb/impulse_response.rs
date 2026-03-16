@@ -14,7 +14,9 @@ use rodio::{Decoder, Source};
 /// Samples are stored per-channel, interleaving is handled by consumers.
 #[derive(Debug, Clone)]
 pub struct ImpulseResponse {
+    /// Sample rate of the decoded impulse response, in Hz.
     pub sample_rate: u32,
+    /// Per-channel sample buffers; `channels[0]` is the first channel, and so on.
     pub channels: Vec<Vec<f32>>,
 }
 
@@ -45,10 +47,15 @@ impl ImpulseResponse {
 /// Errors that can occur while loading or decoding impulse responses.
 #[derive(Debug)]
 pub enum ImpulseResponseError {
+    /// An I/O error occurred while reading the IR file.
     Io(std::io::Error),
+    /// A Matroska container parsing error occurred while reading the IR attachment.
     Matroska(matroska::Error),
+    /// The rodio decoder failed to decode the IR audio data.
     Decode(rodio::decoder::DecoderError),
+    /// No attachment with the given name was found in the container.
     AttachmentNotFound(String),
+    /// The impulse response decoded to zero channels, which is not usable.
     InvalidChannels,
 }
 
@@ -148,7 +155,7 @@ pub fn load_impulse_response_from_prot_attachment_with_tail(
         .find(|attachment| attachment.name.trim_matches('"') == attachment_name)
         .ok_or_else(|| ImpulseResponseError::AttachmentNotFound(attachment_name.to_string()))?;
 
-    info!("Loading impulse bytes response from {}", attachment.name);
+    info!("loading impulse bytes response from {}", attachment.name);
 
     load_impulse_response_from_bytes_with_tail(&attachment.data, tail_db)
 }
@@ -170,13 +177,13 @@ where
     let mut channel_samples = vec![Vec::new(); channels];
 
     for (index, sample) in source.enumerate() {
-        channel_samples[index % channels].push(sample as f32);
+        channel_samples[index % channels].push(sample);
     }
 
-    normalize_impulse_response_channels(&mut channel_samples, tail_db);
+    normalize_impulse_response_channels(&mut channel_samples, tail_db, true);
 
     if channel_samples.iter().any(|channel| channel.is_empty()) {
-        warn!("Impulse response includes empty channels; results may be silent.");
+        warn!("impulse response includes empty channels; results may be silent");
     }
 
     Ok(ImpulseResponse {
@@ -190,7 +197,11 @@ where
 /// Normalization is a two-step process:
 /// 1. Peak normalization to avoid clipping.
 /// 2. Energy normalization (attenuation-only) to keep long IRs controlled.
-pub fn normalize_impulse_response_channels(channel_samples: &mut [Vec<f32>], tail_db: Option<f32>) {
+pub fn normalize_impulse_response_channels(
+    channel_samples: &mut [Vec<f32>],
+    tail_db: Option<f32>,
+    energy_normalize: bool,
+) {
     let mut max_abs = 0.0_f32;
     for channel in channel_samples.iter() {
         for sample in channel {
@@ -216,26 +227,28 @@ pub fn normalize_impulse_response_channels(channel_samples: &mut [Vec<f32>], tai
         }
     }
 
-    // Energy-normalize (attenuate only) so long IRs don't explode the wet gain.
-    let mut max_energy = 0.0_f32;
-    for channel in channel_samples.iter() {
-        let mut sum_sq = 0.0_f32;
-        for sample in channel {
-            sum_sq += sample * sample;
+    if energy_normalize {
+        // Energy-normalize (attenuate only) so long IRs don't explode the wet gain.
+        let mut max_energy = 0.0_f32;
+        for channel in channel_samples.iter() {
+            let mut sum_sq = 0.0_f32;
+            for sample in channel {
+                sum_sq += sample * sample;
+            }
+            if sum_sq > max_energy {
+                max_energy = sum_sq;
+            }
         }
-        if sum_sq > max_energy {
-            max_energy = sum_sq;
-        }
-    }
-    if max_energy > 0.0 {
-        let mut scale = 1.0_f32 / max_energy.sqrt();
-        if scale > 1.0 {
-            scale = 1.0;
-        }
-        if scale < 1.0 {
-            for channel in channel_samples.iter_mut() {
-                for sample in channel {
-                    *sample *= scale;
+        if max_energy > 0.0 {
+            let mut scale = 1.0_f32 / max_energy.sqrt();
+            if scale > 1.0 {
+                scale = 1.0;
+            }
+            if scale < 1.0 {
+                for channel in channel_samples.iter_mut() {
+                    for sample in channel {
+                        *sample *= scale;
+                    }
                 }
             }
         }
@@ -275,5 +288,51 @@ fn trim_impulse_response_tail(channels: &mut [Vec<f32>], tail_db: f32) {
         if channel.len() > keep_len {
             channel.truncate(keep_len);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn channel_for_output_wraps_multi_channel_indices() {
+        let ir = ImpulseResponse {
+            sample_rate: 48_000,
+            channels: vec![vec![1.0], vec![2.0]],
+        };
+        assert_eq!(ir.channel_for_output(0), &[1.0]);
+        assert_eq!(ir.channel_for_output(1), &[2.0]);
+        assert_eq!(ir.channel_for_output(2), &[1.0]);
+    }
+
+    #[test]
+    fn normalize_impulse_response_channels_scales_peak() {
+        let mut channels = vec![vec![2.0_f32, -1.0], vec![0.5, -0.25]];
+        normalize_impulse_response_channels(&mut channels, None, false);
+        let max = channels
+            .iter()
+            .flat_map(|channel| channel.iter())
+            .fold(0.0_f32, |acc, sample| acc.max(sample.abs()));
+        assert!((max - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn normalize_impulse_response_channels_scales_peak_with_energy_normalize() {
+        let mut channels = vec![vec![2.0_f32, -1.0], vec![0.5, -0.25]];
+        normalize_impulse_response_channels(&mut channels, None, true);
+        let max = channels
+            .iter()
+            .flat_map(|channel| channel.iter())
+            .fold(0.0_f32, |acc, sample| acc.max(sample.abs()));
+        assert!((max - 1.0) < 1e-6);
+    }
+
+    #[test]
+    fn normalize_impulse_response_channels_trims_tail_when_requested() {
+        let mut channels = vec![vec![1.0_f32, 0.2, 0.01, 0.0001, 0.00001]];
+        normalize_impulse_response_channels(&mut channels, Some(-40.0), true);
+        assert!(channels[0].len() < 5);
+        assert!(!channels[0].is_empty());
     }
 }

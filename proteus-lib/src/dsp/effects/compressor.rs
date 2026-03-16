@@ -2,8 +2,8 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::level::{db_to_linear, deserialize_db_gain, linear_to_db};
 use super::EffectContext;
+use super::core::level::deserialize_db_gain;
 
 const DEFAULT_THRESHOLD_DB: f32 = -18.0;
 const DEFAULT_RATIO: f32 = 4.0;
@@ -15,17 +15,22 @@ const DEFAULT_MAKEUP_DB: f32 = 0.0;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct CompressorSettings {
+    /// Signal level above which compression is applied, in dBFS.
     #[serde(
         alias = "threshold",
         alias = "threshold_db",
         deserialize_with = "deserialize_db_gain"
     )]
     pub threshold_db: f32,
+    /// Compression ratio; e.g. 4.0 means a 4:1 ratio above the threshold.
     pub ratio: f32,
+    /// Time for the compressor gain to react to a signal exceeding the threshold, in milliseconds.
     #[serde(alias = "attack_ms", alias = "attack")]
     pub attack_ms: f32,
+    /// Time for the compressor gain to recover after the signal drops below the threshold, in milliseconds.
     #[serde(alias = "release_ms", alias = "release")]
     pub release_ms: f32,
+    /// Makeup gain applied after compression to restore loudness, in dB.
     #[serde(
         alias = "makeup_db",
         alias = "makeup_gain",
@@ -67,10 +72,12 @@ impl Default for CompressorSettings {
 }
 
 /// Configured compressor effect with runtime state.
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct CompressorEffect {
+    /// Whether the compressor is active; when `false` samples pass through unmodified.
     pub enabled: bool,
+    /// Compressor parameters such as threshold, ratio, attack, and release.
     #[serde(flatten)]
     pub settings: CompressorSettings,
     #[serde(skip)]
@@ -86,27 +93,8 @@ impl std::fmt::Debug for CompressorEffect {
     }
 }
 
-impl Default for CompressorEffect {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            settings: CompressorSettings::default(),
-            state: None,
-        }
-    }
-}
-
-impl CompressorEffect {
-    /// Process interleaved samples through the compressor.
-    ///
-    /// # Arguments
-    /// - `samples`: Interleaved input samples.
-    /// - `context`: Environment details (sample rate, channels, etc.).
-    /// - `drain`: Unused for this effect.
-    ///
-    /// # Returns
-    /// Processed interleaved samples.
-    pub fn process(&mut self, samples: &[f32], context: &EffectContext, _drain: bool) -> Vec<f32> {
+impl super::core::DspEffect for CompressorEffect {
+    fn process(&mut self, samples: &[f32], context: &EffectContext, _drain: bool) -> Vec<f32> {
         if !self.enabled {
             return samples.to_vec();
         }
@@ -129,10 +117,10 @@ impl CompressorEffect {
                 peak = peak.max(sample.abs());
             }
 
-            let level_db = linear_to_db(peak);
+            let level_db = rodio::math::linear_to_db(peak);
             let target_gain_db = compute_gain_db(level_db, state.threshold_db, state.ratio);
             state.update_gain(target_gain_db);
-            let gain = db_to_linear(state.current_gain_db + state.makeup_gain_db);
+            let gain = rodio::math::db_to_linear(state.current_gain_db + state.makeup_gain_db);
 
             for &sample in frame {
                 output.push(sample * gain);
@@ -142,14 +130,15 @@ impl CompressorEffect {
         output
     }
 
-    /// Reset any internal state held by the compressor.
-    pub fn reset_state(&mut self) {
+    fn reset_state(&mut self) {
         if let Some(state) = self.state.as_mut() {
             state.reset();
         }
         self.state = None;
     }
+}
 
+impl CompressorEffect {
     fn ensure_state(&mut self, context: &EffectContext) {
         let threshold_db = sanitize_threshold_db(self.settings.threshold_db);
         let ratio = sanitize_ratio(self.settings.ratio);
@@ -158,34 +147,36 @@ impl CompressorEffect {
         let makeup_gain_db = sanitize_makeup_db(self.settings.makeup_gain_db);
         let channels = context.channels.max(1);
 
+        let params = CompressorParams {
+            sample_rate: context.sample_rate,
+            channels,
+            threshold_db,
+            ratio,
+            attack_ms,
+            release_ms,
+            makeup_gain_db,
+        };
         let needs_reset = self
             .state
             .as_ref()
-            .map(|state| {
-                !state.matches(
-                    context.sample_rate,
-                    channels,
-                    threshold_db,
-                    ratio,
-                    attack_ms,
-                    release_ms,
-                    makeup_gain_db,
-                )
-            })
+            .map(|state| !state.matches(&params))
             .unwrap_or(true);
 
         if needs_reset {
-            self.state = Some(CompressorState::new(
-                context.sample_rate,
-                channels,
-                threshold_db,
-                ratio,
-                attack_ms,
-                release_ms,
-                makeup_gain_db,
-            ));
+            self.state = Some(CompressorState::new(&params));
         }
     }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct CompressorParams {
+    sample_rate: u32,
+    channels: usize,
+    threshold_db: f32,
+    ratio: f32,
+    attack_ms: f32,
+    release_ms: f32,
+    makeup_gain_db: f32,
 }
 
 #[derive(Clone, Debug)]
@@ -201,46 +192,31 @@ struct CompressorState {
 }
 
 impl CompressorState {
-    fn new(
-        sample_rate: u32,
-        channels: usize,
-        threshold_db: f32,
-        ratio: f32,
-        attack_ms: f32,
-        release_ms: f32,
-        makeup_gain_db: f32,
-    ) -> Self {
-        let attack_coeff = time_to_coeff(attack_ms, sample_rate);
-        let release_coeff = time_to_coeff(release_ms, sample_rate);
+    fn new(params: &CompressorParams) -> Self {
+        let attack_coeff = time_to_coeff(params.attack_ms, params.sample_rate);
+        let release_coeff = time_to_coeff(params.release_ms, params.sample_rate);
         Self {
-            sample_rate,
-            channels,
-            threshold_db,
-            ratio,
+            sample_rate: params.sample_rate,
+            channels: params.channels,
+            threshold_db: params.threshold_db,
+            ratio: params.ratio,
             attack_coeff,
             release_coeff,
-            makeup_gain_db,
+            makeup_gain_db: params.makeup_gain_db,
             current_gain_db: 0.0,
         }
     }
 
-    fn matches(
-        &self,
-        sample_rate: u32,
-        channels: usize,
-        threshold_db: f32,
-        ratio: f32,
-        attack_ms: f32,
-        release_ms: f32,
-        makeup_gain_db: f32,
-    ) -> bool {
-        self.sample_rate == sample_rate
-            && self.channels == channels
-            && (self.threshold_db - threshold_db).abs() < f32::EPSILON
-            && (self.ratio - ratio).abs() < f32::EPSILON
-            && (self.attack_coeff - time_to_coeff(attack_ms, sample_rate)).abs() < f32::EPSILON
-            && (self.release_coeff - time_to_coeff(release_ms, sample_rate)).abs() < f32::EPSILON
-            && (self.makeup_gain_db - makeup_gain_db).abs() < f32::EPSILON
+    fn matches(&self, params: &CompressorParams) -> bool {
+        self.sample_rate == params.sample_rate
+            && self.channels == params.channels
+            && (self.threshold_db - params.threshold_db).abs() < f32::EPSILON
+            && (self.ratio - params.ratio).abs() < f32::EPSILON
+            && (self.attack_coeff - time_to_coeff(params.attack_ms, params.sample_rate)).abs()
+                < f32::EPSILON
+            && (self.release_coeff - time_to_coeff(params.release_ms, params.sample_rate)).abs()
+                < f32::EPSILON
+            && (self.makeup_gain_db - params.makeup_gain_db).abs() < f32::EPSILON
     }
 
     fn update_gain(&mut self, target_gain_db: f32) {
@@ -304,7 +280,8 @@ fn sanitize_makeup_db(value: f32) -> f32 {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::CompressorEffect;
+    use crate::dsp::effects::{EffectContext, core::DspEffect};
 
     fn context(channels: usize) -> EffectContext {
         EffectContext {
@@ -344,7 +321,7 @@ mod tests {
 
         let level_db = 0.0;
         let target_gain_db = (-6.0 + (level_db + 6.0) / 2.0) - level_db;
-        let expected = db_to_linear(target_gain_db);
+        let expected = rodio::math::db_to_linear(target_gain_db);
         assert!(output.iter().all(|value| approx_eq(*value, expected, 1e-3)));
     }
 
@@ -363,7 +340,7 @@ mod tests {
         assert!(approx_eq(effect.settings.threshold_db, -12.0, 1e-6));
         assert!(approx_eq(
             effect.settings.makeup_gain_db,
-            linear_to_db(2.0),
+            rodio::math::linear_to_db(2.0),
             1e-6
         ));
     }

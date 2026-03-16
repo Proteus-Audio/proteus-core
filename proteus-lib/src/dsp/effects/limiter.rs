@@ -6,8 +6,8 @@ use std::time::Duration;
 use rodio::source::{Limit, LimitSettings, SeekError, Source};
 use serde::{Deserialize, Serialize};
 
-use super::level::deserialize_db_gain;
 use super::EffectContext;
+use super::core::level::deserialize_db_gain;
 
 const DEFAULT_THRESHOLD_DB: f32 = -1.0;
 const DEFAULT_KNEE_WIDTH_DB: f32 = 4.0;
@@ -18,20 +18,24 @@ const DEFAULT_RELEASE_MS: f32 = 100.0;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct LimiterSettings {
+    /// Signal level above which limiting is applied, in dBFS.
     #[serde(
         alias = "threshold",
         alias = "threshold_db",
         deserialize_with = "deserialize_db_gain"
     )]
     pub threshold_db: f32,
+    /// Width of the soft-knee transition zone around the threshold, in dB.
     #[serde(
         alias = "knee_width",
         alias = "knee_width_db",
         deserialize_with = "deserialize_db_gain"
     )]
     pub knee_width_db: f32,
+    /// Time for gain reduction to reach full limiting after a transient, in milliseconds.
     #[serde(alias = "attack_ms", alias = "attack")]
     pub attack_ms: f32,
+    /// Time for gain to recover after the signal falls below the threshold, in milliseconds.
     #[serde(alias = "release_ms", alias = "release")]
     pub release_ms: f32,
 }
@@ -60,10 +64,12 @@ impl Default for LimiterSettings {
 }
 
 /// Configured limiter effect with runtime state.
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct LimiterEffect {
+    /// Whether the limiter is active; when `false` samples pass through unmodified.
     pub enabled: bool,
+    /// Limiter parameters such as threshold, knee width, attack, and release.
     #[serde(flatten)]
     pub settings: LimiterSettings,
     #[serde(skip)]
@@ -79,27 +85,8 @@ impl std::fmt::Debug for LimiterEffect {
     }
 }
 
-impl Default for LimiterEffect {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            settings: LimiterSettings::default(),
-            state: None,
-        }
-    }
-}
-
-impl LimiterEffect {
-    /// Process interleaved samples through the limiter.
-    ///
-    /// # Arguments
-    /// - `samples`: Interleaved input samples.
-    /// - `context`: Environment details (sample rate, channels, etc.).
-    /// - `drain`: Unused for this effect.
-    ///
-    /// # Returns
-    /// Processed interleaved samples.
-    pub fn process(&mut self, samples: &[f32], context: &EffectContext, _drain: bool) -> Vec<f32> {
+impl super::core::DspEffect for LimiterEffect {
+    fn process(&mut self, samples: &[f32], context: &EffectContext, _drain: bool) -> Vec<f32> {
         if !self.enabled {
             return samples.to_vec();
         }
@@ -116,14 +103,15 @@ impl LimiterEffect {
         state.process(samples)
     }
 
-    /// Reset any internal state held by the limiter.
-    pub fn reset_state(&mut self) {
+    fn reset_state(&mut self) {
         if let Some(state) = self.state.as_mut() {
             state.reset();
         }
         self.state = None;
     }
+}
 
+impl LimiterEffect {
     fn ensure_state(&mut self, context: &EffectContext) {
         let settings = sanitize_settings(&self.settings);
         let channels = context.channels.max(1);
@@ -290,6 +278,7 @@ fn sanitize_time_ms(value: f32, fallback: f32) -> f32 {
 
 #[cfg(test)]
 mod tests {
+    use super::super::core::DspEffect;
     use super::*;
 
     fn context(channels: usize) -> EffectContext {

@@ -8,14 +8,18 @@ use super::EffectContext;
 const DEFAULT_DURATION_MS: u64 = 100;
 const MAX_AMPLITUDE: f32 = 0.8;
 
+/// Serializable settings for the legacy delay-based reverb effect.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct DelayReverbSettings {
+    /// Length of the feedback delay line in milliseconds.
     pub duration_ms: u64,
+    /// Feedback amplitude (gain applied on each echo); clamped to [0.0, 0.8].
     pub amplitude: f32,
 }
 
 impl DelayReverbSettings {
+    /// Create delay reverb settings.
     pub fn new(duration_ms: u64, amplitude: f32) -> Self {
         Self {
             duration_ms: duration_ms.clamp(0, u64::MAX),
@@ -41,9 +45,12 @@ impl Default for DelayReverbSettings {
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct DelayReverbEffect {
+    /// Whether the effect is active; when `false` samples pass through unmodified.
     pub enabled: bool,
+    /// Dry/wet mix ratio (0.0 = fully dry, 1.0 = fully wet).
     #[serde(alias = "dry_wet", alias = "wet_dry")]
     pub mix: f32,
+    /// Delay reverb parameters such as delay duration and feedback amplitude.
     #[serde(flatten)]
     pub settings: DelayReverbSettings,
     #[serde(skip)]
@@ -71,17 +78,8 @@ impl std::fmt::Debug for DelayReverbEffect {
     }
 }
 
-impl DelayReverbEffect {
-    /// Create a new delay reverb effect.
-    pub fn new(mix: f32) -> Self {
-        Self {
-            mix: mix.clamp(0.0, 1.0),
-            ..Default::default()
-        }
-    }
-
-    /// Process interleaved samples through a feedback delay line.
-    pub fn process(&mut self, samples: &[f32], context: &EffectContext, _drain: bool) -> Vec<f32> {
+impl crate::dsp::effects::core::DspEffect for DelayReverbEffect {
+    fn process(&mut self, samples: &[f32], context: &EffectContext, drain: bool) -> Vec<f32> {
         self.ensure_state(context);
         if !self.enabled || self.mix <= 0.0 {
             return samples.to_vec();
@@ -98,7 +96,7 @@ impl DelayReverbEffect {
         };
 
         if samples.is_empty() {
-            if _drain {
+            if drain {
                 return state.drain_tail(amplitude);
             }
             return Vec::new();
@@ -109,12 +107,21 @@ impl DelayReverbEffect {
         output
     }
 
-    /// Reset any internal state (none for delay reverb).
-    pub fn reset_state(&mut self) {
+    fn reset_state(&mut self) {
         if let Some(state) = self.state.as_mut() {
             state.reset();
         }
         self.state = None;
+    }
+}
+
+impl DelayReverbEffect {
+    /// Create a new delay reverb effect.
+    pub fn new(mix: f32) -> Self {
+        Self {
+            mix: mix.clamp(0.0, 1.0),
+            ..Default::default()
+        }
     }
 
     /// Mutable access to settings.
@@ -148,7 +155,7 @@ struct DelayReverbState {
 
 impl DelayReverbState {
     fn new(delay_samples: usize) -> Self {
-        info!("Using Delay Reverb!");
+        info!("using delay reverb");
         Self {
             delay_samples,
             delay_line: vec![0.0; delay_samples.max(1)],
@@ -215,8 +222,41 @@ fn delay_samples(sample_rate: u32, channels: usize, duration_ms: u64) -> usize {
     samples as usize
 }
 
-#[deprecated(note = "Use DelayReverbSettings instead.")]
-pub type BasicReverbSettings = DelayReverbSettings;
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::dsp::effects::core::DspEffect;
 
-#[deprecated(note = "Use DelayReverbEffect instead.")]
-pub type BasicReverbEffect = DelayReverbEffect;
+    fn context() -> EffectContext {
+        EffectContext {
+            sample_rate: 48_000,
+            channels: 2,
+            container_path: None,
+            impulse_response_spec: None,
+            impulse_response_tail_db: -60.0,
+        }
+    }
+
+    #[test]
+    fn delay_samples_handles_zero_duration() {
+        assert_eq!(delay_samples(48_000, 2, 0), 0);
+    }
+
+    #[test]
+    fn delay_reverb_passthrough_when_mix_is_zero() {
+        let mut effect = DelayReverbEffect::new(0.0);
+        effect.enabled = true;
+        let input = vec![0.2_f32, -0.2, 0.3, -0.3];
+        let output = effect.process(&input, &context(), false);
+        assert_eq!(output, input);
+    }
+
+    #[test]
+    fn delay_reverb_process_preserves_length() {
+        let mut effect = DelayReverbEffect::new(0.4);
+        effect.settings.duration_ms = 20;
+        let input = vec![0.5_f32, -0.5, 0.25, -0.25];
+        let output = effect.process(&input, &context(), false);
+        assert_eq!(output.len(), input.len());
+    }
+}

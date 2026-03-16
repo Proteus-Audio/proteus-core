@@ -2,8 +2,8 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::level::deserialize_linear_gain;
 use super::EffectContext;
+use super::core::level::deserialize_linear_gain;
 
 const DEFAULT_GAIN: f32 = 1.0;
 
@@ -11,6 +11,7 @@ const DEFAULT_GAIN: f32 = 1.0;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct GainSettings {
+    /// Linear amplitude multiplier applied to every sample (1.0 = unity gain).
     #[serde(deserialize_with = "deserialize_linear_gain")]
     pub gain: f32,
 }
@@ -29,10 +30,12 @@ impl Default for GainSettings {
 }
 
 /// Configured gain effect.
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct GainEffect {
+    /// Whether the gain effect is active; when `false` samples pass through unmodified.
     pub enabled: bool,
+    /// Gain parameter (linear multiplier).
     #[serde(flatten)]
     pub settings: GainSettings,
 }
@@ -46,26 +49,8 @@ impl std::fmt::Debug for GainEffect {
     }
 }
 
-impl Default for GainEffect {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            settings: GainSettings::default(),
-        }
-    }
-}
-
-impl GainEffect {
-    /// Process interleaved samples through the gain effect.
-    ///
-    /// # Arguments
-    /// - `samples`: Interleaved input samples.
-    /// - `context`: Environment details (unused for this effect).
-    /// - `drain`: Unused for this effect.
-    ///
-    /// # Returns
-    /// Processed interleaved samples.
-    pub fn process(&mut self, samples: &[f32], _context: &EffectContext, _drain: bool) -> Vec<f32> {
+impl super::core::DspEffect for GainEffect {
+    fn process(&mut self, samples: &[f32], _context: &EffectContext, _drain: bool) -> Vec<f32> {
         if !self.enabled {
             return samples.to_vec();
         }
@@ -83,14 +68,14 @@ impl GainEffect {
         out
     }
 
-    /// Reset any internal state (none for gain).
-    pub fn reset_state(&mut self) {}
+    fn reset_state(&mut self) {}
 }
 
 #[cfg(test)]
 mod tests {
-    use super::super::level::db_to_linear;
+    use super::super::core::DspEffect;
     use super::*;
+    use rodio::math::db_to_linear;
 
     fn context() -> EffectContext {
         EffectContext {
@@ -138,9 +123,5 @@ mod tests {
 }
 
 fn sanitize_gain(gain: f32) -> f32 {
-    if gain.is_finite() {
-        gain
-    } else {
-        DEFAULT_GAIN
-    }
+    if gain.is_finite() { gain } else { DEFAULT_GAIN }
 }

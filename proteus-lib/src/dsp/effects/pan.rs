@@ -33,10 +33,12 @@ impl Default for PanSettings {
 }
 
 /// Configured pan effect.
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct PanEffect {
+    /// Whether the pan effect is active; when `false` samples pass through unmodified.
     pub enabled: bool,
+    /// Pan parameter controlling the stereo position.
     #[serde(flatten)]
     pub settings: PanSettings,
 }
@@ -50,26 +52,8 @@ impl std::fmt::Debug for PanEffect {
     }
 }
 
-impl Default for PanEffect {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            settings: PanSettings::default(),
-        }
-    }
-}
-
-impl PanEffect {
-    /// Process interleaved samples through the pan effect.
-    ///
-    /// # Arguments
-    /// - `samples`: Interleaved input samples.
-    /// - `context`: Environment details (channels used for stereo gating).
-    /// - `drain`: Unused for this effect.
-    ///
-    /// # Returns
-    /// Processed interleaved samples.
-    pub fn process(&mut self, samples: &[f32], context: &EffectContext, _drain: bool) -> Vec<f32> {
+impl super::core::DspEffect for PanEffect {
+    fn process(&mut self, samples: &[f32], context: &EffectContext, _drain: bool) -> Vec<f32> {
         if !self.enabled {
             return samples.to_vec();
         }
@@ -99,8 +83,7 @@ impl PanEffect {
         out
     }
 
-    /// Reset any internal state (none for pan).
-    pub fn reset_state(&mut self) {}
+    fn reset_state(&mut self) {}
 }
 
 fn sanitize_pan(pan: f32) -> f32 {
@@ -113,6 +96,7 @@ fn sanitize_pan(pan: f32) -> f32 {
 
 #[cfg(test)]
 mod tests {
+    use super::super::core::DspEffect;
     use super::*;
 
     fn stereo_context() -> EffectContext {

@@ -2,8 +2,8 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::level::deserialize_linear_gain;
 use super::EffectContext;
+use super::core::level::deserialize_linear_gain;
 
 const DEFAULT_GAIN: f32 = 1.0;
 const DEFAULT_THRESHOLD: f32 = 1.0;
@@ -12,8 +12,10 @@ const DEFAULT_THRESHOLD: f32 = 1.0;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct DistortionSettings {
+    /// Pre-distortion gain multiplier applied before hard clipping.
     #[serde(deserialize_with = "deserialize_linear_gain")]
     pub gain: f32,
+    /// Clipping threshold; samples with absolute value above this are hard-clipped.
     #[serde(deserialize_with = "deserialize_linear_gain")]
     pub threshold: f32,
 }
@@ -35,10 +37,12 @@ impl Default for DistortionSettings {
 }
 
 /// Configured distortion effect.
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct DistortionEffect {
+    /// Whether the distortion is active; when `false` samples pass through unmodified.
     pub enabled: bool,
+    /// Distortion parameters such as pre-gain and clipping threshold.
     #[serde(flatten)]
     pub settings: DistortionSettings,
 }
@@ -52,26 +56,8 @@ impl std::fmt::Debug for DistortionEffect {
     }
 }
 
-impl Default for DistortionEffect {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            settings: DistortionSettings::default(),
-        }
-    }
-}
-
-impl DistortionEffect {
-    /// Process interleaved samples through the distortion effect.
-    ///
-    /// # Arguments
-    /// - `samples`: Interleaved input samples.
-    /// - `context`: Environment details (unused for this effect).
-    /// - `drain`: Unused for this effect.
-    ///
-    /// # Returns
-    /// Processed interleaved samples.
-    pub fn process(&mut self, samples: &[f32], _context: &EffectContext, _drain: bool) -> Vec<f32> {
+impl super::core::DspEffect for DistortionEffect {
+    fn process(&mut self, samples: &[f32], _context: &EffectContext, _drain: bool) -> Vec<f32> {
         if !self.enabled {
             return samples.to_vec();
         }
@@ -91,12 +77,12 @@ impl DistortionEffect {
         out
     }
 
-    /// Reset any internal state (none for distortion).
-    pub fn reset_state(&mut self) {}
+    fn reset_state(&mut self) {}
 }
 
 #[cfg(test)]
 mod tests {
+    use super::super::core::DspEffect;
     use super::*;
 
     fn context() -> EffectContext {
@@ -142,11 +128,7 @@ mod tests {
 }
 
 fn sanitize_gain(gain: f32) -> f32 {
-    if gain.is_finite() {
-        gain
-    } else {
-        DEFAULT_GAIN
-    }
+    if gain.is_finite() { gain } else { DEFAULT_GAIN }
 }
 
 fn sanitize_threshold(threshold: f32) -> f32 {

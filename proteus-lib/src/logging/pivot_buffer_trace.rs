@@ -37,6 +37,16 @@ fn parse_item_line(line: &str) -> Result<(String, String), String> {
     Ok((frame, item))
 }
 
+/// Reformat the buffer-map debug log into a pivoted, timestamp-aligned layout.
+///
+/// # Returns
+///
+/// Returns `Ok(())` after writing the formatted output file.
+///
+/// # Errors
+///
+/// Returns an error if the input file cannot be read, the log format is invalid,
+/// or the output file cannot be written.
 pub fn pivot_buffer() -> Result<(), Box<dyn std::error::Error>> {
     let in_path = String::from("log.txt");
     let out_path = Some(String::from("log-fmt.txt"));
@@ -193,4 +203,24 @@ pub fn pivot_buffer() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn type_line_detector_accepts_prefixed_digits_only() {
+        assert!(is_type_line("T0"));
+        assert!(is_type_line("T123"));
+        assert!(!is_type_line("T12x"));
+        assert!(!is_type_line("A1"));
+    }
+
+    #[test]
+    fn parse_item_line_extracts_frame_and_item() {
+        let (frame, item) = parse_item_line("[____] <- i3").unwrap();
+        assert_eq!(frame, "[____]");
+        assert_eq!(item, "i3");
+    }
 }

@@ -85,3 +85,23 @@ impl TestData {
         }
     }
 }
+
+impl Default for TestData {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::TestData;
+
+    #[test]
+    fn test_data_builds_non_empty_track_groups() {
+        let data = TestData::new();
+        assert!(!data.mp3s.is_empty());
+        assert!(!data.wavs.is_empty());
+        assert!(data.mp3s.iter().all(|group| !group.is_empty()));
+        assert!(data.wavs.iter().all(|group| !group.is_empty()));
+    }
+}

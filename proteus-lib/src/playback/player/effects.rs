@@ -7,7 +7,7 @@ use std::sync::atomic::Ordering;
 
 use crate::dsp::effects::convolution_reverb::{parse_impulse_response_string, ImpulseResponseSpec};
 use crate::{
-    dsp::effects::AudioEffect,
+    dsp::effects::{normalize_legacy_effect_aliases, AudioEffect},
     playback::engine::{DspChainMetrics, InlineEffectsUpdate},
 };
 
@@ -21,7 +21,10 @@ impl Player {
     /// * `spec` - Parsed IR selection/configuration to persist on the player.
     pub fn set_impulse_response_spec(&mut self, spec: ImpulseResponseSpec) {
         self.impulse_response_override = Some(spec.clone());
-        let mut prot = self.prot.lock().unwrap();
+        let mut prot = self
+            .prot
+            .lock()
+            .unwrap_or_else(|_| panic!("prot lock poisoned — a thread panicked while holding it"));
         prot.set_impulse_response_spec(spec);
         self.request_effects_reset();
     }
@@ -42,7 +45,10 @@ impl Player {
     /// * `tail_db` - Trim threshold in decibels applied to IR tails.
     pub fn set_impulse_response_tail_db(&mut self, tail_db: f32) {
         self.impulse_response_tail_override = Some(tail_db);
-        let mut prot = self.prot.lock().unwrap();
+        let mut prot = self
+            .prot
+            .lock()
+            .unwrap_or_else(|_| panic!("prot lock poisoned — a thread panicked while holding it"));
         prot.set_impulse_response_tail_db(tail_db);
         self.request_effects_reset();
     }
@@ -52,7 +58,9 @@ impl Player {
     /// The toggle is applied to convolution and delay-reverb instances when
     /// present.
     pub fn set_reverb_enabled(&self, enabled: bool) {
-        let mut effects = self.effects.lock().unwrap();
+        let mut effects = self.effects.lock().unwrap_or_else(|_| {
+            panic!("effects lock poisoned — a thread panicked while holding it")
+        });
         if let Some(effect) = effects
             .iter_mut()
             .find_map(|effect| effect.as_convolution_reverb_mut())
@@ -72,7 +80,9 @@ impl Player {
     /// The value is mapped across convolution, delay, and diffusion reverb
     /// variants when those effects are part of the chain.
     pub fn set_reverb_mix(&self, dry_wet: f32) {
-        let mut effects = self.effects.lock().unwrap();
+        let mut effects = self.effects.lock().unwrap_or_else(|_| {
+            panic!("effects lock poisoned — a thread panicked while holding it")
+        });
         if let Some(effect) = effects
             .iter_mut()
             .find_map(|effect| effect.as_convolution_reverb_mut())
@@ -97,7 +107,9 @@ impl Player {
     ///
     /// Returns a disabled/zeroed snapshot when no known reverb effect exists.
     pub fn get_reverb_settings(&self) -> ReverbSettingsSnapshot {
-        let effects = self.effects.lock().unwrap();
+        let effects = self.effects.lock().unwrap_or_else(|_| {
+            panic!("effects lock poisoned — a thread panicked while holding it")
+        });
         if let Some(effect) = effects
             .iter()
             .find_map(|effect| effect.as_convolution_reverb())
@@ -131,25 +143,13 @@ impl Player {
     /// Snapshot the active effect chain names.
     ///
     /// This is primarily intended for diagnostics and UI display.
-    #[allow(deprecated)]
     pub fn get_effect_names(&self) -> Vec<String> {
-        let effects = self.effects.lock().unwrap();
+        let effects = self.effects.lock().unwrap_or_else(|_| {
+            panic!("effects lock poisoned — a thread panicked while holding it")
+        });
         effects
             .iter()
-            .map(|effect| match effect {
-                AudioEffect::DelayReverb(_) => "DelayReverb".to_string(),
-                AudioEffect::BasicReverb(_) => "DelayReverb".to_string(),
-                AudioEffect::DiffusionReverb(_) => "DiffusionReverb".to_string(),
-                AudioEffect::ConvolutionReverb(_) => "ConvolutionReverb".to_string(),
-                AudioEffect::LowPassFilter(_) => "LowPassFilter".to_string(),
-                AudioEffect::HighPassFilter(_) => "HighPassFilter".to_string(),
-                AudioEffect::Distortion(_) => "Distortion".to_string(),
-                AudioEffect::Gain(_) => "Gain".to_string(),
-                AudioEffect::Compressor(_) => "Compressor".to_string(),
-                AudioEffect::Limiter(_) => "Limiter".to_string(),
-                AudioEffect::MultibandEq(_) => "MultibandEq".to_string(),
-                AudioEffect::Pan(_) => "Pan".to_string(),
-            })
+            .map(|effect| effect.display_name().to_string())
             .collect()
     }
 
@@ -192,10 +192,14 @@ impl Player {
         }
 
         let transition_ms = {
-            let settings = self.buffer_settings.lock().unwrap();
+            let settings = self.buffer_settings.lock().unwrap_or_else(|_| {
+                panic!("buffer settings lock poisoned — a thread panicked while holding it")
+            });
             settings.inline_effects_transition_ms.max(0.0)
         };
-        let mut pending = self.inline_effects_update.lock().unwrap();
+        let mut pending = self.inline_effects_update.lock().unwrap_or_else(|_| {
+            panic!("inline effects update lock poisoned — a thread panicked while holding it")
+        });
         *pending = Some(InlineEffectsUpdate::new(effects, transition_ms));
     }
 
@@ -205,19 +209,28 @@ impl Player {
     ///
     /// A copy of the most recent metrics updated by the playback thread.
     pub fn get_dsp_metrics(&self) -> DspChainMetrics {
-        *self.dsp_metrics.lock().unwrap()
+        *self.dsp_metrics.lock().unwrap_or_else(|_| {
+            panic!("dsp metrics lock poisoned — a thread panicked while holding it")
+        })
     }
 
     /// Retrieve the most recent per-channel peak levels.
     pub fn get_levels(&self) -> Vec<f32> {
-        self.output_meter.lock().unwrap().levels()
+        self.output_meter
+            .lock()
+            .unwrap_or_else(|_| {
+                panic!("output meter lock poisoned — a thread panicked while holding it")
+            })
+            .levels()
     }
 
     /// Retrieve the most recent per-channel peak levels in dBFS.
     pub fn get_levels_db(&self) -> Vec<f32> {
         self.output_meter
             .lock()
-            .unwrap()
+            .unwrap_or_else(|_| {
+                panic!("output meter lock poisoned — a thread panicked while holding it")
+            })
             .levels()
             .into_iter()
             .map(linear_to_dbfs)
@@ -226,12 +239,22 @@ impl Player {
 
     /// Retrieve the most recent per-channel average levels.
     pub fn get_levels_avg(&self) -> Vec<f32> {
-        self.output_meter.lock().unwrap().averages()
+        self.output_meter
+            .lock()
+            .unwrap_or_else(|_| {
+                panic!("output meter lock poisoned — a thread panicked while holding it")
+            })
+            .averages()
     }
 
     /// Set the output meter refresh rate (frames per second).
     pub fn set_output_meter_refresh_hz(&self, hz: f32) {
-        self.output_meter.lock().unwrap().set_refresh_hz(hz);
+        self.output_meter
+            .lock()
+            .unwrap_or_else(|_| {
+                panic!("output meter lock poisoned — a thread panicked while holding it")
+            })
+            .set_refresh_hz(hz);
     }
 
     /// Bump the effects reset generation consumed by the runtime engine.
@@ -241,15 +264,20 @@ impl Player {
 
     /// Drop any pending inline effects transition update.
     pub(super) fn clear_inline_effects_update(&self) {
-        let mut pending = self.inline_effects_update.lock().unwrap();
+        let mut pending = self.inline_effects_update.lock().unwrap_or_else(|_| {
+            panic!("inline effects update lock poisoned — a thread panicked while holding it")
+        });
         pending.take();
     }
 
     /// Replace the currently active effect vector atomically.
     fn replace_effects_chain(&self, effects: Vec<AudioEffect>) {
-        let mut guard = self.effects.lock().unwrap();
-        log::info!("updated effects chain: {} effect(s)", effects.len());
-        *guard = effects;
+        let mut guard = self.effects.lock().unwrap_or_else(|_| {
+            panic!("effects lock poisoned — a thread panicked while holding it")
+        });
+        let normalized = normalize_legacy_effect_aliases(effects);
+        log::info!("updated effects chain: {} effect(s)", normalized.len());
+        *guard = normalized;
     }
 }
 
@@ -258,5 +286,21 @@ fn linear_to_dbfs(value: f32) -> f32 {
         f32::NEG_INFINITY
     } else {
         20.0 * value.log10()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::linear_to_dbfs;
+
+    #[test]
+    fn zero_or_negative_linear_maps_to_negative_infinity() {
+        assert!(linear_to_dbfs(0.0).is_infinite() && linear_to_dbfs(0.0).is_sign_negative());
+        assert!(linear_to_dbfs(-1.0).is_infinite() && linear_to_dbfs(-1.0).is_sign_negative());
+    }
+
+    #[test]
+    fn unity_linear_maps_to_zero_dbfs() {
+        assert_eq!(linear_to_dbfs(1.0), 0.0);
     }
 }

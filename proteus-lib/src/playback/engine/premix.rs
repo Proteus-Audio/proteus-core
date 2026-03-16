@@ -52,3 +52,24 @@ impl PremixBuffer {
         self.samples.drain(0..take).collect()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::PremixBuffer;
+
+    #[test]
+    fn premix_buffer_push_pop_preserves_order() {
+        let mut buffer = PremixBuffer::new();
+        buffer.push_interleaved(&[0.1, 0.2, 0.3]);
+        assert_eq!(buffer.pop_chunk(2), vec![0.1, 0.2]);
+        assert_eq!(buffer.pop_chunk(2), vec![0.3]);
+    }
+
+    #[test]
+    fn premix_buffer_clear_empties_queue() {
+        let mut buffer = PremixBuffer::new();
+        buffer.push_interleaved(&[1.0, 2.0]);
+        buffer.clear();
+        assert!(buffer.is_empty());
+    }
+}

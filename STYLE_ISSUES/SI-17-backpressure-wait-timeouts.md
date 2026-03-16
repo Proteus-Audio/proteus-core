@@ -2,8 +2,8 @@
 
 ## Files affected
 
-| File | Notes |
-|---|---|
+| File                                                               | Notes                                                                                                |
+| ------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------- |
 | `proteus-lib/src/playback/engine/mix/buffer_mixer/backpressure.rs` | `wait_for_source_room` uses `self.cv.wait(guard).unwrap()` with no timeout or periodic shutdown poll |
 
 ---

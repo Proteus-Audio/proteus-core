@@ -1,9 +1,10 @@
 //! Decode backpressure state and synchronization.
 
-use log::debug;
 use std::collections::HashMap;
 use std::sync::{Condvar, Mutex};
 use std::time::Duration;
+
+use log::debug;
 
 use super::{BufferInstance, SourceKey};
 
@@ -39,7 +40,6 @@ pub(crate) struct DecodeBackpressure {
 
 impl DecodeBackpressure {
     /// Build backpressure state from the mixer's per-instance buffers.
-    /// Build backpressure state from the mixer's per-instance buffers.
     pub(super) fn from_instances(instances: &[BufferInstance]) -> Self {
         let mut state = DecodeBackpressureState::default();
         state.instances.reserve(instances.len());
@@ -63,7 +63,6 @@ impl DecodeBackpressure {
         }
     }
 
-    /// Block a decode worker until every routed instance for `source` has room.
     /// Block until the given source can atomically reserve room across all routed instances.
     pub(crate) fn wait_for_source_room(
         &self,
@@ -75,7 +74,9 @@ impl DecodeBackpressure {
             return true;
         }
 
-        let mut guard = self.state.lock().unwrap();
+        let mut guard = self.state.lock().unwrap_or_else(|_| {
+            panic!("decode backpressure state lock poisoned — a thread panicked while holding it")
+        });
         let mut wait_count = 0usize;
         loop {
             if guard.shutdown || abort.load(std::sync::atomic::Ordering::Relaxed) {
@@ -88,7 +89,12 @@ impl DecodeBackpressure {
                 );
                 return false;
             }
-            let status = source_room_status(&guard, source, required_samples);
+            let status = source_room_status(
+                &guard,
+                source,
+                required_samples,
+                log::log_enabled!(log::Level::Debug),
+            );
             if status.allowed {
                 reserve_source_room(&mut guard, source, required_samples);
                 if wait_count > 0 {
@@ -148,7 +154,6 @@ impl DecodeBackpressure {
         }
     }
 
-    /// Account for a routed write attempt and wake any waiting decode workers.
     /// Reconcile reserved room with actual routed writes and notify waiting workers.
     pub(super) fn on_samples_pushed(
         &self,
@@ -160,7 +165,9 @@ impl DecodeBackpressure {
         if attempted_samples == 0 && pushed_samples == 0 && !is_full {
             return;
         }
-        let mut guard = self.state.lock().unwrap();
+        let mut guard = self.state.lock().unwrap_or_else(|_| {
+            panic!("decode backpressure state lock poisoned — a thread panicked while holding it")
+        });
         if let Some(instance) = guard.instances.get_mut(instance_index) {
             instance.reserved_samples = instance.reserved_samples.saturating_sub(attempted_samples);
             instance.buffered_samples = instance
@@ -184,13 +191,14 @@ impl DecodeBackpressure {
         }
     }
 
-    /// Account for samples consumed by the mixer and wake waiting decode workers.
     /// Record samples consumed from an instance buffer and notify waiting workers.
     pub(super) fn on_samples_popped(&self, instance_index: usize, popped_samples: usize) {
         if popped_samples == 0 {
             return;
         }
-        let mut guard = self.state.lock().unwrap();
+        let mut guard = self.state.lock().unwrap_or_else(|_| {
+            panic!("decode backpressure state lock poisoned — a thread panicked while holding it")
+        });
         if let Some(instance) = guard.instances.get_mut(instance_index) {
             instance.buffered_samples = instance.buffered_samples.saturating_sub(popped_samples);
             debug!(
@@ -206,10 +214,11 @@ impl DecodeBackpressure {
         self.cv.notify_all();
     }
 
-    /// Mark an instance as finished so it stops participating in backpressure checks.
     /// Mark an instance finished so it no longer blocks backpressure checks.
     pub(super) fn on_finished(&self, instance_index: usize) {
-        let mut guard = self.state.lock().unwrap();
+        let mut guard = self.state.lock().unwrap_or_else(|_| {
+            panic!("decode backpressure state lock poisoned — a thread panicked while holding it")
+        });
         if let Some(instance) = guard.instances.get_mut(instance_index) {
             if !instance.finished {
                 instance.finished = true;
@@ -226,36 +235,53 @@ impl DecodeBackpressure {
         }
     }
 
-    /// Release all waiting decode workers during teardown.
     /// Wake all waiters and force future room checks to fail.
     pub(crate) fn shutdown(&self) {
-        let mut guard = self.state.lock().unwrap();
+        let mut guard = self.state.lock().unwrap_or_else(|_| {
+            panic!("decode backpressure state lock poisoned — a thread panicked while holding it")
+        });
         guard.shutdown = true;
         debug!("decode_backpressure shutdown");
         self.cv.notify_all();
     }
 
-    /// Return true if any decode worker is currently waiting on room.
     /// Return true when any decode worker is blocked waiting for room.
     pub(crate) fn has_waiters(&self) -> bool {
-        self.state.lock().unwrap().waiting_threads > 0
+        self.state
+            .lock()
+            .unwrap_or_else(|_| {
+                panic!(
+                    "decode backpressure state lock poisoned — a thread panicked while holding it"
+                )
+            })
+            .waiting_threads
+            > 0
     }
 
-    /// Enable startup fairness so lagging sources are prioritized until the start gate passes.
     /// Enable startup fairness mode with a per-instance target occupancy.
     pub(crate) fn enable_startup_priority(&self, target_samples: usize) {
-        let mut guard = self.state.lock().unwrap();
+        let mut guard = self.state.lock().unwrap_or_else(|_| {
+            panic!("decode backpressure state lock poisoned — a thread panicked while holding it")
+        });
         guard.startup_priority_target_samples = Some(target_samples.max(1));
         self.cv.notify_all();
     }
 
-    /// Disable startup fairness and resume steady-state backpressure behavior.
     /// Disable startup fairness mode and resume steady-state buffering behavior.
     pub(crate) fn disable_startup_priority(&self) {
-        let mut guard = self.state.lock().unwrap();
+        let mut guard = self.state.lock().unwrap_or_else(|_| {
+            panic!("decode backpressure state lock poisoned — a thread panicked while holding it")
+        });
         guard.startup_priority_target_samples = None;
         self.cv.notify_all();
     }
+}
+
+struct SourceRoomAccum<'a> {
+    saw_unfinished: &'a mut bool,
+    all_have_target_room: &'a mut bool,
+    source_has_startup_deficit: &'a mut bool,
+    parts: &'a mut Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone)]
@@ -270,11 +296,16 @@ fn source_room_status(
     state: &DecodeBackpressureState,
     source: &SourceKey,
     required_samples: usize,
+    include_details: bool,
 ) -> SourceRoomStatus {
     let Some(instance_indices) = state.source_to_instances.get(source) else {
         return SourceRoomStatus {
             allowed: true,
-            summary: "no_instances".to_string(),
+            summary: if include_details {
+                "no_instances".to_string()
+            } else {
+                String::new()
+            },
         };
     };
 
@@ -282,49 +313,31 @@ fn source_room_status(
     let mut all_have_target_room = true;
     let startup_target = state.startup_priority_target_samples;
     let mut source_has_startup_deficit = false;
-    let mut parts = Vec::new();
+    let mut parts = include_details.then(Vec::new);
 
     for instance_index in instance_indices {
-        let Some(instance) = state.instances.get(*instance_index) else {
-            continue;
+        let mut accum = SourceRoomAccum {
+            saw_unfinished: &mut saw_unfinished,
+            all_have_target_room: &mut all_have_target_room,
+            source_has_startup_deficit: &mut source_has_startup_deficit,
+            parts: &mut parts,
         };
-        if instance.finished {
-            parts.push(format!("i{}:finished", instance_index));
-            continue;
-        }
-        saw_unfinished = true;
-
-        let occupied = instance
-            .buffered_samples
-            .saturating_add(instance.reserved_samples)
-            .min(instance.capacity_samples);
-        let free = instance.capacity_samples.saturating_sub(occupied);
-        if let Some(startup_target) = startup_target {
-            let startup_target = startup_target.min(instance.capacity_samples.max(1));
-            if occupied < startup_target {
-                source_has_startup_deficit = true;
-            }
-        }
-
-        // A packet may be larger than the per-instance ring capacity, so "full packet room"
-        // is impossible in that case. Clamp the target to preserve liveness.
-        let target_room = required_samples.min(instance.capacity_samples.max(1));
-        all_have_target_room &= free >= target_room;
-        parts.push(format!(
-            "i{}:buf={} res={} /{} free={} target={}",
-            instance_index,
-            instance.buffered_samples,
-            instance.reserved_samples,
-            instance.capacity_samples,
-            free,
-            target_room
-        ));
+        update_source_room_state(
+            state.instances.get(*instance_index),
+            *instance_index,
+            startup_target,
+            required_samples,
+            &mut accum,
+        );
     }
 
     if !saw_unfinished {
         return SourceRoomStatus {
             allowed: true,
-            summary: format!("all_finished [{}]", parts.join(", ")),
+            summary: parts
+                .as_ref()
+                .map(|parts| format!("all_finished [{}]", parts.join(", ")))
+                .unwrap_or_default(),
         };
     }
 
@@ -348,15 +361,66 @@ fn source_room_status(
     let allowed = all_have_target_room && startup_fairness_allows;
     SourceRoomStatus {
         allowed,
-        summary: format!(
-            "allowed={} all_target={} startup_deficit_global={} startup_deficit_source={} [{}]",
-            allowed,
-            all_have_target_room,
-            global_startup_deficit_exists,
-            source_has_startup_deficit,
-            parts.join(", ")
-        ),
+        summary: if let Some(parts) = parts.as_ref() {
+            format!(
+                "allowed={} all_target={} startup_deficit_global={} startup_deficit_source={} [{}]",
+                allowed,
+                all_have_target_room,
+                global_startup_deficit_exists,
+                source_has_startup_deficit,
+                parts.join(", ")
+            )
+        } else {
+            String::new()
+        },
     }
+}
+
+fn update_source_room_state(
+    instance: Option<&DecodeBackpressureInstance>,
+    instance_index: usize,
+    startup_target: Option<usize>,
+    required_samples: usize,
+    accum: &mut SourceRoomAccum<'_>,
+) {
+    let Some(instance) = instance else {
+        return;
+    };
+    if instance.finished {
+        if let Some(parts) = accum.parts.as_mut() {
+            parts.push(format!("i{}:finished", instance_index));
+        }
+        return;
+    }
+
+    *accum.saw_unfinished = true;
+    let occupied = occupied_samples(instance);
+    let free = instance.capacity_samples.saturating_sub(occupied);
+    if startup_target.is_some_and(|target| occupied < target.min(instance.capacity_samples.max(1)))
+    {
+        *accum.source_has_startup_deficit = true;
+    }
+
+    let target_room = required_samples.min(instance.capacity_samples.max(1));
+    *accum.all_have_target_room &= free >= target_room;
+    if let Some(parts) = accum.parts.as_mut() {
+        parts.push(format!(
+            "i{}:buf={} res={} /{} free={} target={}",
+            instance_index,
+            instance.buffered_samples,
+            instance.reserved_samples,
+            instance.capacity_samples,
+            free,
+            target_room
+        ));
+    }
+}
+
+fn occupied_samples(instance: &DecodeBackpressureInstance) -> usize {
+    instance
+        .buffered_samples
+        .saturating_add(instance.reserved_samples)
+        .min(instance.capacity_samples)
 }
 
 /// Reserve space for a source across all routed instances before packet delivery.
@@ -383,3 +447,6 @@ fn reserve_source_room(
             .min(instance.capacity_samples.max(1));
     }
 }
+
+#[cfg(test)]
+mod tests;

@@ -2,8 +2,8 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::biquad::{BiquadKind, BiquadState};
 use super::EffectContext;
+use super::core::biquad::{BiquadKind, BiquadState};
 
 const DEFAULT_FREQ_HZ: u32 = 1000;
 const DEFAULT_Q: f32 = 0.5;
@@ -12,8 +12,10 @@ const DEFAULT_Q: f32 = 0.5;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct LowPassFilterSettings {
+    /// Cutoff frequency in Hz; energy above this frequency is attenuated.
     #[serde(alias = "freq", alias = "frequency_hz")]
     pub freq_hz: u32,
+    /// Quality factor controlling the sharpness of the cutoff slope.
     #[serde(alias = "bandwidth")]
     pub q: f32,
 }
@@ -35,10 +37,12 @@ impl Default for LowPassFilterSettings {
 }
 
 /// Configured low-pass filter effect with runtime state.
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct LowPassFilterEffect {
+    /// Whether the filter is active; when `false` samples pass through unmodified.
     pub enabled: bool,
+    /// Low-pass filter parameters such as cutoff frequency and Q factor.
     #[serde(flatten)]
     pub settings: LowPassFilterSettings,
     #[serde(skip)]
@@ -54,27 +58,8 @@ impl std::fmt::Debug for LowPassFilterEffect {
     }
 }
 
-impl Default for LowPassFilterEffect {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            settings: LowPassFilterSettings::default(),
-            state: None,
-        }
-    }
-}
-
-impl LowPassFilterEffect {
-    /// Process interleaved samples through the low-pass filter.
-    ///
-    /// # Arguments
-    /// - `samples`: Interleaved input samples.
-    /// - `context`: Environment details (sample rate, channels, etc.).
-    /// - `drain`: Unused for this effect.
-    ///
-    /// # Returns
-    /// Processed interleaved samples.
-    pub fn process(&mut self, samples: &[f32], context: &EffectContext, _drain: bool) -> Vec<f32> {
+impl super::core::DspEffect for LowPassFilterEffect {
+    fn process(&mut self, samples: &[f32], context: &EffectContext, _drain: bool) -> Vec<f32> {
         if !self.enabled {
             return samples.to_vec();
         }
@@ -87,14 +72,15 @@ impl LowPassFilterEffect {
         state.process(samples)
     }
 
-    /// Reset any internal state held by the filter.
-    pub fn reset_state(&mut self) {
+    fn reset_state(&mut self) {
         if let Some(state) = self.state.as_mut() {
             state.reset();
         }
         self.state = None;
     }
+}
 
+impl LowPassFilterEffect {
     fn ensure_state(&mut self, context: &EffectContext) {
         let needs_reset = self
             .state
@@ -124,6 +110,7 @@ impl LowPassFilterEffect {
 
 #[cfg(test)]
 mod tests {
+    use super::super::core::DspEffect;
     use super::*;
 
     fn context() -> EffectContext {
@@ -154,5 +141,19 @@ mod tests {
         assert_eq!(output.len(), samples.len());
         assert!(output.iter().any(|value| (*value - 1.0).abs() > 1e-6));
         assert!(output.iter().all(|value| value.is_finite()));
+    }
+
+    #[test]
+    fn low_pass_reset_restores_passthrough_when_disabled() {
+        let mut effect = LowPassFilterEffect::default();
+        effect.enabled = true;
+        effect.settings.freq_hz = 350;
+        let samples = vec![0.3_f32, -0.4, 0.9, -0.8];
+        let _ = effect.process(&samples, &context(), false);
+
+        effect.reset_state();
+        effect.enabled = false;
+        let output = effect.process(&samples, &context(), false);
+        assert_eq!(output, samples);
     }
 }

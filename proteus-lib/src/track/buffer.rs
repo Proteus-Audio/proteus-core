@@ -21,10 +21,14 @@ pub fn add_samples_to_buffer_map(
             return;
         }
 
-        let map = buffer_map.lock().unwrap();
+        let map = buffer_map.lock().unwrap_or_else(|_| {
+            panic!("buffer map lock poisoned — a thread panicked while holding it")
+        });
         let remaining = match map.get(&track_key) {
             Some(buffer) => {
-                let buffer = buffer.lock().unwrap();
+                let buffer = buffer.lock().unwrap_or_else(|_| {
+                    panic!("track buffer lock poisoned — a thread panicked while holding it")
+                });
                 buffer.max_len().saturating_sub(buffer.len())
             }
             None => 0,
@@ -43,7 +47,9 @@ pub fn add_samples_to_buffer_map(
 
         let take = remaining.min(samples.len() - offset);
         if let Some(buffer) = map.get(&track_key) {
-            let mut buffer = buffer.lock().unwrap();
+            let mut buffer = buffer.lock().unwrap_or_else(|_| {
+                panic!("track buffer lock poisoned — a thread panicked while holding it")
+            });
             for sample in samples[offset..offset + take].iter().copied() {
                 buffer.push(sample);
             }
@@ -57,40 +63,29 @@ pub fn add_samples_to_buffer_map(
     }
 }
 
-/// Push samples into the per-track ring buffer without blocking.
-#[allow(dead_code)]
-pub fn add_samples_to_buffer_map_nonblocking(
-    buffer_map: &mut TrackBufferMap,
-    track_key: u16,
-    samples: Vec<f32>,
-    _abort: &Arc<AtomicBool>,
-    notify: Option<&Arc<std::sync::Condvar>>,
-) {
-    let remaining = buffer_remaining_space(buffer_map, track_key);
-    if remaining == 0 {
-        return;
-    }
-
-    let take = remaining.min(samples.len());
-    let map = buffer_map.lock().unwrap();
-    if let Some(buffer) = map.get(&track_key) {
-        let mut buffer = buffer.lock().unwrap();
-        for sample in samples.into_iter().take(take) {
-            buffer.push(sample);
-        }
-    }
-    if let Some(notify) = notify {
-        notify.notify_one();
-    }
-}
-
 /// Record a track key as finished (idempotent).
 pub fn mark_track_as_finished(finished_tracks: &mut Arc<Mutex<Vec<u16>>>, track_key: u16) {
-    let mut finished_tracks_copy = finished_tracks.lock().unwrap();
+    let mut finished_tracks_copy = finished_tracks.lock().unwrap_or_else(|_| {
+        panic!("finished tracks lock poisoned — a thread panicked while holding it")
+    });
     if finished_tracks_copy.contains(&track_key) {
         return;
     }
     finished_tracks_copy.push(track_key);
     drop(finished_tracks_copy);
     log::info!("track finished: key={}", track_key);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::mark_track_as_finished;
+    use std::sync::{Arc, Mutex};
+
+    #[test]
+    fn mark_track_as_finished_is_idempotent() {
+        let mut finished = Arc::new(Mutex::new(Vec::new()));
+        mark_track_as_finished(&mut finished, 4);
+        mark_track_as_finished(&mut finished, 4);
+        assert_eq!(finished.lock().unwrap().as_slice(), &[4]);
+    }
 }

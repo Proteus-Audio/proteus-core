@@ -1,34 +1,29 @@
 //! Convolution reverb effect wrapper for the DSP chain.
+//!
+//! Impulse response loading, caching, and reverb kernel construction live in
+//! `ir_loader`. The effect struct, its `DspEffect` impl, and the runtime
+//! buffering state are defined here.
 
-use std::collections::HashMap;
-use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, OnceLock};
-
-use log::{info, warn};
+use log::info;
 use serde::{Deserialize, Serialize};
 
 use super::EffectContext;
 
 pub mod convolution;
 pub mod impulse_response;
+mod ir_loader;
 pub mod reverb;
 mod spec;
 
-pub(crate) use spec::{parse_impulse_response_spec, parse_impulse_response_tail_db};
-pub use spec::{parse_impulse_response_string, ImpulseResponseSpec};
+pub use ir_loader::clear_global_caches;
+pub use spec::{ImpulseResponseSpec, parse_impulse_response_string};
 
-const DEFAULT_DRY_WET: f32 = 0.000001;
+pub(crate) const DEFAULT_DRY_WET: f32 = 0.000001;
 const DEFAULT_TAIL_DB: f32 = -60.0;
 pub(crate) const REVERB_BATCH_BLOCKS: usize = 2;
 const DRAIN_MAX_BLOCKS: usize = 128;
 const DRAIN_SILENCE_EPSILON: f32 = 1.0e-6;
 const DRAIN_SILENT_BLOCKS_TO_STOP: usize = 2;
-
-type ImpulseResponseCacheMap =
-    HashMap<ImpulseResponseCacheKey, Arc<impulse_response::ImpulseResponse>>;
-static IMPULSE_RESPONSE_CACHE: OnceLock<Mutex<ImpulseResponseCacheMap>> = OnceLock::new();
-type ReverbKernelCacheMap = HashMap<ReverbKernelCacheKey, Arc<reverb::Reverb>>;
-static REVERB_KERNEL_CACHE: OnceLock<Mutex<ReverbKernelCacheMap>> = OnceLock::new();
 
 /// Preferred processing batch size in interleaved samples for the reverb.
 pub fn preferred_batch_samples(channels: usize) -> usize {
@@ -36,25 +31,27 @@ pub fn preferred_batch_samples(channels: usize) -> usize {
 }
 
 /// Serialized configuration for convolution reverb impulse response selection.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ConvolutionReverbSettings {
+    /// Inline IR identifier or attachment name (primary field, checked first).
     pub impulse_response: Option<String>,
+    /// Name of the IR embedded as a Matroska attachment (legacy alias).
     pub impulse_response_attachment: Option<String>,
+    /// Filesystem path to an external IR audio file (legacy alias).
     pub impulse_response_path: Option<String>,
+    /// dB level below peak at which the IR tail is considered silent and truncated.
     pub impulse_response_tail_db: Option<f32>,
+    /// Legacy alias for `impulse_response_tail_db`.
     pub impulse_response_tail: Option<f32>,
 }
 
-impl Default for ConvolutionReverbSettings {
-    fn default() -> Self {
-        Self {
-            impulse_response: None,
-            impulse_response_attachment: None,
-            impulse_response_path: None,
-            impulse_response_tail_db: None,
-            impulse_response_tail: None,
-        }
+impl ConvolutionReverbSettings {
+    /// Resolve a tail trim value, falling back to the default.
+    pub fn tail_db_or_default(&self) -> f32 {
+        self.impulse_response_tail_db
+            .or(self.impulse_response_tail)
+            .unwrap_or(DEFAULT_TAIL_DB)
     }
 }
 
@@ -62,9 +59,12 @@ impl Default for ConvolutionReverbSettings {
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ConvolutionReverbEffect {
+    /// Whether the effect is active; when `false` samples pass through unmodified.
     pub enabled: bool,
+    /// Dry/wet mix ratio (0.0 = fully dry, 1.0 = fully wet).
     #[serde(alias = "wet_dry", alias = "mix")]
     pub dry_wet: f32,
+    /// Impulse response selection and tail configuration.
     #[serde(flatten)]
     pub settings: ConvolutionReverbSettings,
     #[serde(skip)]
@@ -95,6 +95,34 @@ impl Default for ConvolutionReverbEffect {
     }
 }
 
+impl crate::dsp::effects::core::DspEffect for ConvolutionReverbEffect {
+    fn process(&mut self, samples: &[f32], context: &EffectContext, drain: bool) -> Vec<f32> {
+        self.ensure_state(context);
+        if !self.enabled || self.dry_wet <= 0.0 {
+            return samples.to_vec();
+        }
+
+        let Some(state) = self.state.as_mut() else {
+            return samples.to_vec();
+        };
+
+        state.reverb.set_dry_wet(self.dry_wet);
+        state.process(samples, drain)
+    }
+
+    fn reset_state(&mut self) {
+        if let Some(state) = self.state.as_mut() {
+            state.reset();
+        }
+        self.state = None;
+        self.resolved_config = None;
+    }
+
+    fn warm_up(&mut self, context: &EffectContext) {
+        let _ = self.process(&[], context, false);
+    }
+}
+
 impl ConvolutionReverbEffect {
     /// Create a new convolution reverb effect.
     pub fn new(dry_wet: f32) -> Self {
@@ -114,41 +142,6 @@ impl ConvolutionReverbEffect {
         &mut self.settings
     }
 
-    /// Process interleaved samples through the reverb.
-    ///
-    /// # Arguments
-    /// - `samples`: Interleaved input samples.
-    /// - `context`: Environment details (sample rate, channels, etc.).
-    /// - `drain`: When true, flush buffered tail data if present.
-    ///
-    /// # Returns
-    /// Processed interleaved samples.
-    pub fn process(&mut self, samples: &[f32], context: &EffectContext, drain: bool) -> Vec<f32> {
-        self.ensure_state(context);
-        if !self.enabled || self.dry_wet <= 0.0 {
-            return samples.to_vec();
-        }
-
-        let Some(state) = self.state.as_mut() else {
-            return samples.to_vec();
-        };
-
-        state.reverb.set_dry_wet(self.dry_wet);
-        state.process(samples, drain)
-    }
-
-    /// Clear all internal buffers and convolution history.
-    ///
-    /// # Returns
-    /// Nothing.
-    pub fn reset_state(&mut self) {
-        if let Some(state) = self.state.as_mut() {
-            state.reset();
-        }
-        self.state = None;
-        self.resolved_config = None;
-    }
-
     fn ensure_state(&mut self, context: &EffectContext) {
         let config = self.resolve_config(context);
         if self.resolved_config.as_ref() == Some(&config) && self.state.is_some() {
@@ -156,7 +149,7 @@ impl ConvolutionReverbEffect {
         }
 
         let start = std::time::Instant::now();
-        let reverb = build_reverb_with_impulse_response(
+        let reverb = ir_loader::build_reverb_with_impulse_response(
             config.channels,
             self.dry_wet,
             config.impulse_spec.clone(),
@@ -165,7 +158,7 @@ impl ConvolutionReverbEffect {
         );
         let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
         log::info!(
-            "Convolution reverb init: {:.2}ms (ir={:?} channels={})",
+            "convolution reverb init: {:.2}ms (ir={:?} channels={})",
             elapsed_ms,
             config.impulse_spec,
             config.channels
@@ -218,29 +211,6 @@ struct ResolvedConfig {
     tail_db: f32,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-enum ImpulseResponseCacheSource {
-    Attachment {
-        container_path: String,
-        attachment_name: String,
-    },
-    FilePath {
-        path: String,
-    },
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-struct ImpulseResponseCacheKey {
-    source: ImpulseResponseCacheSource,
-    tail_db_bits: u32,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-struct ReverbKernelCacheKey {
-    channels: usize,
-    impulse_response: ImpulseResponseCacheKey,
-}
-
 #[derive(Clone)]
 struct ConvolutionReverbState {
     reverb: reverb::Reverb,
@@ -253,7 +223,7 @@ struct ConvolutionReverbState {
 
 impl ConvolutionReverbState {
     fn new(mut reverb: reverb::Reverb) -> Self {
-        info!("Using Convolution Reverb!");
+        info!("using convolution reverb");
         let block_samples = reverb.block_size_samples();
         reverb.set_dry_wet(DEFAULT_DRY_WET);
         Self {
@@ -286,7 +256,7 @@ impl ConvolutionReverbState {
 
             let mut out = Vec::new();
             if !self.output_buffer.is_empty() {
-                out.extend(self.output_buffer.drain(..));
+                out.append(&mut self.output_buffer);
             }
             out.extend(self.drain_tail_blocks());
             self.tail_drained = true;
@@ -377,185 +347,34 @@ impl ConvolutionReverbState {
     }
 }
 
-fn build_reverb_with_impulse_response(
-    channels: usize,
-    dry_wet: f32,
-    impulse_spec: Option<ImpulseResponseSpec>,
-    container_path: Option<&str>,
-    tail_db: f32,
-) -> Option<reverb::Reverb> {
-    let impulse_spec = impulse_spec?;
+#[cfg(test)]
+mod tests {
+    use super::{ConvolutionReverbEffect, ConvolutionReverbSettings, EffectContext};
+    use crate::dsp::effects::core::DspEffect;
 
-    use self::impulse_response::{
-        load_impulse_response_from_file_with_tail,
-        load_impulse_response_from_prot_attachment_with_tail,
-    };
-
-    let result = match impulse_spec {
-        ImpulseResponseSpec::Attachment(name) => container_path
-            .ok_or_else(|| "missing container path for attachment".to_string())
-            .and_then(|path| {
-                let cache_key = ImpulseResponseCacheKey {
-                    source: ImpulseResponseCacheSource::Attachment {
-                        container_path: path.to_string(),
-                        attachment_name: name.clone(),
-                    },
-                    tail_db_bits: tail_db.to_bits(),
-                };
-                let impulse_response = load_cached_impulse_response(cache_key.clone(), || {
-                    load_impulse_response_from_prot_attachment_with_tail(path, &name, Some(tail_db))
-                        .map_err(|err| err.to_string())
-                })?;
-                Ok((cache_key, impulse_response))
-            }),
-        ImpulseResponseSpec::FilePath(path) => {
-            let resolved_path = resolve_impulse_response_path(container_path, &path);
-            if resolved_path.exists() {
-                let cache_key = ImpulseResponseCacheKey {
-                    source: ImpulseResponseCacheSource::FilePath {
-                        path: resolved_path.to_string_lossy().into_owned(),
-                    },
-                    tail_db_bits: tail_db.to_bits(),
-                };
-                load_cached_impulse_response(cache_key.clone(), || {
-                    load_impulse_response_from_file_with_tail(&resolved_path, Some(tail_db))
-                        .map_err(|err| err.to_string())
-                })
-                .map(|impulse_response| (cache_key, impulse_response))
-            } else {
-                match container_path {
-                    Some(container_path) => {
-                        let fallback_name = Path::new(&path)
-                            .file_name()
-                            .and_then(|name| name.to_str())
-                            .map(|name| name.to_string());
-                        if let Some(fallback_name) = fallback_name {
-                            let cache_key = ImpulseResponseCacheKey {
-                                source: ImpulseResponseCacheSource::Attachment {
-                                    container_path: container_path.to_string(),
-                                    attachment_name: fallback_name.clone(),
-                                },
-                                tail_db_bits: tail_db.to_bits(),
-                            };
-                            load_cached_impulse_response(cache_key.clone(), || {
-                                load_impulse_response_from_prot_attachment_with_tail(
-                                    container_path,
-                                    &fallback_name,
-                                    Some(tail_db),
-                                )
-                                .map_err(|err| err.to_string())
-                            })
-                            .map(|impulse_response| (cache_key, impulse_response))
-                        } else {
-                            Err(format!(
-                                "impulse response path not found: {}",
-                                resolved_path.display()
-                            ))
-                        }
-                    }
-                    None => Err(format!(
-                        "impulse response path not found: {}",
-                        resolved_path.display()
-                    )),
-                }
-            }
-        }
-    };
-
-    match result {
-        Ok((impulse_response_cache_key, impulse_response)) => {
-            let kernel_cache_key = ReverbKernelCacheKey {
-                channels,
-                impulse_response: impulse_response_cache_key,
-            };
-            Some(build_cached_reverb(
-                kernel_cache_key,
-                channels,
-                dry_wet,
-                &impulse_response,
-            ))
-        }
-        Err(err) => {
-            warn!(
-                "Failed to load impulse response ({}); skipping convolution reverb.",
-                err
-            );
-            None
-        }
-    }
-}
-
-fn build_cached_reverb(
-    cache_key: ReverbKernelCacheKey,
-    channels: usize,
-    dry_wet: f32,
-    impulse_response: &impulse_response::ImpulseResponse,
-) -> reverb::Reverb {
-    let cache = REVERB_KERNEL_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
-    if let Some(template) = cache.lock().unwrap().get(&cache_key).cloned() {
-        let mut reverb = (*template).clone();
-        reverb.clear_state();
-        reverb.set_dry_wet(dry_wet);
-        return reverb;
+    #[test]
+    fn tail_db_or_default_prefers_explicit_values() {
+        let settings = ConvolutionReverbSettings {
+            impulse_response_tail_db: Some(-24.0),
+            impulse_response_tail: Some(-30.0),
+            ..Default::default()
+        };
+        assert_eq!(settings.tail_db_or_default(), -24.0);
     }
 
-    let mut template =
-        reverb::Reverb::new_with_impulse_response(channels, DEFAULT_DRY_WET, impulse_response);
-    template.clear_state();
-    let template = Arc::new(template);
-
-    let mut cache_guard = cache.lock().unwrap();
-    let template = cache_guard
-        .entry(cache_key)
-        .or_insert_with(|| template.clone())
-        .clone();
-    let mut reverb = (*template).clone();
-    reverb.clear_state();
-    reverb.set_dry_wet(dry_wet);
-    reverb
-}
-
-fn load_cached_impulse_response<F>(
-    cache_key: ImpulseResponseCacheKey,
-    loader: F,
-) -> Result<Arc<impulse_response::ImpulseResponse>, String>
-where
-    F: FnOnce() -> Result<impulse_response::ImpulseResponse, String>,
-{
-    let cache = IMPULSE_RESPONSE_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
-    if let Some(cached) = cache.lock().unwrap().get(&cache_key).cloned() {
-        return Ok(cached);
-    }
-
-    let loaded = Arc::new(loader()?);
-    let mut cache_guard = cache.lock().unwrap();
-    let cached = cache_guard
-        .entry(cache_key)
-        .or_insert_with(|| loaded.clone())
-        .clone();
-    Ok(cached)
-}
-
-fn resolve_impulse_response_path(container_path: Option<&str>, path: &str) -> PathBuf {
-    let path = Path::new(path);
-    if path.is_absolute() {
-        return path.to_path_buf();
-    }
-
-    if let Some(container_path) = container_path {
-        if let Some(parent) = Path::new(container_path).parent() {
-            return parent.join(path);
-        }
-    }
-
-    path.to_path_buf()
-}
-
-impl ConvolutionReverbSettings {
-    /// Resolve a tail trim value, falling back to the default.
-    pub fn tail_db_or_default(&self) -> f32 {
-        self.impulse_response_tail_db
-            .or(self.impulse_response_tail)
-            .unwrap_or(DEFAULT_TAIL_DB)
+    #[test]
+    fn convolution_effect_passthrough_when_disabled() {
+        let mut effect = ConvolutionReverbEffect::default();
+        effect.enabled = false;
+        let input = vec![0.2_f32, -0.2, 0.1, -0.1];
+        let context = EffectContext {
+            sample_rate: 48_000,
+            channels: 2,
+            container_path: None,
+            impulse_response_spec: None,
+            impulse_response_tail_db: -60.0,
+        };
+        let output = effect.process(&input, &context, false);
+        assert_eq!(output, input);
     }
 }

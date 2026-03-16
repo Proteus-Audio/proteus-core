@@ -12,10 +12,8 @@ use super::impulse_response::ImpulseResponse;
 
 const IDENTITY_IMPULSE_RESPONSE: &[f32] = &[1.0];
 
-//   1. Power‑of‑two FFT size (e.g., 8192 or 16384).
+// Power-of-two FFT size; increasing improves frequency resolution at the cost of latency.
 const FFT_SIZE: usize = 8192;
-// const FFT_SIZE: usize = 16384;
-// const FFT_SIZE: usize = 32768;
 
 /// Preferred processing batch size in interleaved samples.
 pub fn preferred_batch_samples(channels: usize) -> usize {
@@ -89,7 +87,7 @@ impl Reverb {
     /// Process an interleaved input buffer and return the mixed output.
     ///
     /// This allocates a new output buffer each call. For hot paths, prefer
-    /// [`process_into`] to reuse an existing allocation.
+    /// [`Self::process_into`] to reuse an existing allocation.
     pub fn process(&mut self, input_buffer: &[f32]) -> Vec<f32> {
         if self.dry_wet <= 0.0 {
             return input_buffer.to_vec();
@@ -115,31 +113,14 @@ impl Reverb {
     fn process_channel(&mut self, channel: &[f32], index: usize) -> Vec<f32> {
         let start = Instant::now();
         let convolver = &mut self.convolvers[index];
-        // convolver.fft_size = channel.len();
-        // let mut convolver = Convolver::new(SPRING_IMPULSE_RESPONSE, FFT_SIZE);
 
-        debug!("Convolver fft size: {:?}", convolver.fft_size);
-        debug!("Channel length: {:?}", channel.len());
+        debug!("convolver fft size: {:?}", convolver.fft_size);
+        debug!("channel length: {:?}", channel.len());
 
-        let time_to_create_convolver = Instant::now();
-        debug!(
-            "Time taken to create convolver #{}: {:?}",
-            index,
-            time_to_create_convolver.duration_since(start)
-        );
-        // println!("Channel length: {:?}", channel.len());
-        // println!("Previous tail length: {:?}", self.previous_tails.len());
-        // convolver.previous_tail = if self.previous_tails.len() > index {
-        //     self.previous_tails[index].clone()
-        // } else {
-        //     self.previous_tails.push(vec![0.0; channel.len()]);
-        //     self.previous_tails[index].clone()
-        // };
         let processed = convolver.process(channel);
-        // self.previous_tails[index] = convolver.previous_tail;
         let end = Instant::now();
         debug!(
-            "Time taken to process channel #{}: {:?}",
+            "time taken to process channel #{}: {:?}",
             index,
             end.duration_since(start)
         );
@@ -234,47 +215,34 @@ impl Reverb {
     }
 }
 
-// pub fn apply_reverb(samples: Vec<f32>, dry_wet: f32) -> Vec<f32> {
-//     // Clamp dry_wet between 0 and 1
-//     let dry_wet = dry_wet.clamp(0.0, 1.0);
-//     let dry_amount = 1.0 - dry_wet;
-//     let wet_amount = dry_wet;
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::dsp::effects::convolution_reverb::impulse_response::ImpulseResponse;
 
-//     println!("Samples length: {:?}", samples.len());
-//     let left_samples = samples.iter().step_by(2).cloned().collect::<Vec<f32>>();
-//     let right_samples = samples
-//         .iter()
-//         .skip(1)
-//         .step_by(2)
-//         .cloned()
-//         .collect::<Vec<f32>>();
+    #[test]
+    fn preferred_batch_samples_is_zero_for_zero_channels() {
+        assert_eq!(preferred_batch_samples(0), 0);
+    }
 
-//     let mut convolver_left = Convolver::new(SPRING_IMPULSE_RESPONSE, left_samples.len());
-//     let mut convolver_right = Convolver::new(SPRING_IMPULSE_RESPONSE, right_samples.len());
+    #[test]
+    fn reverb_passthrough_when_dry_wet_is_zero() {
+        let mut reverb = Reverb::new(2, 0.0);
+        let input = vec![0.1_f32, -0.1, 0.2, -0.2];
+        let output = reverb.process(&input);
+        assert_eq!(output, input);
+    }
 
-//     let processed_left = convolver_left.process(&left_samples);
-//     let processed_right = convolver_right.process(&right_samples);
-
-//     let previous_tail_left = convolver_left.previous_tail;
-//     let previous_tail_right = convolver_right.previous_tail;
-
-//     println!("Previous tail left: {:?}", previous_tail_left.len());
-//     println!("Previous tail right: {:?}", previous_tail_right.len());
-
-//     // Mix dry and wet signals
-//     let mut processed = Vec::with_capacity(processed_left.len() * 2);
-//     for ((dry_l, dry_r), (wet_l, wet_r)) in left_samples.iter().zip(right_samples.iter())
-//         .zip(processed_left.iter().zip(processed_right.iter()))
-//     {
-//         // Mix left channel
-//         let mixed_l = (dry_l * dry_amount) + (wet_l * wet_amount);
-//         // Mix right channel
-//         let mixed_r = (dry_r * dry_amount) + (wet_r * wet_amount);
-
-//         processed.push(mixed_l);
-//         processed.push(mixed_r);
-//     }
-
-//     println!("Processed length: {:?}", processed.len());
-//     processed
-// }
+    #[test]
+    fn reverb_with_custom_ir_processes_interleaved_input() {
+        let ir = ImpulseResponse {
+            sample_rate: 48_000,
+            channels: vec![vec![1.0_f32], vec![1.0_f32]],
+        };
+        let mut reverb = Reverb::new_with_impulse_response(2, 0.5, &ir);
+        let input = vec![0.1_f32, -0.1, 0.3, -0.3];
+        let mut out = Vec::new();
+        reverb.process_into(&input, &mut out);
+        assert_eq!(out.len(), input.len());
+    }
+}

@@ -1,29 +1,30 @@
 //! Chainable DSP effect modules.
+//!
+//! ## Internal Module Layout Convention
+//! - Each effect implements the `DspEffect` trait (in the private `core` module), which
+//!   provides the canonical `process`, `reset_state`, and `warm_up` methods.
+//! - Split reusable algorithmic components into sibling submodules (for
+//!   example `convolution`, `impulse_response`, `reverb`) when complexity
+//!   grows.
+//! - Prefer one effect per directory when internals exceed a single-file scope.
 
 use serde::{Deserialize, Serialize};
 
 use crate::dsp::effects::convolution_reverb::ImpulseResponseSpec;
 
 pub mod basic_reverb;
-mod biquad;
 pub mod compressor;
 pub mod convolution_reverb;
+mod core;
 pub mod diffusion_reverb;
 pub mod distortion;
 pub mod gain;
 pub mod high_pass;
-mod level;
 pub mod limiter;
 pub mod low_pass;
 pub mod multiband_eq;
 pub mod pan;
 
-#[allow(deprecated)]
-#[deprecated(note = "Use DelayReverbEffect instead.")]
-pub use basic_reverb::BasicReverbEffect;
-#[allow(deprecated)]
-#[deprecated(note = "Use DelayReverbSettings instead.")]
-pub use basic_reverb::BasicReverbSettings;
 pub use basic_reverb::{DelayReverbEffect, DelayReverbSettings};
 pub use compressor::{CompressorEffect, CompressorSettings};
 pub use convolution_reverb::{ConvolutionReverbEffect, ConvolutionReverbSettings};
@@ -42,111 +43,113 @@ pub use pan::{PanEffect, PanSettings};
 /// Shared context for preparing and running DSP effects.
 #[derive(Debug, Clone)]
 pub struct EffectContext {
+    /// Sample rate of the audio stream, in Hz.
     pub sample_rate: u32,
+    /// Number of interleaved audio channels in each sample buffer.
     pub channels: usize,
+    /// Filesystem path to the loaded container, used to resolve embedded attachments.
     pub container_path: Option<String>,
+    /// Specification for the impulse response used by convolution-reverb effects.
     pub impulse_response_spec: Option<ImpulseResponseSpec>,
+    /// dB level below peak at which the impulse response tail is considered silent.
     pub impulse_response_tail_db: f32,
 }
 
-/// Configured audio effect that can process interleaved samples.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum AudioEffect {
-    #[serde(rename = "DelayReverbSettings")]
-    DelayReverb(DelayReverbEffect),
-    #[deprecated(note = "Use AudioEffect::DelayReverb instead.")]
-    #[serde(rename = "BasicReverbSettings")]
-    BasicReverb(DelayReverbEffect),
-    #[serde(rename = "DiffusionReverbSettings")]
-    DiffusionReverb(DiffusionReverbEffect),
-    #[serde(rename = "ConvolutionReverbSettings")]
-    ConvolutionReverb(ConvolutionReverbEffect),
-    #[serde(rename = "LowPassFilterSettings")]
-    LowPassFilter(LowPassFilterEffect),
-    #[serde(rename = "HighPassFilterSettings")]
-    HighPassFilter(HighPassFilterEffect),
-    #[serde(rename = "DistortionSettings")]
-    Distortion(DistortionEffect),
-    #[serde(rename = "GainSettings")]
-    Gain(GainEffect),
-    #[serde(rename = "CompressorSettings")]
-    Compressor(CompressorEffect),
-    #[serde(rename = "LimiterSettings")]
-    Limiter(LimiterEffect),
-    #[serde(rename = "MultibandEqSettings")]
-    MultibandEq(MultibandEqEffect),
-    #[serde(rename = "PanSettings")]
-    Pan(PanEffect),
+// ---------------------------------------------------------------------------
+// Macro: generates the `AudioEffect` enum and its core dispatch methods from
+// a single declaration.  Adding a new effect only requires one new entry here
+// (plus the module, re-export, and trait impl in the effect file).
+// ---------------------------------------------------------------------------
+
+macro_rules! define_audio_effects {
+    (
+        effects {
+            $( $variant:ident($effect_ty:ident, $serde_name:literal $(, aliases = [$($serde_alias:literal),* $(,)?])? ) ),* $(,)?
+        }
+    ) => {
+        /// Configured audio effect that can process interleaved samples.
+        #[derive(Debug, Clone, Serialize, Deserialize)]
+        pub enum AudioEffect {
+            $(
+                /// Effect variant wrapping a [`
+                #[doc = stringify!($effect_ty)]
+                /// `] configuration and runtime state.
+                #[serde(rename = $serde_name)]
+                $( $( #[serde(alias = $serde_alias)] )* )?
+                $variant($effect_ty),
+            )*
+        }
+
+        impl AudioEffect {
+            /// Preserve the historical alias-normalization hook for runtime callers.
+            pub fn normalize_legacy_alias(self) -> Self {
+                self
+            }
+
+            /// Canonical display label shared across CLI and runtime debug surfaces.
+            pub fn display_name(&self) -> &'static str {
+                match self {
+                    $( AudioEffect::$variant(_) => stringify!($variant), )*
+                }
+            }
+
+            /// Return a mutable reference to the inner effect as a trait object.
+            fn as_dsp_effect(&mut self) -> &mut dyn core::DspEffect {
+                match self {
+                    $( AudioEffect::$variant(effect) => effect, )*
+                }
+            }
+
+            /// Process the provided samples through the effect.
+            ///
+            /// # Arguments
+            /// - `samples`: Interleaved input samples.
+            /// - `context`: Environment details (sample rate, channels, etc.).
+            /// - `drain`: When true, flush any buffered tail data.
+            ///
+            /// # Returns
+            /// Processed interleaved samples.
+            pub fn process(
+                &mut self,
+                samples: &[f32],
+                context: &EffectContext,
+                drain: bool,
+            ) -> Vec<f32> {
+                self.as_dsp_effect().process(samples, context, drain)
+            }
+
+            /// Reset any internal state maintained by the effect.
+            pub fn reset_state(&mut self) {
+                self.as_dsp_effect().reset_state();
+            }
+
+            /// Ensure any internal state (e.g., convolution IR) is initialized.
+            pub fn warm_up(&mut self, context: &EffectContext) {
+                self.as_dsp_effect().warm_up(context);
+            }
+        }
+    };
 }
 
+define_audio_effects! {
+    effects {
+        DelayReverb(DelayReverbEffect, "DelayReverbSettings", aliases = ["BasicReverbSettings"]),
+        DiffusionReverb(DiffusionReverbEffect, "DiffusionReverbSettings"),
+        ConvolutionReverb(ConvolutionReverbEffect, "ConvolutionReverbSettings"),
+        LowPassFilter(LowPassFilterEffect, "LowPassFilterSettings"),
+        HighPassFilter(HighPassFilterEffect, "HighPassFilterSettings"),
+        Distortion(DistortionEffect, "DistortionSettings"),
+        Gain(GainEffect, "GainSettings"),
+        Compressor(CompressorEffect, "CompressorSettings"),
+        Limiter(LimiterEffect, "LimiterSettings"),
+        MultibandEq(MultibandEqEffect, "MultibandEqSettings"),
+        Pan(PanEffect, "PanSettings"),
+    }
+}
+
+// --- Variant-specific accessors (not generated by the macro) ---------------
+
 impl AudioEffect {
-    /// Process the provided samples through the effect.
-    ///
-    /// # Arguments
-    /// - `samples`: Interleaved input samples.
-    /// - `context`: Environment details (sample rate, channels, etc.).
-    /// - `drain`: When true, flush any buffered tail data.
-    ///
-    /// # Returns
-    /// Processed interleaved samples.
-    #[allow(deprecated)]
-    pub fn process(&mut self, samples: &[f32], context: &EffectContext, drain: bool) -> Vec<f32> {
-        match self {
-            AudioEffect::BasicReverb(effect) => effect.process(samples, context, drain),
-            AudioEffect::DelayReverb(effect) => effect.process(samples, context, drain),
-            AudioEffect::DiffusionReverb(effect) => effect.process(samples, context, drain),
-            AudioEffect::ConvolutionReverb(effect) => effect.process(samples, context, drain),
-            AudioEffect::LowPassFilter(effect) => effect.process(samples, context, drain),
-            AudioEffect::HighPassFilter(effect) => effect.process(samples, context, drain),
-            AudioEffect::Distortion(effect) => effect.process(samples, context, drain),
-            AudioEffect::Gain(effect) => effect.process(samples, context, drain),
-            AudioEffect::Compressor(effect) => effect.process(samples, context, drain),
-            AudioEffect::Limiter(effect) => effect.process(samples, context, drain),
-            AudioEffect::MultibandEq(effect) => effect.process(samples, context, drain),
-            AudioEffect::Pan(effect) => effect.process(samples, context, drain),
-        }
-    }
-
-    /// Reset any internal state maintained by the effect.
-    #[allow(deprecated)]
-    pub fn reset_state(&mut self) {
-        match self {
-            AudioEffect::BasicReverb(effect) => effect.reset_state(),
-            AudioEffect::DelayReverb(effect) => effect.reset_state(),
-            AudioEffect::DiffusionReverb(effect) => effect.reset_state(),
-            AudioEffect::ConvolutionReverb(effect) => effect.reset_state(),
-            AudioEffect::LowPassFilter(effect) => effect.reset_state(),
-            AudioEffect::HighPassFilter(effect) => effect.reset_state(),
-            AudioEffect::Distortion(effect) => effect.reset_state(),
-            AudioEffect::Gain(effect) => effect.reset_state(),
-            AudioEffect::Compressor(effect) => effect.reset_state(),
-            AudioEffect::Limiter(effect) => effect.reset_state(),
-            AudioEffect::MultibandEq(effect) => effect.reset_state(),
-            AudioEffect::Pan(effect) => effect.reset_state(),
-        }
-    }
-
-    /// Ensure any internal state (e.g., convolution IR) is initialized.
-    #[allow(deprecated)]
-    pub fn warm_up(&mut self, context: &EffectContext) {
-        match self {
-            AudioEffect::BasicReverb(_) => {}
-            AudioEffect::DelayReverb(_) => {}
-            AudioEffect::DiffusionReverb(_) => {}
-            AudioEffect::ConvolutionReverb(effect) => {
-                let _ = effect.process(&[], context, false);
-            }
-            AudioEffect::LowPassFilter(_) => {}
-            AudioEffect::HighPassFilter(_) => {}
-            AudioEffect::Distortion(_) => {}
-            AudioEffect::Gain(_) => {}
-            AudioEffect::Compressor(_) => {}
-            AudioEffect::Limiter(_) => {}
-            AudioEffect::MultibandEq(_) => {}
-            AudioEffect::Pan(_) => {}
-        }
-    }
-
     /// Mutable access to the convolution reverb effect, if present.
     pub fn as_convolution_reverb_mut(&mut self) -> Option<&mut ConvolutionReverbEffect> {
         match self {
@@ -180,38 +183,28 @@ impl AudioEffect {
     }
 
     /// Mutable access to the delay reverb effect, if present.
-    #[allow(deprecated)]
     pub fn as_delay_reverb_mut(&mut self) -> Option<&mut DelayReverbEffect> {
         match self {
             AudioEffect::DelayReverb(effect) => Some(effect),
-            AudioEffect::BasicReverb(effect) => Some(effect),
             _ => None,
         }
     }
 
     /// Immutable access to the delay reverb effect, if present.
-    #[allow(deprecated)]
     pub fn as_delay_reverb(&self) -> Option<&DelayReverbEffect> {
         match self {
             AudioEffect::DelayReverb(effect) => Some(effect),
-            AudioEffect::BasicReverb(effect) => Some(effect),
             _ => None,
         }
     }
+}
 
-    /// Mutable access to the basic reverb effect, if present.
-    #[deprecated(note = "Use as_delay_reverb_mut instead.")]
-    #[allow(deprecated)]
-    pub fn as_basic_reverb_mut(&mut self) -> Option<&mut BasicReverbEffect> {
-        self.as_delay_reverb_mut()
-    }
-
-    /// Immutable access to the basic reverb effect, if present.
-    #[deprecated(note = "Use as_delay_reverb instead.")]
-    #[allow(deprecated)]
-    pub fn as_basic_reverb(&self) -> Option<&BasicReverbEffect> {
-        self.as_delay_reverb()
-    }
+/// Normalize deprecated effect aliases for runtime processing.
+pub fn normalize_legacy_effect_aliases(effects: Vec<AudioEffect>) -> Vec<AudioEffect> {
+    effects
+        .into_iter()
+        .map(AudioEffect::normalize_legacy_alias)
+        .collect()
 }
 
 #[cfg(test)]

@@ -1,18 +1,19 @@
 //! Playback mixing engine and buffer coordination.
 
-use dasp_ring_buffer::Bounded;
-use rodio::buffer::SamplesBuffer;
 use std::collections::HashMap;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU64;
 use std::sync::{mpsc::Receiver, Arc, Condvar, Mutex};
 use std::thread::JoinHandle;
 
+use rodio::buffer::SamplesBuffer;
+
+use log::warn;
+
 use crate::audio::buffer::{init_buffer_map, TrackBuffer};
 use crate::container::prot::Prot;
 
 mod mix;
-mod premix;
 mod state;
 
 pub use state::{DspChainMetrics, PlaybackBufferSettings};
@@ -22,7 +23,9 @@ use mix::{spawn_mix_thread, MixThreadArgs};
 /// Request to update the active effects chain inline during playback.
 #[derive(Debug, Clone)]
 pub struct InlineEffectsUpdate {
+    /// The new DSP effect chain to apply, in processing order.
     pub effects: Vec<crate::dsp::effects::AudioEffect>,
+    /// Duration in milliseconds to crossfade between the old and new chain.
     pub transition_ms: f32,
 }
 
@@ -39,20 +42,44 @@ impl InlineEffectsUpdate {
 /// Request to update per-slot track mix settings inline during playback.
 #[derive(Debug, Clone, Copy)]
 pub struct InlineTrackMixUpdate {
+    /// Zero-based index of the track slot whose mix parameters are being updated.
     pub slot_index: usize,
+    /// New linear gain level for the track (1.0 = unity).
     pub level: f32,
+    /// New stereo pan position (−1.0 = full left, +1.0 = full right).
     pub pan: f32,
 }
 
-/// Internal playback engine used by the high-level [`Player`].
+/// Shared initialization inputs for [`PlayerEngine`].
+pub struct PlayerEngineConfig {
+    /// Optional externally-owned abort flag; a new flag is created if `None`.
+    pub abort_option: Option<Arc<AtomicBool>>,
+    /// Wall-clock start time (in seconds) used to synchronize playback position.
+    pub start_time: f64,
+    /// Shared buffer configuration applied at engine startup and during playback.
+    pub buffer_settings: Arc<Mutex<PlaybackBufferSettings>>,
+    /// Shared DSP effect chain applied to the final mix output.
+    pub effects: Arc<Mutex<Vec<crate::dsp::effects::AudioEffect>>>,
+    /// Shared structure into which the engine writes live DSP performance metrics.
+    pub dsp_metrics: Arc<Mutex<DspChainMetrics>>,
+    /// Monotonic counter incremented each time the effect chain should be reset.
+    pub effects_reset: Arc<AtomicU64>,
+    /// Pending inline effects-chain swap to apply on the next mix cycle.
+    pub inline_effects_update: Arc<Mutex<Option<InlineEffectsUpdate>>>,
+    /// Pending per-track mix updates to apply on the next mix cycle.
+    pub inline_track_mix_updates: Arc<Mutex<Vec<InlineTrackMixUpdate>>>,
+}
+
+/// Internal playback engine used by the high-level
+/// [`crate::playback::player::Player`].
 #[derive(Debug)]
 pub struct PlayerEngine {
-    pub finished_tracks: Arc<Mutex<Vec<u16>>>,
+    /// Set of track IDs that have decoded all samples and reached end-of-stream.
+    finished_tracks: Arc<Mutex<Vec<u16>>>,
     start_time: f64,
     abort: Arc<AtomicBool>,
     buffer_map: Arc<Mutex<HashMap<u16, TrackBuffer>>>,
     buffer_notify: Arc<Condvar>,
-    effects_buffer: Arc<Mutex<Bounded<Vec<f32>>>>,
     track_weights: Arc<Mutex<HashMap<u16, f32>>>,
     track_channel_gains: Arc<Mutex<HashMap<u16, Vec<f32>>>>,
     effects_reset: Arc<AtomicU64>,
@@ -67,39 +94,37 @@ pub struct PlayerEngine {
 
 impl PlayerEngine {
     /// Create a new engine for the given container and settings.
-    pub fn new(
-        prot: Arc<Mutex<Prot>>,
-        abort_option: Option<Arc<AtomicBool>>,
-        start_time: f64,
-        buffer_settings: Arc<Mutex<PlaybackBufferSettings>>,
-        effects: Arc<Mutex<Vec<crate::dsp::effects::AudioEffect>>>,
-        dsp_metrics: Arc<Mutex<DspChainMetrics>>,
-        effects_reset: Arc<AtomicU64>,
-        inline_effects_update: Arc<Mutex<Option<InlineEffectsUpdate>>>,
-        inline_track_mix_updates: Arc<Mutex<Vec<InlineTrackMixUpdate>>>,
-    ) -> Self {
+    pub fn new(prot: Arc<Mutex<Prot>>, config: PlayerEngineConfig) -> Self {
+        let PlayerEngineConfig {
+            abort_option,
+            start_time,
+            buffer_settings,
+            effects,
+            dsp_metrics,
+            effects_reset,
+            inline_effects_update,
+            inline_track_mix_updates,
+        } = config;
         let buffer_map = init_buffer_map();
         let buffer_notify = Arc::new(Condvar::new());
         let track_weights = Arc::new(Mutex::new(HashMap::new()));
         let track_channel_gains = Arc::new(Mutex::new(HashMap::new()));
         let finished_tracks: Arc<Mutex<Vec<u16>>> = Arc::new(Mutex::new(Vec::new()));
-        let abort = if abort_option.is_some() {
-            abort_option.unwrap()
-        } else {
-            Arc::new(AtomicBool::new(false))
-        };
+        let abort = abort_option.unwrap_or_else(|| Arc::new(AtomicBool::new(false)));
 
-        let prot_unlocked = prot.lock().unwrap();
-        let start_buffer_ms = buffer_settings.lock().unwrap().start_buffer_ms;
+        let prot_unlocked = prot
+            .lock()
+            .unwrap_or_else(|_| panic!("prot lock poisoned — a thread panicked while holding it"));
+        let start_buffer_ms = buffer_settings
+            .lock()
+            .unwrap_or_else(|_| {
+                panic!("buffer settings lock poisoned — a thread panicked while holding it")
+            })
+            .start_buffer_ms;
         let channels = prot_unlocked.info.channels as usize;
-        let start_samples = ((prot_unlocked.info.sample_rate as f32 * start_buffer_ms) / 1000.0)
+        let _start_samples = ((prot_unlocked.info.sample_rate as f32 * start_buffer_ms) / 1000.0)
             as usize
             * channels;
-        let buffer_size = (prot_unlocked.info.sample_rate as usize * 10).max(start_samples * 2);
-        let effects_buffer = Arc::new(Mutex::new(dasp_ring_buffer::Bounded::from(vec![
-            0.0;
-            buffer_size
-        ])));
         drop(prot_unlocked);
 
         Self {
@@ -107,7 +132,6 @@ impl PlayerEngine {
             start_time,
             buffer_map,
             buffer_notify,
-            effects_buffer,
             track_weights,
             track_channel_gains,
             effects_reset,
@@ -122,40 +146,51 @@ impl PlayerEngine {
         }
     }
 
-    /// Start the mixing loop and invoke `f` for each mixed chunk.
-    pub fn reception_loop(&mut self, f: &dyn Fn((SamplesBuffer, f64))) {
-        let prot = self.prot.lock().unwrap();
+    /// Start the output loop and invoke `f` for each mixed chunk.
+    pub fn run_output_loop(&mut self, f: &dyn Fn((SamplesBuffer, f64))) {
+        let prot = self
+            .prot
+            .lock()
+            .unwrap_or_else(|_| panic!("prot lock poisoned — a thread panicked while holding it"));
         let keys = prot.get_keys();
         drop(prot);
         self.ready_buffer_map(&keys);
-        let receiver = self.get_receiver();
+        let receiver = self.spawn_mix_receiver();
 
         for (mixer, length_in_seconds) in receiver {
             f((mixer, length_in_seconds));
         }
     }
 
+    /// Legacy alias for [`Self::run_output_loop`].
+    #[deprecated(note = "Use run_output_loop instead.")]
+    pub fn reception_loop(&mut self, f: &dyn Fn((SamplesBuffer, f64))) {
+        self.run_output_loop(f);
+    }
+
     /// Start mixing and return a receiver for `(buffer, duration)` chunks.
     pub fn start_receiver(&mut self) -> Receiver<(SamplesBuffer, f64)> {
-        let prot = self.prot.lock().unwrap();
+        let prot = self
+            .prot
+            .lock()
+            .unwrap_or_else(|_| panic!("prot lock poisoned — a thread panicked while holding it"));
         let keys = prot.get_keys();
         drop(prot);
         self.ready_buffer_map(&keys);
-        self.get_receiver()
+        self.spawn_mix_receiver()
     }
 
-    fn get_receiver(&mut self) -> Receiver<(SamplesBuffer, f64)> {
-        let prot = self.prot.lock().unwrap();
+    fn spawn_mix_receiver(&mut self) -> Receiver<(SamplesBuffer, f64)> {
+        let prot = self
+            .prot
+            .lock()
+            .unwrap_or_else(|_| panic!("prot lock poisoned — a thread panicked while holding it"));
         let audio_info = prot.info.clone();
         drop(prot);
 
         let (receiver, handle) = spawn_mix_thread(MixThreadArgs {
             audio_info,
-            buffer_map: self.buffer_map.clone(),
             buffer_notify: self.buffer_notify.clone(),
-            effects_buffer: self.effects_buffer.clone(),
-            track_weights: self.track_weights.clone(),
-            track_channel_gains: self.track_channel_gains.clone(),
             effects_reset: self.effects_reset.clone(),
             inline_effects_update: self.inline_effects_update.clone(),
             inline_track_mix_updates: self.inline_track_mix_updates.clone(),
@@ -173,55 +208,115 @@ impl PlayerEngine {
 
     /// Get the total duration (seconds) of the active selection.
     pub fn get_duration(&self) -> f64 {
-        let prot = self.prot.lock().unwrap();
+        let prot = self
+            .prot
+            .lock()
+            .unwrap_or_else(|_| panic!("prot lock poisoned — a thread panicked while holding it"));
         *prot.get_duration()
     }
 
-    fn ready_buffer_map(&mut self, keys: &Vec<u32>) {
-        self.buffer_map = init_buffer_map();
-        self.track_weights.lock().unwrap().clear();
-        self.track_channel_gains.lock().unwrap().clear();
+    /// Get finished engine track keys as a detached snapshot.
+    pub fn finished_track_keys(&self) -> Vec<u16> {
+        self.finished_tracks
+            .lock()
+            .unwrap_or_else(|_| {
+                panic!("finished tracks lock poisoned — a thread panicked while holding it")
+            })
+            .clone()
+    }
 
-        let prot = self.prot.lock().unwrap();
+    fn ready_buffer_map(&mut self, keys: &[u32]) {
+        self.buffer_map = init_buffer_map();
+        self.track_weights
+            .lock()
+            .unwrap_or_else(|_| {
+                panic!("track weights lock poisoned — a thread panicked while holding it")
+            })
+            .clear();
+        self.track_channel_gains
+            .lock()
+            .unwrap_or_else(|_| {
+                panic!("track channel gains lock poisoned — a thread panicked while holding it")
+            })
+            .clear();
+
+        let prot = self
+            .prot
+            .lock()
+            .unwrap_or_else(|_| panic!("prot lock poisoned — a thread panicked while holding it"));
         let sample_rate = prot.info.sample_rate;
         let channels = prot.info.channels as usize;
         let track_mix_settings = prot.get_track_mix_settings();
-        let start_buffer_ms = self.buffer_settings.lock().unwrap().start_buffer_ms;
+        let start_buffer_ms = self
+            .buffer_settings
+            .lock()
+            .unwrap_or_else(|_| {
+                panic!("buffer settings lock poisoned — a thread panicked while holding it")
+            })
+            .start_buffer_ms;
         drop(prot);
         let start_samples = ((sample_rate as f32 * start_buffer_ms) / 1000.0) as usize * channels;
         let buffer_size = (sample_rate as usize * 10).max(start_samples * 2);
 
         for key in keys {
+            let Some(track_key) = u16::try_from(*key).ok() else {
+                warn!(
+                    "skipping track key {} because it exceeds engine key width (u16)",
+                    key
+                );
+                continue;
+            };
             let ring_buffer = Arc::new(Mutex::new(dasp_ring_buffer::Bounded::from(vec![
                     0.0;
                     buffer_size
                 ])));
             self.buffer_map
                 .lock()
-                .unwrap()
-                .insert(*key as u16, ring_buffer);
-            self.track_weights.lock().unwrap().insert(*key as u16, 1.0);
+                .unwrap_or_else(|_| {
+                    panic!("buffer map lock poisoned — a thread panicked while holding it")
+                })
+                .insert(track_key, ring_buffer);
+            self.track_weights
+                .lock()
+                .unwrap_or_else(|_| {
+                    panic!("track weights lock poisoned — a thread panicked while holding it")
+                })
+                .insert(track_key, 1.0);
             let (level, pan) = track_mix_settings
-                .get(&(*key as u16))
+                .get(&track_key)
                 .copied()
                 .unwrap_or((1.0, 0.0));
             let gains = compute_track_channel_gains(level, pan, channels);
             self.track_channel_gains
                 .lock()
-                .unwrap()
-                .insert(*key as u16, gains);
+                .unwrap_or_else(|_| {
+                    panic!("track channel gains lock poisoned — a thread panicked while holding it")
+                })
+                .insert(track_key, gains);
         }
     }
 
     /// Return true if all tracks have reported end-of-stream.
     pub fn finished_buffering(&self) -> bool {
-        let finished_tracks = self.finished_tracks.lock().unwrap();
-        let prot = self.prot.lock().unwrap();
+        let finished_tracks = self.finished_tracks.lock().unwrap_or_else(|_| {
+            panic!("finished tracks lock poisoned — a thread panicked while holding it")
+        });
+        let prot = self
+            .prot
+            .lock()
+            .unwrap_or_else(|_| panic!("prot lock poisoned — a thread panicked while holding it"));
         let keys = prot.get_keys();
         drop(prot);
 
         for key in keys {
-            if !finished_tracks.contains(&(key as u16)) {
+            let Some(track_key) = u16::try_from(key).ok() else {
+                warn!(
+                    "treating track key {} as unfinished because it exceeds engine key width (u16)",
+                    key
+                );
+                return false;
+            };
+            if !finished_tracks.contains(&track_key) {
                 return false;
             }
         }

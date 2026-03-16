@@ -1,21 +1,17 @@
 //! Convolution engine used by reverb and offline processing.
 //!
 //! Two implementations are provided:
-//! - `complex_fft` (default): full complex FFT using `rustfft`.
-//! - `real_fft` (feature `real-fft`): real FFT using `realfft`.
+//! - `real_fft` (default / feature `real-fft`): real FFT using `realfft`.
+//! - `complex_fft` (feature `complex-fft`): full complex FFT using `rustfft`.
+//!
+//! Note: when both features are enabled, `real_fft` is used.
 
-#[cfg(all(feature = "real-fft", feature = "complex-fft"))]
-compile_error!("Enable only one of: real-fft or complex-fft.");
-
-#[cfg(not(any(feature = "real-fft", feature = "complex-fft")))]
-compile_error!("Enable one of: real-fft or complex-fft.");
-
-#[cfg(feature = "complex-fft")]
+#[cfg(all(feature = "complex-fft", not(feature = "real-fft")))]
 mod complex_fft {
     use std::collections::VecDeque;
     use std::sync::Arc;
 
-    use rustfft::{num_complex::Complex, Fft, FftPlanner};
+    use rustfft::{Fft, FftPlanner, num_complex::Complex};
 
     // Taken from https://github.com/BordenJardine/reverb_vst
 
@@ -122,37 +118,28 @@ mod complex_fft {
             let mut convolved = vec![Complex { re: 0.0, im: 0.0 }; self.fft_size];
 
             for i in 0..self.ir_segments.len() {
-                add_frames(
+                multiply_accumulate(
                     &mut convolved,
-                    mult_frames(&self.previous_frame_q[i], &self.ir_segments[i]),
+                    &self.previous_frame_q[i],
+                    &self.ir_segments[i],
                 );
             }
             convolved
         }
     }
 
-    /// Add one spectrum frame into another in-place.
-    pub fn add_frames(f1: &mut [Complex<f32>], f2: Vec<Complex<f32>>) {
-        for (sample1, sample2) in f1.iter_mut().zip(f2) {
-            sample1.re = sample1.re + sample2.re;
-            sample1.im = sample1.im + sample2.im;
+    /// In-place complex multiply-accumulate: `acc += lhs * rhs`.
+    fn multiply_accumulate(acc: &mut [Complex<f32>], lhs: &[Complex<f32>], rhs: &[Complex<f32>]) {
+        for ((acc_sample, lhs_sample), rhs_sample) in acc.iter_mut().zip(lhs).zip(rhs) {
+            let re = (lhs_sample.re * rhs_sample.re) - (lhs_sample.im * rhs_sample.im);
+            let im = (lhs_sample.im * rhs_sample.re) + (lhs_sample.re * rhs_sample.im);
+            acc_sample.re += re;
+            acc_sample.im += im;
         }
-    }
-
-    /// Multiply two spectra element-wise.
-    pub fn mult_frames(f1: &[Complex<f32>], f2: &[Complex<f32>]) -> Vec<Complex<f32>> {
-        let mut out: Vec<Complex<f32>> = Vec::new();
-        for (sample1, sample2) in f1.iter().zip(f2) {
-            out.push(Complex {
-                re: (sample1.re * sample2.re) - (sample1.im * sample2.im),
-                im: (sample1.im * sample2.re) + (sample1.re * sample2.im),
-            });
-        }
-        out
     }
 
     /// Initialize a zeroed overlap-add tail of the given size.
-    pub fn init_previous_tail(size: usize) -> Vec<f32> {
+    fn init_previous_tail(size: usize) -> Vec<f32> {
         let mut tail = Vec::new();
         for _ in 0..size {
             tail.push(0.0);
@@ -161,7 +148,7 @@ mod complex_fft {
     }
 
     /// Segment a time-domain buffer into FFT-sized spectra.
-    pub fn segment_buffer(
+    fn segment_buffer(
         buffer: &[f32],
         fft_size: usize,
         fft_processor: &Arc<dyn Fft<f32>>,
@@ -193,10 +180,7 @@ mod complex_fft {
     }
 
     /// Build a queue of empty spectrum frames for overlap-add history.
-    pub fn init_previous_frame_q(
-        segment_count: usize,
-        fft_size: usize,
-    ) -> VecDeque<Vec<Complex<f32>>> {
+    fn init_previous_frame_q(segment_count: usize, fft_size: usize) -> VecDeque<Vec<Complex<f32>>> {
         let mut q = VecDeque::new();
         for _ in 0..segment_count {
             let mut empty = Vec::new();
@@ -214,14 +198,17 @@ mod real_fft {
     use std::collections::VecDeque;
     use std::sync::Arc;
 
-    use realfft::{num_complex::Complex, ComplexToReal, RealFftPlanner, RealToComplex};
+    use log::error;
+    use realfft::{ComplexToReal, RealFftPlanner, RealToComplex, num_complex::Complex};
 
     /// Overlap-add convolver based on real FFTs.
     #[derive(Clone)]
     pub struct Convolver {
+        /// FFT size used for each overlap-add block, in samples.
         pub fft_size: usize,
         ir_segments: Vec<Vec<Complex<f32>>>,
         previous_frame_q: VecDeque<Vec<Complex<f32>>>,
+        /// Overlap tail from the previous block, added to the current output.
         pub previous_tail: Vec<f32>,
         pending_output: Vec<f32>,
         r2c: Arc<dyn RealToComplex<f32>>,
@@ -275,24 +262,26 @@ mod real_fft {
                 self.previous_frame_q.pop_back();
 
                 let mut convolved = vec![Complex { re: 0.0, im: 0.0 }; spectrum_len];
-                for i in 0..self.ir_segments.len() {
-                    add_frames(
-                        &mut convolved,
-                        mult_frames(&self.previous_frame_q[i], &self.ir_segments[i]),
-                    );
+                for (prev, ir) in self.previous_frame_q.iter().zip(self.ir_segments.iter()) {
+                    multiply_accumulate(&mut convolved, prev, ir);
                 }
 
                 let mut time_domain = vec![0.0_f32; self.fft_size];
-                self.c2r
-                    .process(&mut convolved, &mut time_domain)
-                    .expect("real IFFT failed");
+                if let Err(err) = self.c2r.process(&mut convolved, &mut time_domain) {
+                    error!("real IFFT failed in convolver process: {}", err);
+                    continue;
+                }
 
                 for sample in &mut time_domain {
                     *sample /= norm;
                 }
 
-                for i in 0..segment_size {
-                    time_domain[i] += self.previous_tail[i];
+                for (sample, tail) in time_domain
+                    .iter_mut()
+                    .take(segment_size)
+                    .zip(self.previous_tail.iter().take(segment_size))
+                {
+                    *sample += *tail;
                 }
 
                 self.previous_tail = time_domain[segment_size..self.fft_size].to_vec();
@@ -327,22 +316,13 @@ mod real_fft {
         }
     }
 
-    fn add_frames(f1: &mut [Complex<f32>], f2: Vec<Complex<f32>>) {
-        for (sample1, sample2) in f1.iter_mut().zip(f2) {
-            sample1.re = sample1.re + sample2.re;
-            sample1.im = sample1.im + sample2.im;
+    fn multiply_accumulate(acc: &mut [Complex<f32>], lhs: &[Complex<f32>], rhs: &[Complex<f32>]) {
+        for ((acc_sample, lhs_sample), rhs_sample) in acc.iter_mut().zip(lhs).zip(rhs) {
+            let re = (lhs_sample.re * rhs_sample.re) - (lhs_sample.im * rhs_sample.im);
+            let im = (lhs_sample.im * rhs_sample.re) + (lhs_sample.re * rhs_sample.im);
+            acc_sample.re += re;
+            acc_sample.im += im;
         }
-    }
-
-    fn mult_frames(f1: &[Complex<f32>], f2: &[Complex<f32>]) -> Vec<Complex<f32>> {
-        let mut out: Vec<Complex<f32>> = Vec::with_capacity(f1.len());
-        for (sample1, sample2) in f1.iter().zip(f2) {
-            out.push(Complex {
-                re: (sample1.re * sample2.re) - (sample1.im * sample2.im),
-                im: (sample1.im * sample2.re) + (sample1.re * sample2.im),
-            });
-        }
-        out
     }
 
     fn init_previous_tail(size: usize) -> Vec<f32> {
@@ -366,8 +346,11 @@ mod real_fft {
             }
 
             let mut spectrum = vec![Complex { re: 0.0, im: 0.0 }; spectrum_len];
-            r2c.process(&mut time_domain, &mut spectrum)
-                .expect("real FFT failed");
+            if let Err(err) = r2c.process(&mut time_domain, &mut spectrum) {
+                error!("real FFT failed while segmenting buffer: {}", err);
+                index += segment_size;
+                continue;
+            }
             segments.push(spectrum);
             index += segment_size;
         }
@@ -387,8 +370,34 @@ mod real_fft {
     }
 }
 
-#[cfg(feature = "complex-fft")]
+#[cfg(all(not(feature = "real-fft"), feature = "complex-fft"))]
 pub use complex_fft::Convolver;
 
 #[cfg(feature = "real-fft")]
 pub use real_fft::Convolver;
+
+#[cfg(test)]
+mod tests {
+    use super::Convolver;
+
+    #[test]
+    fn convolver_process_length_matches_input() {
+        let mut convolver = Convolver::new(&[1.0, 0.5, 0.25], 64);
+        let input = vec![0.1_f32; 32];
+        let output = convolver.process(&input);
+        assert_eq!(output.len(), input.len());
+    }
+
+    #[test]
+    fn convolver_clear_state_resets_tail() {
+        let mut convolver = Convolver::new(&[1.0, 0.5], 64);
+        let _ = convolver.process(&[0.2_f32; 16]);
+        convolver.clear_state();
+        assert!(
+            convolver
+                .previous_tail
+                .iter()
+                .all(|sample| sample.abs() < 1e-9)
+        );
+    }
+}

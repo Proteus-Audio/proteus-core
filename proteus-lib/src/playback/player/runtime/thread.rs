@@ -3,14 +3,23 @@
 //! This module prepares shared state, resets per-run counters, and spawns the
 //! worker loop that performs decoding handoff and sink append operations.
 
-use log::info;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread;
 
+use log::debug;
+
 use super::super::Player;
 use super::now_ms;
 use super::worker::{open_output_stream_with_retry, run_playback_thread, ThreadContext};
+
+fn trace_elapsed(trace_ms: u64, now: u64) -> Option<u64> {
+    if trace_ms > 0 {
+        Some(now.saturating_sub(trace_ms))
+    } else {
+        None
+    }
+}
 
 impl Player {
     /// Initialize and spawn a fresh playback thread.
@@ -22,18 +31,19 @@ impl Player {
     pub(in crate::playback::player) fn initialize_thread(&mut self, ts: Option<f64>) {
         let trace_ms = self.play_command_ms.load(Ordering::Relaxed);
         let now = now_ms();
-        if trace_ms > 0 {
-            info!(
+        if let Some(elapsed_ms) = trace_elapsed(trace_ms, now) {
+            debug!(
                 "play trace: initialize_thread start ts={:?} +{}ms",
-                ts,
-                now.saturating_sub(trace_ms)
+                ts, elapsed_ms
             );
         } else {
-            info!("play trace: initialize_thread start ts={:?}", ts);
+            debug!("play trace: initialize_thread start ts={:?}", ts);
         }
         self.join_playback_thread();
 
-        let mut finished_tracks = self.finished_tracks.lock().unwrap();
+        let mut finished_tracks = self.finished_tracks.lock().unwrap_or_else(|_| {
+            panic!("finished tracks lock poisoned — a thread panicked while holding it")
+        });
         finished_tracks.clear();
         drop(finished_tracks);
 
@@ -47,10 +57,17 @@ impl Player {
             .store(now_ms_value, Ordering::Relaxed);
 
         self.audio_heard.store(false, Ordering::Relaxed);
-        self.output_meter.lock().unwrap().reset();
+        self.output_meter
+            .lock()
+            .unwrap_or_else(|_| {
+                panic!("output meter lock poisoned — a thread panicked while holding it")
+            })
+            .reset();
 
         let (output_mixer, opened_now) = {
-            let mut output_stream = self.output_stream.lock().unwrap();
+            let mut output_stream = self.output_stream.lock().unwrap_or_else(|_| {
+                panic!("output stream lock poisoned — a thread panicked while holding it")
+            });
             let opened_now = if output_stream.is_none() {
                 *output_stream = open_output_stream_with_retry();
                 true
@@ -63,12 +80,11 @@ impl Player {
             };
             (stream.mixer().clone(), opened_now)
         };
-        if trace_ms > 0 {
-            let elapsed_ms = now_ms().saturating_sub(trace_ms);
+        if let Some(elapsed_ms) = trace_elapsed(trace_ms, now_ms()) {
             if opened_now {
-                info!("play trace: output stream opened +{}ms", elapsed_ms);
+                debug!("play trace: output stream opened +{}ms", elapsed_ms);
             } else {
-                info!("play trace: output stream reused +{}ms", elapsed_ms);
+                debug!("play trace: output stream reused +{}ms", elapsed_ms);
             }
         }
 
@@ -81,12 +97,10 @@ impl Player {
             duration: self.duration.clone(),
             prot: self.prot.clone(),
             buffer_settings: self.buffer_settings.clone(),
-            buffer_settings_for_state: self.buffer_settings.clone(),
             effects: self.effects.clone(),
             inline_effects_update: self.inline_effects_update.clone(),
             inline_track_mix_updates: self.inline_track_mix_updates.clone(),
             dsp_metrics: self.dsp_metrics.clone(),
-            dsp_metrics_for_sink: self.dsp_metrics.clone(),
             effects_reset: self.effects_reset.clone(),
             output_meter: self.output_meter.clone(),
             audio_info: self.info.clone(),
@@ -103,18 +117,35 @@ impl Player {
         };
 
         let handle = thread::spawn(move || run_playback_thread(context, playback_id, ts));
-        *self.playback_thread_handle.lock().unwrap() = Some(handle);
-        if trace_ms > 0 {
-            info!(
+        *self.playback_thread_handle.lock().unwrap_or_else(|_| {
+            panic!("playback thread handle lock poisoned — a thread panicked while holding it")
+        }) = Some(handle);
+        if let Some(elapsed_ms) = trace_elapsed(trace_ms, now_ms()) {
+            debug!(
                 "play trace: initialize_thread spawned playback_id={} +{}ms",
-                playback_id,
-                now_ms().saturating_sub(trace_ms)
+                playback_id, elapsed_ms
             );
         } else {
-            info!(
+            debug!(
                 "play trace: initialize_thread spawned playback_id={}",
                 playback_id
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::trace_elapsed;
+
+    #[test]
+    fn trace_elapsed_returns_none_when_trace_not_set() {
+        assert_eq!(trace_elapsed(0, 500), None);
+    }
+
+    #[test]
+    fn trace_elapsed_saturates_and_returns_delta() {
+        assert_eq!(trace_elapsed(100, 250), Some(150));
+        assert_eq!(trace_elapsed(300, 250), Some(0));
     }
 }

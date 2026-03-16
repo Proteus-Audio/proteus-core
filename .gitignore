@@ -3,3 +3,6 @@
 .env
 log*.txt
 .desloppify/
+.claude/
+.junie/
+.agents/

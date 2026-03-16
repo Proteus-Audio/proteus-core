@@ -2,8 +2,8 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::biquad::{BiquadKind, BiquadState};
 use super::EffectContext;
+use super::core::biquad::{BiquadKind, BiquadState};
 
 const DEFAULT_FREQ_HZ: u32 = 1000;
 const DEFAULT_Q: f32 = 0.5;
@@ -12,8 +12,10 @@ const DEFAULT_Q: f32 = 0.5;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct HighPassFilterSettings {
+    /// Cutoff frequency in Hz; energy below this frequency is attenuated.
     #[serde(alias = "freq", alias = "frequency_hz")]
     pub freq_hz: u32,
+    /// Quality factor controlling the sharpness of the cutoff slope.
     #[serde(alias = "bandwidth")]
     pub q: f32,
 }
@@ -35,10 +37,12 @@ impl Default for HighPassFilterSettings {
 }
 
 /// Configured high-pass filter effect with runtime state.
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct HighPassFilterEffect {
+    /// Whether the filter is active; when `false` samples pass through unmodified.
     pub enabled: bool,
+    /// High-pass filter parameters such as cutoff frequency and Q factor.
     #[serde(flatten)]
     pub settings: HighPassFilterSettings,
     #[serde(skip)]
@@ -54,27 +58,8 @@ impl std::fmt::Debug for HighPassFilterEffect {
     }
 }
 
-impl Default for HighPassFilterEffect {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            settings: HighPassFilterSettings::default(),
-            state: None,
-        }
-    }
-}
-
-impl HighPassFilterEffect {
-    /// Process interleaved samples through the high-pass filter.
-    ///
-    /// # Arguments
-    /// - `samples`: Interleaved input samples.
-    /// - `context`: Environment details (sample rate, channels, etc.).
-    /// - `drain`: Unused for this effect.
-    ///
-    /// # Returns
-    /// Processed interleaved samples.
-    pub fn process(&mut self, samples: &[f32], context: &EffectContext, _drain: bool) -> Vec<f32> {
+impl super::core::DspEffect for HighPassFilterEffect {
+    fn process(&mut self, samples: &[f32], context: &EffectContext, _drain: bool) -> Vec<f32> {
         if !self.enabled {
             return samples.to_vec();
         }
@@ -87,14 +72,15 @@ impl HighPassFilterEffect {
         state.process(samples)
     }
 
-    /// Reset any internal state held by the filter.
-    pub fn reset_state(&mut self) {
+    fn reset_state(&mut self) {
         if let Some(state) = self.state.as_mut() {
             state.reset();
         }
         self.state = None;
     }
+}
 
+impl HighPassFilterEffect {
     fn ensure_state(&mut self, context: &EffectContext) {
         let needs_reset = self
             .state
@@ -124,6 +110,7 @@ impl HighPassFilterEffect {
 
 #[cfg(test)]
 mod tests {
+    use super::super::core::DspEffect;
     use super::*;
 
     fn context() -> EffectContext {

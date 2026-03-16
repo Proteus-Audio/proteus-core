@@ -21,3 +21,20 @@ impl Drop for PlaybackThreadGuard {
         self.exists.store(false, Ordering::Relaxed);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::PlaybackThreadGuard;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+
+    #[test]
+    fn guard_sets_alive_on_create_and_clears_on_drop() {
+        let exists = Arc::new(AtomicBool::new(false));
+        {
+            let _guard = PlaybackThreadGuard::new(exists.clone());
+            assert!(exists.load(Ordering::Relaxed));
+        }
+        assert!(!exists.load(Ordering::Relaxed));
+    }
+}

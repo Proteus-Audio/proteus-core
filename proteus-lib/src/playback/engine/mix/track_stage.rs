@@ -76,4 +76,11 @@ mod tests {
         ]);
         assert_eq!(out, vec![0.5_f32, 0.5, 0.5, 0.5]);
     }
+
+    #[test]
+    fn apply_track_gain_pan_clamps_invalid_inputs() {
+        let mut samples = vec![1.0_f32, 1.0, 1.0, 1.0];
+        apply_track_gain_pan(&mut samples, f32::NAN, 2.0, 2);
+        assert_eq!(samples, vec![0.0_f32, 1.0, 0.0, 1.0]);
+    }
 }
