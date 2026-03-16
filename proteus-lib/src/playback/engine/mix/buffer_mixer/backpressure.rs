@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::sync::{Condvar, Mutex};
 use std::time::Duration;
 
-use log::debug;
+use log::{debug, warn};
 
 use super::{BufferInstance, SourceKey};
 
