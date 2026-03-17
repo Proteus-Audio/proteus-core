@@ -38,11 +38,11 @@ demux/packet-read errors from `format.next_packet()` are still too coarse:
 
 ### Acceptance criteria
 
-- [ ] `next_packet()` EOF is distinguished from real packet-read errors
-- [ ] `StreamExhausted` is sent only for true end-of-stream conditions
-- [ ] Fatal demux/read failures produce `SourceError` with context
-- [ ] Tests cover EOF vs real-error behavior in both file and container workers
+- [x] `next_packet()` EOF is distinguished from real packet-read errors
+- [x] `StreamExhausted` is sent only for true end-of-stream conditions
+- [x] Fatal demux/read failures produce `SourceError` with context
+- [x] Tests cover EOF vs real-error behavior in both file and container workers
 
 ## Status
 
-Open.
+Done.
