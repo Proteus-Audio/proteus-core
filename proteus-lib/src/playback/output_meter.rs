@@ -7,6 +7,8 @@ mod enabled {
     use rodio::buffer::SamplesBuffer;
     use rodio::Source;
 
+    use crate::dsp::guardrails::{sanitize_channels, sanitize_sample_rate};
+
     #[derive(Debug)]
     struct Frame {
         peak: Vec<f32>,
@@ -29,8 +31,8 @@ mod enabled {
 
     impl OutputMeter {
         pub fn new(channels: usize, sample_rate: u32, refresh_hz: f32) -> Self {
-            let channels = channels.max(1);
-            let sample_rate = sample_rate.max(1);
+            let channels = sanitize_channels(channels);
+            let sample_rate = sanitize_sample_rate(sample_rate);
             let refresh_hz = refresh_hz.max(1.0);
             Self {
                 sample_rate,

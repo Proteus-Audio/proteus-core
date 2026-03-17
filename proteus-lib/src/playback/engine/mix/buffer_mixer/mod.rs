@@ -12,6 +12,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use crate::container::prot::{RuntimeInstanceMeta, RuntimeInstancePlan};
+use crate::dsp::guardrails::{sanitize_channels, sanitize_sample_rate};
 #[cfg(feature = "buffer-map")]
 use crate::logging::clear_logfile;
 
@@ -112,8 +113,8 @@ impl BufferMixer {
         let decode_backpressure = Arc::new(DecodeBackpressure::from_instances(&instances));
 
         Self {
-            sample_rate: sample_rate.max(1),
-            channels: channels.max(1),
+            sample_rate: sanitize_sample_rate(sample_rate),
+            channels: sanitize_channels(channels),
             mix_chunk_samples: mix_chunk_samples.max(1),
             consumed_samples: 0,
             instances,

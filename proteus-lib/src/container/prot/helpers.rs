@@ -4,6 +4,7 @@ use std::collections::HashMap;
 
 use crate::container::info::Info;
 use crate::container::play_settings::{PlaySettingsLegacy, SettingsTrack};
+use crate::dsp::guardrails::sanitize_finite_clamped;
 
 use super::schedule::parse_shuffle_points;
 use super::types::{
@@ -11,19 +12,11 @@ use super::types::{
 };
 
 pub(super) fn sanitize_level(level: f32) -> f32 {
-    if level.is_finite() {
-        level.clamp(0.0, 2.0)
-    } else {
-        1.0
-    }
+    sanitize_finite_clamped(level, 1.0, 0.0, 2.0)
 }
 
 pub(super) fn sanitize_pan(pan: f32) -> f32 {
-    if pan.is_finite() {
-        pan.clamp(-1.0, 1.0)
-    } else {
-        0.0
-    }
+    sanitize_finite_clamped(pan, 0.0, -1.0, 1.0)
 }
 
 pub(super) fn group_ids_by_slot_spans(ids: &[String], slot_spans: &[usize]) -> Vec<Vec<String>> {

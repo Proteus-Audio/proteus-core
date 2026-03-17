@@ -3,6 +3,8 @@
 //! Contains the per-channel reverb lane, its component filters, the runtime
 //! state struct that owns the lane collection, and the `delay_samples` helper.
 
+use crate::dsp::guardrails::sanitize_channels;
+
 // Upper bound for synthetic silence-fed tail flushing.
 const DRAIN_MAX_TAIL_MULTIPLIER: usize = 64;
 // Treat frames below this absolute amplitude as silence for tail termination.
@@ -66,7 +68,7 @@ impl DiffusionReverbState {
         diffusion: f32,
         out: &mut Vec<f32>,
     ) {
-        let channels = self.channels.max(1);
+        let channels = sanitize_channels(self.channels);
         let (input_diffusion, output_diffusion) = diffusion_coeffs(diffusion);
 
         for frame in samples.chunks_exact(channels) {

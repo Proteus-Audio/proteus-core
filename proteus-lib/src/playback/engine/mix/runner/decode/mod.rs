@@ -17,6 +17,8 @@ mod file_worker;
 use std::thread::JoinHandle;
 
 use log::{debug, info, warn};
+
+use crate::dsp::guardrails::sanitize_channels;
 use symphonia::core::audio::AudioBufferRef;
 use symphonia::core::codecs::Decoder;
 use symphonia::core::errors::Error;
@@ -70,7 +72,7 @@ impl Drop for DecodeWorkerJoinGuard {
 
 /// Convert a decoded packet into stereo interleaved samples for the mixer.
 pub(super) fn interleaved_samples(decoded: AudioBufferRef<'_>, channels: u8) -> Vec<f32> {
-    let channels = channels.max(1) as usize;
+    let channels = sanitize_channels(channels as usize);
     let mut out_channels: Vec<Vec<f32>> = Vec::with_capacity(channels);
     for channel in 0..channels {
         out_channels.push(crate::audio::decode::process_channel(

@@ -2,6 +2,8 @@
 
 use std::f32::consts::PI;
 
+use crate::dsp::guardrails::{sanitize_channels, sanitize_finite_clamped, sanitize_freq};
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum BiquadKind {
     LowPass,
@@ -40,9 +42,9 @@ impl BiquadState {
         q: f32,
     ) -> Self {
         let freq = sanitize_freq(freq, sample_rate);
-        let q = sanitize_q(q);
+        let q = sanitize_finite_clamped(q, 0.5, 0.1, 10.0);
         let coeffs = coefficients(kind, sample_rate, freq, q);
-        let channels = channels.max(1);
+        let channels = sanitize_channels(channels);
         Self {
             kind,
             sample_rate,
@@ -66,10 +68,10 @@ impl BiquadState {
         q: f32,
     ) -> bool {
         let freq = sanitize_freq(freq, sample_rate);
-        let q = sanitize_q(q);
+        let q = sanitize_finite_clamped(q, 0.5, 0.1, 10.0);
         self.kind == kind
             && self.sample_rate == sample_rate
-            && self.channels == channels.max(1)
+            && self.channels == sanitize_channels(channels)
             && self.freq == freq
             && (self.q - q).abs() < f32::EPSILON
     }
@@ -134,21 +136,6 @@ impl BiquadState {
     }
 }
 
-fn sanitize_freq(freq: u32, sample_rate: u32) -> u32 {
-    let nyquist = sample_rate / 2;
-    if nyquist <= 1 {
-        return 1;
-    }
-    freq.clamp(1, nyquist.saturating_sub(1).max(1))
-}
-
-fn sanitize_q(q: f32) -> f32 {
-    if !q.is_finite() {
-        return 0.5;
-    }
-    q.clamp(0.1, 10.0)
-}
-
 fn coefficients(kind: BiquadKind, sample_rate: u32, freq: u32, q: f32) -> BiquadCoefficients {
     let w0 = 2.0 * PI * freq as f32 / sample_rate as f32;
     let cos_w0 = w0.cos();
@@ -211,9 +198,9 @@ mod tests {
     #[test]
     fn sanitize_helpers_clamp_invalid_input() {
         assert_eq!(sanitize_freq(0, 48_000), 1);
-        assert_eq!(sanitize_q(f32::INFINITY), 0.5);
-        assert_eq!(sanitize_q(0.01), 0.1);
-        assert_eq!(sanitize_q(20.0), 10.0);
+        assert_eq!(sanitize_finite_clamped(f32::INFINITY, 0.5, 0.1, 10.0), 0.5);
+        assert_eq!(sanitize_finite_clamped(0.01, 0.5, 0.1, 10.0), 0.1);
+        assert_eq!(sanitize_finite_clamped(20.0, 0.5, 0.1, 10.0), 10.0);
     }
 
     #[test]
