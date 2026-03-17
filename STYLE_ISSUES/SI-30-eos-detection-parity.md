@@ -4,35 +4,38 @@
 
 | File | Notes |
 |---|---|
-| `proteus-lib/src/track/single.rs` | Standalone decode path has its own seek/setup/finish semantics |
-| `proteus-lib/src/track/container.rs` | Container decode path has separate EOS skew and finish handling |
+| `proteus-lib/src/playback/engine/mix/runner/decode/mod.rs` | Shared decode helpers: `decode_and_forward_packet`, `interleaved_samples`, `packet_ts_seconds`, `forward_decoded_packet` |
+| `proteus-lib/src/playback/engine/mix/runner/decode/file_worker.rs` | Standalone file decode worker (uses shared helpers) |
+| `proteus-lib/src/playback/engine/mix/runner/decode/container_worker.rs` | Container demux decode worker (uses shared helpers) |
+| `proteus-lib/src/track/` | Legacy decode paths (superseded, no longer called by active code) |
 
 ---
 
 ## Current state
 
-The two decode paths still implement end-of-stream and shutdown behavior independently. The
-container path has explicit EOS skew logic; the standalone path has simpler duration/finish logic.
+The shared decode → interleave → forward pipeline is factored into `decode_and_forward_packet`
+in the shared `decode/mod.rs` module. Both file and container workers delegate to this single
+function for packet decoding, error classification, and forwarding, ensuring identical behavior
+for:
 
-### Why this matters
+- Successful decode: interleave to stereo, apply backpressure, forward to mixer.
+- Recoverable decode errors (`DecodeError`): report as recoverable, continue.
+- Fatal decode errors: report as non-recoverable, stop.
 
-- Semantics can drift silently between standalone-file and container playback
-- Alignment and finished-track behavior are core playback invariants
-- Bugs here are difficult to spot because both code paths are valid in isolation
+### Intentional mode-specific differences
 
-### Recommended remediation
-
-1. Extract shared EOS/shutdown concepts into reusable helpers where the logic is genuinely common
-2. Define which behaviors are intentionally mode-specific and document them
-3. Add tests that exercise equivalent completion scenarios through both paths and compare behavior
-4. Keep container-specific skew logic only where it is truly required by multi-track demuxing
+| Behavior | File worker | Container worker | Reason |
+|---|---|---|---|
+| Stream exhaustion signal | `SourceFinished` only | `StreamExhausted` + per-track `SourceFinished` | Container EOF affects all embedded tracks simultaneously |
+| Source key type | `SourceKey::FilePath` | `SourceKey::TrackId` | Different source identification models |
+| Seek failure | Recoverable error, continue from start | Recoverable error, continue from start | Same behavior (parity) |
 
 ### Acceptance criteria
 
-- [ ] Shared EOS and shutdown behavior is factored into common helpers where appropriate
-- [ ] Intentional differences between standalone and container decode paths are documented
-- [ ] Tests cover parity of common completion scenarios across both modes
+- [x] Shared EOS and shutdown behavior is factored into common helpers where appropriate
+- [x] Intentional differences between standalone and container decode paths are documented
+- [x] Tests cover parity of common completion scenarios across both modes
 
 ## Status
 
-Open.
+Resolved.
