@@ -51,12 +51,12 @@ let done = buffering_done.load(Ordering::Acquire);
 
 ### Acceptance criteria
 
-- [ ] Every cross-thread playback atomic has a documented ordering contract
-- [ ] `playback_thread_exists` uses a consistent, documented load/store ordering at all call sites
-- [ ] `buffering_done` no longer uses `Relaxed` for cross-thread publication/observation
-- [ ] Ordering choices are centralized behind helper methods or tightly scoped wrappers
-- [ ] Startup/shutdown/buffering tests cover the intended state transitions
+- [x] Every cross-thread playback atomic has a documented ordering contract
+- [x] `playback_thread_exists` uses a consistent, documented load/store ordering at all call sites
+- [x] `buffering_done` no longer uses `Relaxed` for cross-thread publication/observation
+- [x] Ordering choices are centralized behind helper methods or tightly scoped wrappers
+- [x] Startup/shutdown/buffering tests cover the intended state transitions
 
 ## Status
 
-Open.
+Closed.

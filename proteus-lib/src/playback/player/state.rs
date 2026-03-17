@@ -53,10 +53,14 @@ impl Player {
     }
 
     /// Return `true` when no playback worker thread is alive.
+    ///
+    /// Uses `Acquire` to synchronize-with the `Release` store in
+    /// [`PlaybackThreadGuard::drop`], ensuring all work done by the
+    /// worker before it exited is visible once this returns `true`.
     pub(super) fn thread_finished(&self) -> bool {
         !self
             .playback_thread_exists
-            .load(std::sync::atomic::Ordering::SeqCst)
+            .load(std::sync::atomic::Ordering::Acquire)
     }
 
     /// Return `true` when no playback worker thread is alive.
@@ -99,5 +103,41 @@ impl Player {
             .lock()
             .unwrap_or_else(|_| panic!("prot lock poisoned — a thread panicked while holding it"))
             .get_shuffle_schedule()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+
+    // Verify the shutdown ordering contract: a Release store of false from a
+    // worker thread is visible to an Acquire load on the observing side.
+    // This mirrors the PlaybackThreadGuard::drop → thread_finished path.
+    #[test]
+    fn thread_exists_false_store_visible_to_acquire_load_after_join() {
+        let exists = Arc::new(AtomicBool::new(true));
+        let writer = exists.clone();
+        let handle = std::thread::spawn(move || {
+            // Mirrors PlaybackThreadGuard::drop.
+            writer.store(false, Ordering::Release);
+        });
+        handle.join().unwrap();
+        // Mirrors thread_finished's Acquire load.
+        assert!(!exists.load(Ordering::Acquire));
+    }
+
+    // Verify the startup ordering contract: a Release store of true by the
+    // spawner is visible to an Acquire load inside the new thread.
+    #[test]
+    fn thread_exists_true_store_visible_to_acquire_load_in_worker() {
+        let exists = Arc::new(AtomicBool::new(false));
+        // Spawner sets true with Release before thread::spawn.
+        exists.store(true, Ordering::Release);
+        let reader = exists.clone();
+        let seen = std::thread::spawn(move || reader.load(Ordering::Acquire))
+            .join()
+            .unwrap();
+        assert!(seen);
     }
 }

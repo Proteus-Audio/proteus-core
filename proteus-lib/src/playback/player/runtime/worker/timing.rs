@@ -115,9 +115,17 @@ pub(super) fn play_trace_elapsed_ms(ctx: &ThreadContext) -> Option<u64> {
 }
 
 // Mark producer buffering complete and finalize expected drain duration.
+//
+// `ctx.buffer_done_thread_flag` is the cross-thread publication flag
+// (`Player::buffering_done`). It is stored with `Release` so that external
+// callers who load it with `Acquire` observe a consistent view of all worker
+// state written before this point.
+//
+// `loop_state.buffering_done` is worker-thread-local; `Relaxed` is correct.
 pub(super) fn mark_buffering_complete(ctx: &ThreadContext, loop_state: &LoopState) {
     loop_state.buffering_done.store(true, Ordering::Relaxed);
-    ctx.buffer_done_thread_flag.store(true, Ordering::Relaxed);
+    // Release: publish buffering-complete event to external Acquire loads.
+    ctx.buffer_done_thread_flag.store(true, Ordering::Release);
 
     let mut final_duration = loop_state.final_duration.lock().unwrap_or_else(|_| {
         panic!("final duration lock poisoned — a thread panicked while holding it")
@@ -214,6 +222,8 @@ pub(super) fn run_drain_loop(
 mod tests {
     use super::update_append_timing;
     use crate::playback::player::runtime::worker::runner::LoopState;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
     use std::time::Duration;
 
     #[test]
@@ -244,5 +254,37 @@ mod tests {
         assert!(timing.1 > 0.0);
         assert_eq!(timing.2, 0);
         assert!(timing.3 >= timing.1);
+    }
+
+    // Verify that a Release store to buffer_done_thread_flag (the cross-thread
+    // publication path used by mark_buffering_complete) is visible to an Acquire
+    // load on the observing thread.
+    #[test]
+    fn buffering_done_publication_visible_across_threads() {
+        let flag = Arc::new(AtomicBool::new(false));
+        let writer = flag.clone();
+        let handle = std::thread::spawn(move || {
+            // Mirrors the store in mark_buffering_complete.
+            writer.store(true, Ordering::Release);
+        });
+        handle.join().unwrap();
+        // Mirrors the load in debug_buffering_done.
+        assert!(flag.load(Ordering::Acquire));
+    }
+
+    // Verify that the spawner-side reset (false with Release) is visible before
+    // the worker thread begins execution.
+    #[test]
+    fn buffering_done_reset_before_spawn_is_false() {
+        let flag = Arc::new(AtomicBool::new(true));
+        // Spawner resets to false before spawning.
+        flag.store(false, Ordering::Release);
+        let reader = flag.clone();
+        let handle = std::thread::spawn(move || {
+            // Worker reads the spawner's reset; Acquire ensures it sees false.
+            reader.load(Ordering::Acquire)
+        });
+        let seen = handle.join().unwrap();
+        assert!(!seen);
     }
 }

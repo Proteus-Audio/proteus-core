@@ -157,19 +157,26 @@ impl Player {
     }
 
     /// Debug helper returning thread alive, state, and audio heard flags.
+    ///
+    /// Both `playback_thread_exists` and `audio_heard` use `Acquire` to
+    /// synchronize-with the corresponding `Release` stores on the worker thread.
     pub fn debug_playback_state(&self) -> (bool, PlayerState, bool) {
         (
-            self.playback_thread_exists.load(Ordering::SeqCst),
+            self.playback_thread_exists.load(Ordering::Acquire),
             *self.state.lock().unwrap_or_else(|_| {
                 panic!("state lock poisoned — a thread panicked while holding it")
             }),
-            self.audio_heard.load(Ordering::Relaxed),
+            self.audio_heard.load(Ordering::Acquire),
         )
     }
 
     /// Debug helper indicating whether buffering has completed.
+    ///
+    /// Uses `Acquire` to synchronize-with the `Release` store in
+    /// `mark_buffering_complete`, so the completion is fully visible once
+    /// this returns `true`.
     pub fn debug_buffering_done(&self) -> bool {
-        self.buffering_done.load(Ordering::Relaxed)
+        self.buffering_done.load(Ordering::Acquire)
     }
 
     /// Debug helper returning internal timing markers in milliseconds.

@@ -238,7 +238,8 @@ pub(super) fn update_sink(
             now.saturating_sub(trace_ms)
         );
     }
-    ctx.audio_heard.store(true, Ordering::Relaxed);
+    // Release: publish first-chunk event to any Acquire load of audio_heard.
+    ctx.audio_heard.store(true, Ordering::Release);
     ctx.last_chunk_ms.store(now, Ordering::Relaxed);
 
     ctx.output_meter
