@@ -2,8 +2,8 @@
 
 ## Files affected
 
-| File | Notes |
-|---|---|
+| File                                                               | Notes                                                                                                |
+| ------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------- |
 | `proteus-lib/src/playback/engine/mix/buffer_mixer/backpressure.rs` | `wait_for_source_room` uses `self.cv.wait(guard).unwrap()` with no timeout or periodic shutdown poll |
 
 ---
@@ -45,12 +45,12 @@ if timeout.timed_out() {
 
 ### Acceptance criteria
 
-- [ ] Backpressure waits are bounded by a timeout
-- [ ] Waiters reliably exit on shutdown/abort even if no producer notifies them
-- [ ] Timeout wakeups include enough logging to debug stalls
-- [ ] Tests cover timeout-based shutdown behavior
-- [ ] Tests cover the "notifier exited without notifying" failure path
+- [x] Backpressure waits are bounded by a timeout
+- [x] Waiters reliably exit on shutdown/abort even if no producer notifies them
+- [x] Timeout wakeups include enough logging to debug stalls
+- [x] Tests cover timeout-based shutdown behavior
+- [x] Tests cover the "notifier exited without notifying" failure path
 
 ## Status
 
-Open.
+Done.

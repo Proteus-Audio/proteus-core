@@ -2,10 +2,17 @@
 
 use std::collections::HashMap;
 use std::sync::{Condvar, Mutex};
+use std::time::Duration;
 
-use log::debug;
+use log::{debug, warn};
 
 use super::{BufferInstance, SourceKey};
+
+/// How long a decode worker waits before re-checking shutdown/abort/room.
+const BACKPRESSURE_WAIT_TIMEOUT: Duration = Duration::from_millis(50);
+
+/// Log a stall warning every N consecutive timeouts (rate-limiting).
+const STALL_WARN_INTERVAL: usize = 100;
 
 #[derive(Debug, Clone)]
 struct DecodeBackpressureInstance {
@@ -117,12 +124,33 @@ impl DecodeBackpressure {
             }
             wait_count = wait_count.saturating_add(1);
             guard.waiting_threads = guard.waiting_threads.saturating_add(1);
-            guard = self.cv.wait(guard).unwrap();
+            let (next_guard, timeout_result) = self
+                .cv
+                .wait_timeout(guard, BACKPRESSURE_WAIT_TIMEOUT)
+                .unwrap_or_else(|_| {
+                    panic!("decode backpressure condvar wait poisoned — a thread panicked while holding it")
+                });
+            guard = next_guard;
             guard.waiting_threads = guard.waiting_threads.saturating_sub(1);
-            debug!(
-                "decode_backpressure wait wake: source={:?} required_samples={} waits={}",
-                source, required_samples, wait_count
-            );
+            if timeout_result.timed_out() {
+                debug!(
+                    "decode_backpressure wait timeout: source={:?} required_samples={} waits={}",
+                    source, required_samples, wait_count
+                );
+                if wait_count.is_multiple_of(STALL_WARN_INTERVAL) {
+                    warn!(
+                        "decode_backpressure stall: source={:?} has been waiting for {} timeouts (~{}ms)",
+                        source,
+                        wait_count,
+                        wait_count * BACKPRESSURE_WAIT_TIMEOUT.as_millis() as usize
+                    );
+                }
+            } else {
+                debug!(
+                    "decode_backpressure wait wake: source={:?} required_samples={} waits={}",
+                    source, required_samples, wait_count
+                );
+            }
         }
     }
 
