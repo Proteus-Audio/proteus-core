@@ -1,3 +1,4 @@
+use std::panic::{self, AssertUnwindSafe};
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::time::Duration;
@@ -117,4 +118,15 @@ fn wait_exits_when_notifier_thread_exits_and_shutdown_set() {
         !result,
         "waiter should return false after notifier exited and shutdown set"
     );
+}
+
+#[test]
+fn has_waiters_recovers_after_state_poison() {
+    let backpressure = DecodeBackpressure::default();
+    let _ = panic::catch_unwind(AssertUnwindSafe(|| {
+        let _guard = backpressure.lock_state_recoverable();
+        panic!("poison decode backpressure state");
+    }));
+
+    assert!(!backpressure.has_waiters());
 }

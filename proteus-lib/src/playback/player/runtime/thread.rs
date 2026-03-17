@@ -41,9 +41,7 @@ impl Player {
         }
         self.join_playback_thread();
 
-        let mut finished_tracks = self.finished_tracks.lock().unwrap_or_else(|_| {
-            panic!("finished tracks lock poisoned — a thread panicked while holding it")
-        });
+        let mut finished_tracks = self.lock_finished_tracks_recoverable();
         finished_tracks.clear();
         drop(finished_tracks);
 
@@ -60,17 +58,10 @@ impl Player {
             .store(now_ms_value, Ordering::Relaxed);
 
         self.audio_heard.store(false, Ordering::Relaxed);
-        self.output_meter
-            .lock()
-            .unwrap_or_else(|_| {
-                panic!("output meter lock poisoned — a thread panicked while holding it")
-            })
-            .reset();
+        self.lock_output_meter_recoverable().reset();
 
         let (output_mixer, opened_now) = {
-            let mut output_stream = self.output_stream.lock().unwrap_or_else(|_| {
-                panic!("output stream lock poisoned — a thread panicked while holding it")
-            });
+            let mut output_stream = self.lock_output_stream_recoverable();
             let opened_now = if output_stream.is_none() {
                 *output_stream = open_output_stream_with_retry();
                 true
@@ -124,9 +115,7 @@ impl Player {
         };
 
         let handle = thread::spawn(move || run_playback_thread(context, playback_id, ts));
-        *self.playback_thread_handle.lock().unwrap_or_else(|_| {
-            panic!("playback thread handle lock poisoned — a thread panicked while holding it")
-        }) = Some(handle);
+        *self.lock_playback_thread_handle_invariant() = Some(handle);
         if let Some(elapsed_ms) = trace_elapsed(trace_ms, now_ms()) {
             debug!(
                 "play trace: initialize_thread spawned playback_id={} +{}ms",

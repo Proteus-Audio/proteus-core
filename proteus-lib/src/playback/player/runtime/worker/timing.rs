@@ -19,23 +19,11 @@ pub(super) fn update_chunk_lengths(ctx: &ThreadContext, loop_state: &mut LoopSta
         return;
     }
 
-    let mut chunk_lengths = loop_state.chunk_lengths.lock().unwrap_or_else(|_| {
-        panic!("chunk lengths lock poisoned — a thread panicked while holding it")
-    });
-    let mut time_passed_unlocked = ctx.time_passed.lock().unwrap_or_else(|_| {
-        panic!("time passed lock poisoned — a thread panicked while holding it")
-    });
-    let mut time_chunks_passed = loop_state.time_chunks_passed.lock().unwrap_or_else(|_| {
-        panic!("time chunks passed lock poisoned — a thread panicked while holding it")
-    });
-    let mut timer = loop_state
-        .timer
-        .lock()
-        .unwrap_or_else(|_| panic!("timer lock poisoned — a thread panicked while holding it"));
-    let sink = ctx
-        .sink_mutex
-        .lock()
-        .unwrap_or_else(|_| panic!("sink lock poisoned — a thread panicked while holding it"));
+    let mut chunk_lengths = loop_state.lock_chunk_lengths_recoverable();
+    let time_passed_unlocked = ctx.lock_time_passed_recoverable();
+    let mut time_chunks_passed = loop_state.lock_time_chunks_passed_recoverable();
+    let mut timer = loop_state.lock_timer_recoverable();
+    let sink = ctx.lock_sink_recoverable();
 
     ctx.last_time_update_ms.store(now_ms(), Ordering::Relaxed);
 
@@ -55,14 +43,14 @@ pub(super) fn update_chunk_lengths(ctx: &ThreadContext, loop_state: &mut LoopSta
 
     let current_audio_time = *time_chunks_passed + timer.get_time().as_secs_f64();
     let delta = (current_audio_time - loop_state.last_meter_time).max(0.0);
+    drop(sink);
+    drop(timer);
+    drop(time_chunks_passed);
+    drop(time_passed_unlocked);
+    drop(chunk_lengths);
     loop_state.last_meter_time = current_audio_time;
-    ctx.output_meter
-        .lock()
-        .unwrap_or_else(|_| {
-            panic!("output meter lock poisoned — a thread panicked while holding it")
-        })
-        .advance(delta);
-    *time_passed_unlocked = current_audio_time;
+    ctx.lock_output_meter_recoverable().advance(delta);
+    *ctx.lock_time_passed_recoverable() = current_audio_time;
 }
 
 fn advance_playback_clock(
@@ -82,9 +70,7 @@ fn advance_playback_clock(
 
 // Update append jitter statistics for one chunk.
 pub(super) fn update_append_timing(loop_state: &LoopState, length_in_seconds: f64) -> (f64, bool) {
-    let mut timing = loop_state.append_timing.lock().unwrap_or_else(|_| {
-        panic!("append timing lock poisoned — a thread panicked while holding it")
-    });
+    let mut timing = loop_state.lock_append_timing_recoverable();
     let now = Instant::now();
     let delta_ms = now.duration_since(timing.0).as_secs_f64() * 1000.0;
     let chunk_ms = length_in_seconds * 1000.0;
@@ -127,16 +113,10 @@ pub(super) fn mark_buffering_complete(ctx: &ThreadContext, loop_state: &LoopStat
     // Release: publish buffering-complete event to external Acquire loads.
     ctx.buffer_done_thread_flag.store(true, Ordering::Release);
 
-    let mut final_duration = loop_state.final_duration.lock().unwrap_or_else(|_| {
-        panic!("final duration lock poisoned — a thread panicked while holding it")
-    });
+    let mut final_duration = loop_state.lock_final_duration_recoverable();
     if final_duration.is_none() {
-        let chunk_lengths = loop_state.chunk_lengths.lock().unwrap_or_else(|_| {
-            panic!("chunk lengths lock poisoned — a thread panicked while holding it")
-        });
-        let time_chunks_passed = loop_state.time_chunks_passed.lock().unwrap_or_else(|_| {
-            panic!("time chunks passed lock poisoned — a thread panicked while holding it")
-        });
+        let chunk_lengths = loop_state.lock_chunk_lengths_recoverable();
+        let time_chunks_passed = loop_state.lock_time_chunks_passed_recoverable();
         *final_duration = Some(*time_chunks_passed + chunk_lengths.iter().sum::<f64>());
     }
 }
@@ -152,20 +132,14 @@ pub(super) fn is_drain_complete(
     }
 
     if ctx
-        .sink_mutex
-        .lock()
-        .unwrap_or_else(|_| panic!("sink lock poisoned — a thread panicked while holding it"))
+        .lock_sink_recoverable()
         .empty()
     {
         return true;
     }
 
-    if let Some(final_duration) = *loop_state.final_duration.lock().unwrap_or_else(|_| {
-        panic!("final duration lock poisoned — a thread panicked while holding it")
-    }) {
-        let time_passed = *ctx.time_passed.lock().unwrap_or_else(|_| {
-            panic!("time passed lock poisoned — a thread panicked while holding it")
-        });
+    if let Some(final_duration) = *loop_state.lock_final_duration_recoverable() {
+        let time_passed = *ctx.lock_time_passed_recoverable();
         return time_passed >= (final_duration + 0.25).max(0.0);
     }
 
@@ -175,20 +149,14 @@ pub(super) fn is_drain_complete(
 #[cfg(feature = "debug")]
 pub(super) fn log_drain_loop_start(ctx: &ThreadContext, loop_state: &LoopState) {
     let sink = ctx
-        .sink_mutex
-        .lock()
-        .unwrap_or_else(|_| panic!("sink lock poisoned — a thread panicked while holding it"));
+        .lock_sink_recoverable();
     let paused = sink.is_paused();
     let empty = sink.empty();
     let sink_len = sink.len();
     drop(sink);
 
-    let time_passed = *ctx.time_passed.lock().unwrap_or_else(|_| {
-        panic!("time passed lock poisoned — a thread panicked while holding it")
-    });
-    let final_duration = *loop_state.final_duration.lock().unwrap_or_else(|_| {
-        panic!("final duration lock poisoned — a thread panicked while holding it")
-    });
+    let time_passed = *ctx.lock_time_passed_recoverable();
+    let final_duration = *loop_state.lock_final_duration_recoverable();
     log::info!(
         "Starting drain loop: paused={} empty={} sink_len={} time={:.3} final={:?}",
         paused,

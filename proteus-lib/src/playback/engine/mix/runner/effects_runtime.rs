@@ -73,11 +73,10 @@ pub(super) fn process_and_send_samples(
             return false;
         }
     }
-    if let Ok(mut metrics) = state.dsp_metrics.lock() {
-        metrics.track_key_count = state.buffer_mixer.instance_count();
-        metrics.prot_key_count = state.buffer_mixer.logical_track_count();
-        metrics.finished_track_count = state.buffer_mixer.finished_instance_count();
-    }
+    let mut metrics = state.lock_dsp_metrics_recoverable();
+    metrics.track_key_count = state.buffer_mixer.instance_count();
+    metrics.prot_key_count = state.buffer_mixer.logical_track_count();
+    metrics.finished_track_count = state.buffer_mixer.finished_instance_count();
     true
 }
 
@@ -148,9 +147,7 @@ fn process_effects(samples: &[f32], state: &mut MixLoopState) {
     {
         if let Some(transition) = state.active_inline_transition.take() {
             let completed = transition.new_effects;
-            *state.effects.lock().unwrap_or_else(|_| {
-                panic!("effects lock poisoned — a thread panicked while holding it")
-            }) = completed.clone();
+            *state.lock_effects_recoverable() = completed.clone();
             state.local_effects = completed;
         }
     }
@@ -187,20 +184,19 @@ fn update_debug_metrics(
         state.min_chain_ksps = state.min_chain_ksps.min(chain_ksps);
         state.max_chain_ksps = state.max_chain_ksps.max(chain_ksps);
     }
-    if let Ok(mut metrics) = state.dsp_metrics.lock() {
-        metrics.overrun = dsp_time_ms > audio_time_ms;
-        metrics.overrun_ms = overrun_ms;
-        metrics.avg_overrun_ms = state.avg_overrun_ms;
-        metrics.max_overrun_ms = state.max_overrun_ms;
-        metrics.chain_ksps = chain_ksps;
-        metrics.avg_chain_ksps = state.avg_chain_ksps;
-        metrics.min_chain_ksps = if state.min_chain_ksps.is_finite() {
-            state.min_chain_ksps
-        } else {
-            0.0
-        };
-        metrics.max_chain_ksps = state.max_chain_ksps;
-    }
+    let mut metrics = state.lock_dsp_metrics_recoverable();
+    metrics.overrun = dsp_time_ms > audio_time_ms;
+    metrics.overrun_ms = overrun_ms;
+    metrics.avg_overrun_ms = state.avg_overrun_ms;
+    metrics.max_overrun_ms = state.max_overrun_ms;
+    metrics.chain_ksps = chain_ksps;
+    metrics.avg_chain_ksps = state.avg_chain_ksps;
+    metrics.min_chain_ksps = if state.min_chain_ksps.is_finite() {
+        state.min_chain_ksps
+    } else {
+        0.0
+    };
+    metrics.max_chain_ksps = state.max_chain_ksps;
 }
 
 pub(super) fn drain_effect_tail(state: &mut MixLoopState) -> bool {
@@ -298,36 +294,22 @@ pub(super) fn apply_effect_runtime_updates(state: &mut MixLoopState) {
     let current_reset = state.effects_reset.load(Ordering::SeqCst);
     if current_reset != state.last_effects_reset {
         // Full reset: clone the new chain from shared into local.
-        state.local_effects = state
-            .effects
-            .lock()
-            .unwrap_or_else(|_| {
-                panic!("effects lock poisoned — a thread panicked while holding it")
-            })
-            .clone();
+        let refreshed_effects = state.lock_effects_recoverable().clone();
+        state.local_effects = refreshed_effects;
         for effect in state.local_effects.iter_mut() {
             effect.reset_state();
         }
         state.active_inline_transition = None;
-        state
-            .inline_effects_update
-            .lock()
-            .unwrap_or_else(|_| {
-                panic!("inline effects update lock poisoned — a thread panicked while holding it")
-            })
-            .take();
+        state.lock_inline_effects_update_recoverable().take();
         state.effect_context = rebuild_effect_context(&state.prot);
         state.last_effects_reset = current_reset;
     }
 
-    if let Some(update) = state
-        .inline_effects_update
-        .lock()
-        .unwrap_or_else(|_| {
-            panic!("inline effects update lock poisoned — a thread panicked while holding it")
-        })
-        .take()
-    {
+    let pending_update = {
+        let mut pending = state.lock_inline_effects_update_recoverable();
+        pending.take()
+    };
+    if let Some(update) = pending_update {
         let transition_samples = ((update.transition_ms / 1000.0)
             * state.audio_info.sample_rate.max(1) as f32)
             .round() as usize
@@ -338,9 +320,7 @@ pub(super) fn apply_effect_runtime_updates(state: &mut MixLoopState) {
             for effect in state.local_effects.iter_mut() {
                 effect.warm_up(&state.effect_context);
             }
-            *state.effects.lock().unwrap_or_else(|_| {
-                panic!("effects lock poisoned — a thread panicked while holding it")
-            }) = state.local_effects.clone();
+            *state.lock_effects_recoverable() = state.local_effects.clone();
             state.active_inline_transition = None;
         } else {
             // Crossfade transition: snapshot local chain as old, warm up new.
@@ -364,9 +344,7 @@ pub(super) fn apply_effect_runtime_updates(state: &mut MixLoopState) {
 /// Drain queued effect settings commands and apply them to the local chain.
 fn drain_effect_settings_commands(state: &mut MixLoopState) {
     let commands = {
-        let mut pending = state.effect_settings_commands.lock().unwrap_or_else(|_| {
-            panic!("effect settings commands lock poisoned — a thread panicked while holding it")
-        });
+        let mut pending = state.lock_effect_settings_commands_recoverable();
         if pending.is_empty() {
             return;
         }
@@ -405,9 +383,11 @@ fn drain_effect_settings_commands(state: &mut MixLoopState) {
 fn rebuild_effect_context(
     prot_locked: &std::sync::Arc<std::sync::Mutex<crate::container::prot::Prot>>,
 ) -> EffectContext {
-    let prot = prot_locked
-        .lock()
-        .unwrap_or_else(|_| panic!("prot lock poisoned — a thread panicked while holding it"));
+    let prot = crate::playback::mutex_policy::lock_invariant(
+        prot_locked,
+        "mix runtime prot",
+        "effect context rebuilds require coherent container metadata",
+    );
     EffectContext::new(
         prot.info.sample_rate,
         prot.info.channels as usize,

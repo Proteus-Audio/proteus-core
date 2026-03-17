@@ -12,6 +12,7 @@ mod builder;
 mod controls;
 mod effects;
 mod lifecycle;
+mod locks;
 mod notify;
 mod runtime;
 mod settings;
@@ -35,7 +36,7 @@ use crate::{
     },
 };
 
-use notify::WorkerNotify;
+use self::notify::WorkerNotify;
 
 /// High-level playback state for the player.
 ///

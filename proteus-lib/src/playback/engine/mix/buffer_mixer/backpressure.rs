@@ -1,10 +1,12 @@
 //! Decode backpressure state and synchronization.
 
 use std::collections::HashMap;
-use std::sync::{Condvar, Mutex};
+use std::sync::{Condvar, Mutex, MutexGuard, WaitTimeoutResult};
 use std::time::Duration;
 
 use log::{debug, warn};
+
+use crate::playback::mutex_policy::{lock_recoverable, wait_timeout_recoverable};
 
 use super::{BufferInstance, SourceKey};
 
@@ -39,6 +41,29 @@ pub(crate) struct DecodeBackpressure {
 }
 
 impl DecodeBackpressure {
+    /// Recoverable poison policy: backpressure bookkeeping is runtime coordination state.
+    fn lock_state_recoverable(&self) -> MutexGuard<'_, DecodeBackpressureState> {
+        lock_recoverable(
+            &self.state,
+            "decode backpressure state",
+            "backpressure bookkeeping is rebuildable runtime coordination state",
+        )
+    }
+
+    /// Recoverable poison policy: waiting threads should continue from the inner bookkeeping state.
+    fn wait_state_recoverable<'a>(
+        &self,
+        guard: MutexGuard<'a, DecodeBackpressureState>,
+    ) -> (MutexGuard<'a, DecodeBackpressureState>, WaitTimeoutResult) {
+        wait_timeout_recoverable(
+            &self.cv,
+            guard,
+            BACKPRESSURE_WAIT_TIMEOUT,
+            "decode backpressure state",
+            "backpressure bookkeeping is rebuildable runtime coordination state",
+        )
+    }
+
     /// Build backpressure state from the mixer's per-instance buffers.
     pub(super) fn from_instances(instances: &[BufferInstance]) -> Self {
         let mut state = DecodeBackpressureState::default();
@@ -74,9 +99,7 @@ impl DecodeBackpressure {
             return true;
         }
 
-        let mut guard = self.state.lock().unwrap_or_else(|_| {
-            panic!("decode backpressure state lock poisoned — a thread panicked while holding it")
-        });
+        let mut guard = self.lock_state_recoverable();
         let mut wait_count = 0usize;
         loop {
             if guard.shutdown || abort.load(std::sync::atomic::Ordering::Relaxed) {
@@ -124,12 +147,7 @@ impl DecodeBackpressure {
             }
             wait_count = wait_count.saturating_add(1);
             guard.waiting_threads = guard.waiting_threads.saturating_add(1);
-            let (next_guard, timeout_result) = self
-                .cv
-                .wait_timeout(guard, BACKPRESSURE_WAIT_TIMEOUT)
-                .unwrap_or_else(|_| {
-                    panic!("decode backpressure condvar wait poisoned — a thread panicked while holding it")
-                });
+            let (next_guard, timeout_result) = self.wait_state_recoverable(guard);
             guard = next_guard;
             guard.waiting_threads = guard.waiting_threads.saturating_sub(1);
             if timeout_result.timed_out() {
@@ -165,9 +183,7 @@ impl DecodeBackpressure {
         if attempted_samples == 0 && pushed_samples == 0 && !is_full {
             return;
         }
-        let mut guard = self.state.lock().unwrap_or_else(|_| {
-            panic!("decode backpressure state lock poisoned — a thread panicked while holding it")
-        });
+        let mut guard = self.lock_state_recoverable();
         if let Some(instance) = guard.instances.get_mut(instance_index) {
             instance.reserved_samples = instance.reserved_samples.saturating_sub(attempted_samples);
             instance.buffered_samples = instance
@@ -196,9 +212,7 @@ impl DecodeBackpressure {
         if popped_samples == 0 {
             return;
         }
-        let mut guard = self.state.lock().unwrap_or_else(|_| {
-            panic!("decode backpressure state lock poisoned — a thread panicked while holding it")
-        });
+        let mut guard = self.lock_state_recoverable();
         if let Some(instance) = guard.instances.get_mut(instance_index) {
             instance.buffered_samples = instance.buffered_samples.saturating_sub(popped_samples);
             debug!(
@@ -216,9 +230,7 @@ impl DecodeBackpressure {
 
     /// Mark an instance finished so it no longer blocks backpressure checks.
     pub(super) fn on_finished(&self, instance_index: usize) {
-        let mut guard = self.state.lock().unwrap_or_else(|_| {
-            panic!("decode backpressure state lock poisoned — a thread panicked while holding it")
-        });
+        let mut guard = self.lock_state_recoverable();
         if let Some(instance) = guard.instances.get_mut(instance_index) {
             if !instance.finished {
                 instance.finished = true;
@@ -237,9 +249,7 @@ impl DecodeBackpressure {
 
     /// Wake all waiters and force future room checks to fail.
     pub(crate) fn shutdown(&self) {
-        let mut guard = self.state.lock().unwrap_or_else(|_| {
-            panic!("decode backpressure state lock poisoned — a thread panicked while holding it")
-        });
+        let mut guard = self.lock_state_recoverable();
         guard.shutdown = true;
         debug!("decode_backpressure shutdown");
         self.cv.notify_all();
@@ -247,31 +257,20 @@ impl DecodeBackpressure {
 
     /// Return true when any decode worker is blocked waiting for room.
     pub(crate) fn has_waiters(&self) -> bool {
-        self.state
-            .lock()
-            .unwrap_or_else(|_| {
-                panic!(
-                    "decode backpressure state lock poisoned — a thread panicked while holding it"
-                )
-            })
-            .waiting_threads
+        self.lock_state_recoverable().waiting_threads
             > 0
     }
 
     /// Enable startup fairness mode with a per-instance target occupancy.
     pub(crate) fn enable_startup_priority(&self, target_samples: usize) {
-        let mut guard = self.state.lock().unwrap_or_else(|_| {
-            panic!("decode backpressure state lock poisoned — a thread panicked while holding it")
-        });
+        let mut guard = self.lock_state_recoverable();
         guard.startup_priority_target_samples = Some(target_samples.max(1));
         self.cv.notify_all();
     }
 
     /// Disable startup fairness mode and resume steady-state buffering behavior.
     pub(crate) fn disable_startup_priority(&self) {
-        let mut guard = self.state.lock().unwrap_or_else(|_| {
-            panic!("decode backpressure state lock poisoned — a thread panicked while holding it")
-        });
+        let mut guard = self.lock_state_recoverable();
         guard.startup_priority_target_samples = None;
         self.cv.notify_all();
     }

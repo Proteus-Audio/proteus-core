@@ -23,9 +23,7 @@ impl Player {
     where
         F: FnOnce(&mut PlaybackBufferSettings),
     {
-        let mut settings = self.buffer_settings.lock().unwrap_or_else(|_| {
-            panic!("buffer settings lock poisoned — a thread panicked while holding it")
-        });
+        let mut settings = self.lock_buffer_settings_recoverable();
         update(&mut settings);
     }
 
@@ -131,9 +129,7 @@ impl Player {
     /// the active mix thread. Returns `false` if `slot_index` is out of range.
     pub fn set_track_mix_inline(&self, slot_index: usize, level: f32, pan: f32) -> bool {
         let linked_slots = {
-            let mut prot = self.prot.lock().unwrap_or_else(|_| {
-                panic!("prot lock poisoned — a thread panicked while holding it")
-            });
+            let mut prot = self.lock_prot_invariant();
             if !prot.set_slot_mix_settings(slot_index, level, pan) {
                 return false;
             }
@@ -143,9 +139,7 @@ impl Player {
             return false;
         };
 
-        let mut pending = self.inline_track_mix_updates.lock().unwrap_or_else(|_| {
-            panic!("inline track mix updates lock poisoned — a thread panicked while holding it")
-        });
+        let mut pending = self.lock_inline_track_mix_updates_recoverable();
         for slot_index in linked_slots {
             pending.push(InlineTrackMixUpdate {
                 slot_index,
@@ -163,9 +157,7 @@ impl Player {
     pub fn debug_playback_state(&self) -> (bool, PlayerState, bool) {
         (
             self.playback_thread_exists.load(Ordering::Acquire),
-            *self.state.lock().unwrap_or_else(|_| {
-                panic!("state lock poisoned — a thread panicked while holding it")
-            }),
+            *self.lock_state_invariant(),
             self.audio_heard.load(Ordering::Acquire),
         )
     }
@@ -189,10 +181,7 @@ impl Player {
 
     /// Debug helper returning sink paused/empty flags and queued length.
     pub fn debug_sink_state(&self) -> (bool, bool, usize) {
-        let sink = self
-            .sink
-            .lock()
-            .unwrap_or_else(|_| panic!("sink lock poisoned — a thread panicked while holding it"));
+        let sink = self.lock_sink_recoverable();
         let paused = sink.is_paused();
         let empty = sink.empty();
         let len = sink.len();

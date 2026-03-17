@@ -9,6 +9,7 @@ use log::info;
 use rodio::buffer::SamplesBuffer;
 
 use crate::dsp::effects::{convolution_reverb, AudioEffect, EffectContext};
+use crate::playback::mutex_policy::{lock_invariant, lock_recoverable};
 
 use super::super::buffer_mixer::{BufferMixer, DecodeBackpressure, SourceKey};
 use super::super::decoder_events::DecodeWorkerEvent;
@@ -104,9 +105,11 @@ fn prepare_runtime_startup(
     prot: &Arc<std::sync::Mutex<crate::container::prot::Prot>>,
     start_time: f64,
 ) -> RuntimeStartup {
-    let p = prot
-        .lock()
-        .unwrap_or_else(|err| panic!("mix startup prot lock poisoned: {err}"));
+    let p = lock_invariant(
+        prot,
+        "mix startup prot",
+        "startup planning requires a coherent container model",
+    );
     RuntimeStartup {
         instance_plan: p.build_runtime_instance_plan(start_time),
         container_path: p.get_container_path(),
@@ -168,20 +171,24 @@ fn compute_mix_buffer_sizes(
     effects: &Arc<std::sync::Mutex<Vec<AudioEffect>>>,
 ) -> MixBufferSizes {
     const MIN_MIX_MS: f32 = 30.0;
-    let start_buffer_ms = buffer_settings
-        .lock()
-        .unwrap_or_else(|err| panic!("mix startup buffer settings lock poisoned: {err}"))
-        .start_buffer_ms;
+    let start_buffer_ms = lock_recoverable(
+        buffer_settings,
+        "mix startup buffer settings",
+        "buffer settings are runtime configuration snapshots",
+    )
+    .start_buffer_ms;
     let start_samples = ((audio_info.sample_rate as f32 * start_buffer_ms) / 1000.0) as usize
         * audio_info.channels as usize;
     let mut min_mix_samples = (((audio_info.sample_rate as f32 * MIN_MIX_MS) / 1000.0) as usize)
         .max(1)
         * audio_info.channels as usize;
-    let has_convolution = effects
-        .lock()
-        .unwrap_or_else(|err| panic!("mix startup effects lock poisoned: {err}"))
-        .iter()
-        .any(|e| matches!(e, AudioEffect::ConvolutionReverb(e) if e.enabled));
+    let has_convolution = lock_recoverable(
+        effects,
+        "mix startup effects",
+        "the effect chain is hot-swappable runtime state",
+    )
+    .iter()
+    .any(|e| matches!(e, AudioEffect::ConvolutionReverb(e) if e.enabled));
     let convolution_batch_samples = if has_convolution {
         convolution_reverb::preferred_batch_samples(audio_info.channels.max(1) as usize)
     } else {
@@ -229,10 +236,12 @@ fn warm_up_effects(
     startup_trace: Instant,
 ) {
     if min_mix_samples > 0 {
-        for effect in effects
-            .lock()
-            .unwrap_or_else(|err| panic!("mix startup effects lock poisoned during warmup: {err}"))
-            .iter_mut()
+        for effect in lock_recoverable(
+            effects,
+            "mix startup effects",
+            "the effect chain is hot-swappable runtime state",
+        )
+        .iter_mut()
         {
             effect.warm_up(effect_context);
         }

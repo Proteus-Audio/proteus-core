@@ -4,11 +4,13 @@ use rodio::buffer::SamplesBuffer;
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+use std::sync::MutexGuard;
 use std::time::Instant;
 
 use log::debug;
 
 use crate::playback::engine::{PlayerEngine, PlayerEngineConfig};
+use crate::playback::mutex_policy::lock_recoverable;
 use crate::tools::timer;
 
 use super::context::ThreadContext;
@@ -37,9 +39,11 @@ impl LoopState {
     pub(super) fn new(start_time: f64) -> Self {
         let timer = Arc::new(Mutex::new(timer::Timer::new()));
         {
-            let mut timer_guard = timer.lock().unwrap_or_else(|_| {
-                panic!("timer lock poisoned — a thread panicked while holding it")
-            });
+            let mut timer_guard = lock_recoverable(
+                &timer,
+                "playback timer",
+                "the timer is disposable runtime coordination state",
+            );
             timer_guard.start();
         }
         Self {
@@ -54,6 +58,53 @@ impl LoopState {
             append_timing: Arc::new(Mutex::new((Instant::now(), 0.0, 0, 0.0))),
             resuming_gate_started_at: None,
         }
+    }
+
+    /// Recoverable poison policy: queued chunk lengths are rebuildable runtime bookkeeping.
+    pub(super) fn lock_chunk_lengths_recoverable(&self) -> MutexGuard<'_, VecDeque<f64>> {
+        lock_recoverable(
+            &self.chunk_lengths,
+            "playback chunk lengths",
+            "chunk length bookkeeping can be rebuilt from future appends",
+        )
+    }
+
+    /// Recoverable poison policy: accumulated chunk time is scalar bookkeeping.
+    pub(super) fn lock_time_chunks_passed_recoverable(&self) -> MutexGuard<'_, f64> {
+        lock_recoverable(
+            &self.time_chunks_passed,
+            "playback chunk time",
+            "accumulated chunk time is scalar bookkeeping",
+        )
+    }
+
+    /// Recoverable poison policy: the timer is disposable runtime coordination state.
+    pub(super) fn lock_timer_recoverable(&self) -> MutexGuard<'_, timer::Timer> {
+        lock_recoverable(
+            &self.timer,
+            "playback timer",
+            "the timer is disposable runtime coordination state",
+        )
+    }
+
+    /// Recoverable poison policy: final drain duration is derived runtime bookkeeping.
+    pub(super) fn lock_final_duration_recoverable(&self) -> MutexGuard<'_, Option<f64>> {
+        lock_recoverable(
+            &self.final_duration,
+            "playback final duration",
+            "final drain duration is derived runtime bookkeeping",
+        )
+    }
+
+    /// Recoverable poison policy: append timing metrics are derived telemetry.
+    pub(super) fn lock_append_timing_recoverable(
+        &self,
+    ) -> MutexGuard<'_, (Instant, f64, u64, f64)> {
+        lock_recoverable(
+            &self.append_timing,
+            "playback append timing",
+            "append timing is derived telemetry that can resume from the inner value",
+        )
     }
 }
 
@@ -162,10 +213,7 @@ fn run_engine_receive_loop(
 // * `ctx` - Shared worker context containing duration state.
 // * `engine` - Active engine instance for this playback run.
 fn set_duration_from_engine(ctx: &ThreadContext, engine: &PlayerEngine) {
-    let mut duration = ctx
-        .duration
-        .lock()
-        .unwrap_or_else(|_| panic!("duration lock poisoned — a thread panicked while holding it"));
+    let mut duration = ctx.lock_duration_recoverable();
     *duration = engine.get_duration();
 }
 
@@ -176,9 +224,7 @@ fn set_duration_from_engine(ctx: &ThreadContext, engine: &PlayerEngine) {
 // * `ctx` - Shared worker context containing playback time state.
 // * `start_time` - Start position in seconds.
 fn set_start_time(ctx: &ThreadContext, start_time: f64) {
-    let mut time_passed = ctx.time_passed.lock().unwrap_or_else(|_| {
-        panic!("time passed lock poisoned — a thread panicked while holding it")
-    });
+    let mut time_passed = ctx.lock_time_passed_recoverable();
     *time_passed = start_time;
 }
 

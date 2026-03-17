@@ -11,6 +11,7 @@ use super::{
 use crate::container::info::Info;
 use crate::container::prot::{PathsTrack, Prot};
 use crate::playback::engine::{DspChainMetrics, PlaybackBufferSettings};
+use crate::playback::mutex_policy::lock_invariant;
 use crate::playback::output_meter::OutputMeter;
 
 impl Player {
@@ -255,23 +256,24 @@ fn load_player_source(source: PlayerSource) -> Result<(Arc<Mutex<Prot>>, Info), 
             let prot = Arc::new(Mutex::new(
                 Prot::try_new(&path).map_err(PlayerInitError::ProtInitialization)?,
             ));
-            let info = prot
-                .lock()
-                .unwrap_or_else(|_| {
-                    panic!("prot lock poisoned — a thread panicked while holding it")
-                })
-                .info
-                .clone();
+            let info = lock_invariant(
+                &prot,
+                "player prot",
+                "player source initialization requires coherent container metadata",
+            )
+            .info
+            .clone();
             Ok((prot, info))
         }
         PlayerSource::FilePaths(paths) => {
             let prot = Arc::new(Mutex::new(Prot::new_from_file_paths(paths)));
             let info = Info::new_from_file_paths(
-                prot.lock()
-                    .unwrap_or_else(|_| {
-                        panic!("prot lock poisoned — a thread panicked while holding it")
-                    })
-                    .get_file_paths_dictionary(),
+                lock_invariant(
+                    &prot,
+                    "player prot",
+                    "player source initialization requires coherent track metadata",
+                )
+                .get_file_paths_dictionary(),
             );
             Ok((prot, info))
         }
@@ -286,11 +288,13 @@ fn create_player_sink() -> Arc<Mutex<Sink>> {
 fn load_initial_effects(
     prot: &Arc<Mutex<Prot>>,
 ) -> Arc<Mutex<Vec<crate::dsp::effects::AudioEffect>>> {
-    let effects = prot
-        .lock()
-        .unwrap_or_else(|_| panic!("prot lock poisoned — a thread panicked while holding it"))
-        .get_effects()
-        .unwrap_or_default();
+    let effects = lock_invariant(
+        prot,
+        "player prot",
+        "initial effect discovery must read from a coherent container model",
+    )
+    .get_effects()
+    .unwrap_or_default();
     Arc::new(Mutex::new(effects))
 }
 
