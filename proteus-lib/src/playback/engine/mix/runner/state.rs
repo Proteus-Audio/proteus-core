@@ -9,8 +9,8 @@ use crate::container::info::Info;
 use crate::container::prot::Prot;
 use crate::dsp::effects::{AudioEffect, EffectContext};
 use crate::playback::engine::premix::PremixBuffer;
-use crate::playback::mutex_policy::lock_recoverable;
 use crate::playback::engine::{DspChainMetrics, InlineEffectsUpdate, InlineTrackMixUpdate};
+use crate::playback::mutex_policy::lock_recoverable;
 
 use super::super::buffer_mixer::{BufferMixer, DecodeBackpressure};
 use super::super::decoder_events::DecodeWorkerEvent;

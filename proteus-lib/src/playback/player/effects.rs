@@ -219,8 +219,7 @@ impl Player {
 
     /// Set the output meter refresh rate (frames per second).
     pub fn set_output_meter_refresh_hz(&self, hz: f32) {
-        self.lock_output_meter_recoverable()
-            .set_refresh_hz(hz);
+        self.lock_output_meter_recoverable().set_refresh_hz(hz);
     }
 
     /// Bump the effects reset generation consumed by the runtime engine.
@@ -230,7 +229,8 @@ impl Player {
 
     /// Enqueue an incremental effect settings command for the mix thread.
     fn push_effect_settings_command(&self, command: EffectSettingsCommand) {
-        self.lock_effect_settings_commands_recoverable().push(command);
+        self.lock_effect_settings_commands_recoverable()
+            .push(command);
     }
 
     /// Drop any pending inline effects transition update.

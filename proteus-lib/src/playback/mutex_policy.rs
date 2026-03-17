@@ -13,9 +13,7 @@ fn recover_poison<'a, T>(
     match result {
         Ok(guard) => guard,
         Err(err) => {
-            warn!(
-                "{label} lock poisoned; recovering with the inner value because {rationale}"
-            );
+            warn!("{label} lock poisoned; recovering with the inner value because {rationale}");
             err.into_inner()
         }
     }
@@ -27,9 +25,7 @@ pub(crate) fn lock_invariant<'a, T>(
     rationale: &str,
 ) -> MutexGuard<'a, T> {
     mutex.lock().unwrap_or_else(|_| {
-        panic!(
-            "{label} lock poisoned — invariant-only state cannot recover because {rationale}"
-        )
+        panic!("{label} lock poisoned — invariant-only state cannot recover because {rationale}")
     })
 }
 
@@ -61,9 +57,7 @@ pub(crate) fn wait_timeout_recoverable<'a, T>(
     match condvar.wait_timeout(guard, timeout) {
         Ok(result) => result,
         Err(err) => {
-            warn!(
-                "{label} lock poisoned; recovering with the inner value because {rationale}"
-            );
+            warn!("{label} lock poisoned; recovering with the inner value because {rationale}");
             err.into_inner()
         }
     }
@@ -74,9 +68,7 @@ mod tests {
     use std::sync::{Arc, Condvar, Mutex};
     use std::time::Duration;
 
-    use super::{
-        lock_invariant, lock_recoverable, wait_recoverable, wait_timeout_recoverable,
-    };
+    use super::{lock_invariant, lock_recoverable, wait_recoverable, wait_timeout_recoverable};
 
     #[test]
     fn lock_recoverable_returns_inner_after_poison() {

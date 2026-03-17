@@ -49,7 +49,12 @@ pub(super) fn process_and_send_samples(
     let dsp_start = Instant::now();
     process_effects(samples.as_slice(), state);
     #[cfg(feature = "debug")]
-    update_debug_metrics(state, dsp_start, audio_time_ms, state.effect_scratch_a.len());
+    update_debug_metrics(
+        state,
+        dsp_start,
+        audio_time_ms,
+        state.effect_scratch_a.len(),
+    );
     match output_stage::send_samples(
         &state.sender,
         state.audio_info.channels as u16,

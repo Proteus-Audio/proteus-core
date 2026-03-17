@@ -216,11 +216,7 @@ impl BufferMixer {
 
     /// Update per-track mix controls using a slot index.
     pub(crate) fn set_track_mix_by_slot(&mut self, slot_index: usize, level: f32, pan: f32) {
-        let logical = self
-            .slot_to_logical
-            .get(slot_index)
-            .copied()
-            .flatten();
+        let logical = self.slot_to_logical.get(slot_index).copied().flatten();
         if let Some(logical_track_index) = logical {
             if logical_track_index < self.track_mix_settings.len() {
                 self.track_mix_settings[logical_track_index] =

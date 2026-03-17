@@ -59,7 +59,10 @@ impl WorkerNotify {
         &self,
         guard: std::sync::MutexGuard<'a, bool>,
         timeout: Duration,
-    ) -> (std::sync::MutexGuard<'a, bool>, std::sync::WaitTimeoutResult) {
+    ) -> (
+        std::sync::MutexGuard<'a, bool>,
+        std::sync::WaitTimeoutResult,
+    ) {
         wait_timeout_recoverable(
             &self.condvar,
             guard,

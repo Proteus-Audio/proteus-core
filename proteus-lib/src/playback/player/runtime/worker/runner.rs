@@ -3,8 +3,8 @@
 use rodio::buffer::SamplesBuffer;
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
 use std::sync::MutexGuard;
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use log::debug;

@@ -79,9 +79,7 @@ pub(super) fn initialize_sink(ctx: &ThreadContext, mixer: &rodio::mixer::Mixer) 
 
 // Append startup silence pre-roll when configured.
 pub(super) fn append_startup_silence(ctx: &ThreadContext) {
-    let startup_silence_ms = ctx
-        .lock_buffer_settings_recoverable()
-        .startup_silence_ms;
+    let startup_silence_ms = ctx.lock_buffer_settings_recoverable().startup_silence_ms;
     if startup_silence_ms <= 0.0 {
         return;
     }
@@ -91,8 +89,7 @@ pub(super) fn append_startup_silence(ctx: &ThreadContext) {
     let samples =
         ((startup_silence_ms / 1000.0) * sample_rate as f32).ceil() as usize * channels as usize;
     let silence_buffer = SamplesBuffer::new(channels, sample_rate, vec![0.0_f32; samples.max(1)]);
-    ctx.lock_sink_recoverable()
-        .append(silence_buffer);
+    ctx.lock_sink_recoverable().append(silence_buffer);
 }
 
 // Fade out and pause the sink.
@@ -114,8 +111,7 @@ pub(super) fn pause_sink(
 
 // Start or resume sink playback with optional fade-in.
 pub(super) fn resume_sink(ctx: &ThreadContext, sink: &Sink, fade_seconds: f32) {
-    let target_volume = *ctx
-        .lock_volume_recoverable();
+    let target_volume = *ctx.lock_volume_recoverable();
     if let Some(elapsed_ms) = super::timing::play_trace_elapsed_ms(ctx) {
         debug!(
             "play trace: resume_sink begin fade_s={:.3} target_volume={:.3} +{}ms",
@@ -159,9 +155,7 @@ pub(super) fn wait_for_sink_capacity(
     loop_state: &mut LoopState,
     playback_id: u64,
 ) -> bool {
-    let max_sink_chunks = ctx
-        .lock_buffer_settings_recoverable()
-        .max_sink_chunks;
+    let max_sink_chunks = ctx.lock_buffer_settings_recoverable().max_sink_chunks;
     if max_sink_chunks == 0 {
         return true;
     }
@@ -174,11 +168,7 @@ pub(super) fn wait_for_sink_capacity(
             return false;
         }
 
-        if ctx
-            .lock_sink_recoverable()
-            .len()
-            < max_sink_chunks
-        {
+        if ctx.lock_sink_recoverable().len() < max_sink_chunks {
             return true;
         }
 
@@ -232,9 +222,7 @@ pub(super) fn update_sink(
     }
 
     let sink = ctx.lock_sink_recoverable();
-    let append_jitter_log_ms = ctx
-        .lock_buffer_settings_recoverable()
-        .append_jitter_log_ms;
+    let append_jitter_log_ms = ctx.lock_buffer_settings_recoverable().append_jitter_log_ms;
     if append_jitter_log_ms > 0.0 && (late || delay_ms > append_jitter_log_ms as f64) {
         let expected_ms = length_in_seconds * 1000.0;
         log::info!(

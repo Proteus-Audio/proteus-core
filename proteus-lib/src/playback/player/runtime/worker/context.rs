@@ -110,9 +110,7 @@ impl ThreadContext {
     }
 
     /// Recoverable poison policy: pending resume fade is transient runtime configuration.
-    pub(super) fn lock_next_resume_fade_ms_recoverable(
-        &self,
-    ) -> MutexGuard<'_, Option<f32>> {
+    pub(super) fn lock_next_resume_fade_ms_recoverable(&self) -> MutexGuard<'_, Option<f32>> {
         lock_recoverable(
             &self.next_resume_fade_ms,
             "playback worker next resume fade",

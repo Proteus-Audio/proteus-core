@@ -3,16 +3,95 @@
 use log::{info, warn};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
+use crate::dsp::effects::{AudioEffect, ConvolutionReverbSettings};
+
 pub(crate) mod legacy;
 
 pub(crate) use legacy::{PlaySettingsLegacy, PlaySettingsLegacyFile};
 
-/// Effect settings variants that can appear in the settings file.
-pub(crate) type EffectSettings = serde_json::Value;
+/// One entry in the `play_settings.json` DSP effect chain.
+///
+/// Recognized effect payloads decode into [`EffectSettings::Known`] so callers can
+/// work with [`AudioEffect`] directly. Unrecognized payloads are preserved as
+/// [`EffectSettings::Raw`] for forward compatibility and lossless round-tripping.
+#[derive(Debug, Clone)]
+pub enum EffectSettings {
+    /// A recognized effect entry with typed settings.
+    Known(AudioEffect),
+    /// An unrecognized or caller-provided raw effect payload.
+    Raw(serde_json::Value),
+}
+
+impl EffectSettings {
+    /// Return the typed effect when this entry is already known.
+    pub fn as_audio_effect(&self) -> Option<&AudioEffect> {
+        match self {
+            Self::Known(effect) => Some(effect),
+            Self::Raw(_) => None,
+        }
+    }
+
+    /// Decode this entry into a typed [`AudioEffect`].
+    pub fn decode_audio_effect(&self) -> serde_json::Result<AudioEffect> {
+        match self {
+            Self::Known(effect) => Ok(effect.clone()),
+            Self::Raw(raw) => serde_json::from_value(raw.clone()),
+        }
+    }
+
+    /// Return the preserved raw JSON payload, if this entry is untyped.
+    pub fn as_raw_value(&self) -> Option<&serde_json::Value> {
+        match self {
+            Self::Known(_) => None,
+            Self::Raw(raw) => Some(raw),
+        }
+    }
+
+    fn raw_wrapper_object(&self, key: &str) -> Option<&serde_json::Map<String, serde_json::Value>> {
+        self.as_raw_value()?.as_object()?.get(key)?.as_object()
+    }
+}
+
+impl From<AudioEffect> for EffectSettings {
+    fn from(effect: AudioEffect) -> Self {
+        Self::Known(effect)
+    }
+}
+
+impl From<serde_json::Value> for EffectSettings {
+    fn from(value: serde_json::Value) -> Self {
+        match serde_json::from_value::<AudioEffect>(value.clone()) {
+            Ok(effect) => Self::Known(effect),
+            Err(_) => Self::Raw(value),
+        }
+    }
+}
+
+impl Serialize for EffectSettings {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        match self {
+            Self::Known(effect) => effect.serialize(serializer),
+            Self::Raw(raw) => raw.serialize(serializer),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for EffectSettings {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = serde_json::Value::deserialize(deserializer)?;
+        Ok(Self::from(value))
+    }
+}
 
 /// Track-level configuration shared by newer settings versions.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub(crate) struct SettingsTrack {
+pub struct SettingsTrack {
     /// Playback volume level for this track (linear gain, 1.0 = unity).
     pub level: f32,
     /// Stereo pan position for this track (−1.0 = full left, +1.0 = full right).
@@ -33,7 +112,7 @@ pub(crate) struct SettingsTrack {
 
 /// Shared payload used by versioned `play_settings.json` schemas.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub(crate) struct PlaySettingsPayload {
+pub struct PlaySettingsPayload {
     /// DSP effect chain applied to the final mix, in processing order.
     #[serde(default)]
     pub effects: Vec<EffectSettings>,
@@ -145,51 +224,69 @@ pub(crate) fn effects(play_settings: &PlaySettingsFile) -> Option<&[EffectSettin
         .map(|payload| payload.effects.as_slice())
 }
 
+enum ConvolutionReverbSettingsView<'a> {
+    Typed(&'a ConvolutionReverbSettings),
+    Raw(&'a serde_json::Map<String, serde_json::Value>),
+}
+
 /// Return the first convolution-reverb effect payload object, if present.
-pub(crate) fn first_convolution_reverb_settings(
+fn first_convolution_reverb_settings(
     play_settings: &PlaySettingsFile,
-) -> Option<&serde_json::Map<String, serde_json::Value>> {
+) -> Option<ConvolutionReverbSettingsView<'_>> {
     let effects = effects(play_settings)?;
-    effects.iter().find_map(|effect| {
-        let wrapper = effect.as_object()?;
-        wrapper
-            .get("ConvolutionReverbSettings")
-            .and_then(serde_json::Value::as_object)
+    effects.iter().find_map(|effect| match effect {
+        EffectSettings::Known(AudioEffect::ConvolutionReverb(effect)) => {
+            Some(ConvolutionReverbSettingsView::Typed(effect.settings()))
+        }
+        _ => effect
+            .raw_wrapper_object("ConvolutionReverbSettings")
+            .map(ConvolutionReverbSettingsView::Raw),
     })
 }
 
 /// Extract raw impulse-response setting text from play settings.
 pub(crate) fn extract_impulse_response_text(play_settings: &PlaySettingsFile) -> Option<String> {
-    let settings = first_convolution_reverb_settings(play_settings)?;
-    settings
-        .get("impulse_response")
-        .and_then(serde_json::Value::as_str)
-        .or_else(|| {
-            settings
-                .get("impulse_response_attachment")
-                .and_then(serde_json::Value::as_str)
-        })
-        .or_else(|| {
-            settings
-                .get("impulse_response_path")
-                .and_then(serde_json::Value::as_str)
-        })
-        .map(ToString::to_string)
+    match first_convolution_reverb_settings(play_settings)? {
+        ConvolutionReverbSettingsView::Typed(settings) => settings
+            .impulse_response
+            .as_deref()
+            .or(settings.impulse_response_attachment.as_deref())
+            .or(settings.impulse_response_path.as_deref())
+            .map(ToString::to_string),
+        ConvolutionReverbSettingsView::Raw(settings) => settings
+            .get("impulse_response")
+            .and_then(serde_json::Value::as_str)
+            .or_else(|| {
+                settings
+                    .get("impulse_response_attachment")
+                    .and_then(serde_json::Value::as_str)
+            })
+            .or_else(|| {
+                settings
+                    .get("impulse_response_path")
+                    .and_then(serde_json::Value::as_str)
+            })
+            .map(ToString::to_string),
+    }
 }
 
 /// Extract configured convolution-reverb tail dB from play settings.
 pub(crate) fn extract_impulse_response_tail_db(play_settings: &PlaySettingsFile) -> Option<f32> {
-    let settings = first_convolution_reverb_settings(play_settings)?;
-    settings
-        .get("impulse_response_tail_db")
-        .and_then(serde_json::Value::as_f64)
-        .map(|value| value as f32)
-        .or_else(|| {
-            settings
-                .get("impulse_response_tail")
-                .and_then(serde_json::Value::as_f64)
-                .map(|value| value as f32)
-        })
+    match first_convolution_reverb_settings(play_settings)? {
+        ConvolutionReverbSettingsView::Typed(settings) => settings
+            .impulse_response_tail_db
+            .or(settings.impulse_response_tail),
+        ConvolutionReverbSettingsView::Raw(settings) => settings
+            .get("impulse_response_tail_db")
+            .and_then(serde_json::Value::as_f64)
+            .map(|value| value as f32)
+            .or_else(|| {
+                settings
+                    .get("impulse_response_tail")
+                    .and_then(serde_json::Value::as_f64)
+                    .map(|value| value as f32)
+            }),
+    }
 }
 
 impl<'de> Deserialize<'de> for PlaySettingsFile {
@@ -344,5 +441,26 @@ mod tests {
         assert!(v1.effects.is_empty() && v1.tracks.is_empty());
         assert!(v2.effects.is_empty() && v2.tracks.is_empty());
         assert!(v3.effects.is_empty() && v3.tracks.is_empty());
+    }
+
+    #[test]
+    fn effect_settings_deserializes_known_effects_to_typed_variant() {
+        let effect: EffectSettings =
+            serde_json::from_str(r#"{"GainSettings":{"enabled":true,"gain":1.25}}"#).unwrap();
+
+        assert!(matches!(
+            effect.as_audio_effect(),
+            Some(AudioEffect::Gain(_))
+        ));
+    }
+
+    #[test]
+    fn effect_settings_preserves_unknown_effects_as_raw_json() {
+        let effect: EffectSettings =
+            serde_json::from_str(r#"{"CustomEffectSettings":{"enabled":true,"amount":0.5}}"#)
+                .unwrap();
+
+        let raw = effect.as_raw_value().unwrap();
+        assert_eq!(raw["CustomEffectSettings"]["amount"], 0.5);
     }
 }

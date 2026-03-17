@@ -72,7 +72,7 @@ pub(crate) fn derive_runtime_settings(play_settings: &PlaySettingsFile) -> ProtR
     if let Some(raw_effects) = play_settings::effects(play_settings) {
         let mut decoded = Vec::with_capacity(raw_effects.len());
         for effect in raw_effects {
-            match serde_json::from_value::<AudioEffect>(effect.clone()) {
+            match effect.decode_audio_effect() {
                 Ok(effect) => decoded.push(effect),
                 Err(err) => warn!("failed to parse effect entry: {}", err),
             }

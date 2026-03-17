@@ -86,8 +86,7 @@ impl Player {
     /// Stop playback and reset timing state.
     pub fn stop(&self) {
         self.stop_and_join_playback_thread();
-        self.lock_ts_recoverable()
-            .clone_from(&0.0);
+        self.lock_ts_recoverable().clone_from(&0.0);
     }
 
     /// Set the action applied automatically when playback reaches the end.
@@ -135,8 +134,7 @@ impl Player {
             *self.lock_next_resume_fade_ms_recoverable() = Some(seek_fade_in_ms);
             self.resume();
         } else {
-            self.lock_state_invariant()
-                .clone_from(&state);
+            self.lock_state_invariant().clone_from(&state);
         }
     }
 
@@ -208,8 +206,7 @@ impl Player {
     ///
     /// * `new_volume` - Desired sink gain multiplier.
     pub fn set_volume(&mut self, new_volume: f32) {
-        let sink = self
-            .lock_sink_recoverable();
+        let sink = self.lock_sink_recoverable();
         sink.set_volume(new_volume);
         drop(sink);
 

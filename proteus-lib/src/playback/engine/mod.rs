@@ -248,8 +248,7 @@ impl PlayerEngine {
                 ])));
             self.lock_buffer_map_recoverable()
                 .insert(track_key, ring_buffer);
-            self.lock_track_weights_recoverable()
-                .insert(track_key, 1.0);
+            self.lock_track_weights_recoverable().insert(track_key, 1.0);
             let (level, pan) = track_mix_settings
                 .get(&track_key)
                 .copied()
@@ -329,9 +328,7 @@ impl PlayerEngine {
     }
 
     /// Recoverable poison policy: per-track channel gains are derived runtime mix state.
-    fn lock_track_channel_gains_recoverable(
-        &self,
-    ) -> MutexGuard<'_, HashMap<u16, Vec<f32>>> {
+    fn lock_track_channel_gains_recoverable(&self) -> MutexGuard<'_, HashMap<u16, Vec<f32>>> {
         lock_recoverable(
             &self.track_channel_gains,
             "player engine track channel gains",

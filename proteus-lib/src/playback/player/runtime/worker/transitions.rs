@@ -19,9 +19,7 @@ pub(super) fn check_runtime_state(ctx: &ThreadContext, loop_state: &mut LoopStat
     }
 
     let state = *ctx.lock_play_state_invariant();
-    let start_sink_chunks = ctx
-        .lock_buffer_settings_recoverable()
-        .start_sink_chunks;
+    let start_sink_chunks = ctx.lock_buffer_settings_recoverable().start_sink_chunks;
     let sink = ctx.lock_sink_recoverable();
 
     if handle_resuming_gate(state, start_sink_chunks, &sink, loop_state) {
@@ -105,16 +103,10 @@ fn handle_resuming_commit(
     }
     let fade_length = if loop_state.startup_fade_pending {
         loop_state.startup_fade_pending = false;
-        if let Some(ms) = ctx
-            .lock_next_resume_fade_ms_recoverable()
-            .take()
-        {
+        if let Some(ms) = ctx.lock_next_resume_fade_ms_recoverable().take() {
             (ms / 1000.0).max(0.0)
         } else {
-            (ctx.lock_buffer_settings_recoverable()
-                .startup_fade_ms
-                / 1000.0)
-                .max(0.0)
+            (ctx.lock_buffer_settings_recoverable().startup_fade_ms / 1000.0).max(0.0)
         }
     } else {
         0.1

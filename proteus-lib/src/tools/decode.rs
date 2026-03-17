@@ -150,7 +150,10 @@ mod tests {
     fn find_audio_track_skips_null_first_track() {
         let tracks = [null_track(0), audio_track(1)];
         let track = find_audio_track(&tracks).expect("should find decodable track");
-        assert_eq!(track.id, 1, "must select the later decodable track, not tracks()[0]");
+        assert_eq!(
+            track.id, 1,
+            "must select the later decodable track, not tracks()[0]"
+        );
     }
 
     #[test]

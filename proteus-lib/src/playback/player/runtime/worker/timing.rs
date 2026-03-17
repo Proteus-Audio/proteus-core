@@ -131,10 +131,7 @@ pub(super) fn is_drain_complete(
         return false;
     }
 
-    if ctx
-        .lock_sink_recoverable()
-        .empty()
-    {
+    if ctx.lock_sink_recoverable().empty() {
         return true;
     }
 
@@ -148,8 +145,7 @@ pub(super) fn is_drain_complete(
 
 #[cfg(feature = "debug")]
 pub(super) fn log_drain_loop_start(ctx: &ThreadContext, loop_state: &LoopState) {
-    let sink = ctx
-        .lock_sink_recoverable();
+    let sink = ctx.lock_sink_recoverable();
     let paused = sink.is_paused();
     let empty = sink.empty();
     let sink_len = sink.len();

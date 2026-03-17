@@ -257,8 +257,7 @@ impl DecodeBackpressure {
 
     /// Return true when any decode worker is blocked waiting for room.
     pub(crate) fn has_waiters(&self) -> bool {
-        self.lock_state_recoverable().waiting_threads
-            > 0
+        self.lock_state_recoverable().waiting_threads > 0
     }
 
     /// Enable startup fairness mode with a per-instance target occupancy.

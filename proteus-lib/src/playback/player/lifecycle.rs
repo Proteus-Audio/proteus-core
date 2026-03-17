@@ -34,10 +34,7 @@ impl Player {
 
     /// Join the current playback thread handle if one is present.
     pub(in crate::playback::player) fn join_playback_thread(&self) {
-        if let Some(handle) = self
-            .lock_playback_thread_handle_invariant()
-            .take()
-        {
+        if let Some(handle) = self.lock_playback_thread_handle_invariant().take() {
             if handle.join().is_err() {
                 warn!("playback thread panicked during join");
             }
@@ -66,8 +63,8 @@ impl Player {
         let start = Instant::now();
         loop {
             // Acquire: synchronize-with the Release store in update_sink so that
-        // any sink state written before audio_heard was set is visible here.
-        if self.audio_heard.load(Ordering::Acquire) {
+            // any sink state written before audio_heard was set is visible here.
+            if self.audio_heard.load(Ordering::Acquire) {
                 return true;
             }
             if self.thread_finished() {

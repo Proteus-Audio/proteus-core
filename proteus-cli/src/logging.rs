@@ -151,9 +151,7 @@ pub fn set_echo_stderr(enabled: bool) {
 pub fn snapshot_lines(buffer: &Arc<Mutex<VecDeque<LogLine>>>) -> Vec<LogLine> {
     buffer
         .lock()
-        .unwrap_or_else(|_| {
-            panic!("log buffer lock poisoned — a thread panicked while holding it")
-        })
+        .unwrap_or_else(|_| panic!("log buffer lock poisoned — a thread panicked while holding it"))
         .iter()
         .cloned()
         .collect()
