@@ -32,10 +32,10 @@ now `pub(crate)`, but other internal implementation types are still public.
 
 ### Acceptance criteria
 
-- [ ] `TrackBuffer` and `TrackBufferMap` are no longer public API unless explicitly justified and documented
-- [ ] Versioned and legacy `PlaySettings*` parsing models are no longer exposed as stable public API
-- [ ] CLI and internal callers compile against the reduced visibility surface
+- [x] `TrackBuffer` and `TrackBufferMap` are no longer public API unless explicitly justified and documented
+- [x] Versioned and legacy `PlaySettings*` parsing models are no longer exposed as stable public API
+- [x] CLI and internal callers compile against the reduced visibility surface
 
 ## Status
 
-Open.
+Resolved.

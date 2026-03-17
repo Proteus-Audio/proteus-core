@@ -9,7 +9,7 @@ use crate::dsp::effects::{normalize_legacy_effect_aliases, AudioEffect};
 
 /// Runtime settings extracted from parsed play-settings payloads.
 #[derive(Debug, Clone, Default)]
-pub struct ProtRuntimeSettings {
+pub(crate) struct ProtRuntimeSettings {
     /// Resolved specification for the impulse response used by convolution reverb.
     pub impulse_response_spec: Option<ImpulseResponseSpec>,
     /// dB level at which the IR tail is considered silent and can be truncated.
@@ -20,7 +20,7 @@ pub struct ProtRuntimeSettings {
 
 /// Failure modes while loading `play_settings.json` from a container file.
 #[derive(Debug)]
-pub enum PlaySettingsLoadError {
+pub(crate) enum PlaySettingsLoadError {
     /// Failed to open the container file for reading.
     OpenFile(std::io::Error),
     /// Failed to parse the file as a Matroska container.
@@ -45,7 +45,7 @@ impl std::fmt::Display for PlaySettingsLoadError {
 impl std::error::Error for PlaySettingsLoadError {}
 
 /// Fallible play-settings loader with typed error variants.
-pub fn try_load_play_settings_from_container(
+pub(crate) fn try_load_play_settings_from_container(
     file_path: &str,
 ) -> Result<PlaySettingsFile, PlaySettingsLoadError> {
     let file = std::fs::File::open(file_path).map_err(PlaySettingsLoadError::OpenFile)?;
@@ -62,7 +62,7 @@ pub fn try_load_play_settings_from_container(
 }
 
 /// Derive runtime effect state from a parsed play-settings file.
-pub fn derive_runtime_settings(play_settings: &PlaySettingsFile) -> ProtRuntimeSettings {
+pub(crate) fn derive_runtime_settings(play_settings: &PlaySettingsFile) -> ProtRuntimeSettings {
     let impulse_response_spec = play_settings::extract_impulse_response_text(play_settings)
         .as_deref()
         .and_then(parse_impulse_response_string);

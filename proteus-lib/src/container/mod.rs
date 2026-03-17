@@ -1,6 +1,6 @@
 //! Container parsing and metadata for `.prot`/`.mka` files.
 
 pub mod info;
-pub mod play_settings;
+pub(crate) mod play_settings;
 pub mod prot;
-pub mod prot_settings;
+pub(crate) mod prot_settings;
