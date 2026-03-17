@@ -30,10 +30,11 @@ The helper still exists solely to return `true` with a comment about strict alig
 
 ### Acceptance criteria
 
-- [ ] The helper name and behavior match
-- [ ] Call sites no longer imply hidden conditional logic
-- [ ] The strict-alignment rationale remains documented
+- [x] The helper name and behavior match
+- [x] Call sites no longer imply hidden conditional logic
+- [x] The strict-alignment rationale remains documented
 
 ## Status
 
-Open.
+Done. The unconditional helper was removed entirely. Call sites now inline the
+real logic directly, with a comment explaining the strict-alignment semantics.

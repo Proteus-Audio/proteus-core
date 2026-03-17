@@ -6,7 +6,7 @@ use crate::logging::log;
 
 #[cfg(feature = "buffer-map")]
 use super::routing_time::samples_to_ms;
-use super::{AlignedSampleBuffer, BufferInstance};
+use super::AlignedSampleBuffer;
 
 /// Source identifier used by decode workers.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -194,18 +194,6 @@ pub(super) fn packet_overlap_samples(
         spans.push((start_frame * channels, end_frame * channels));
     }
     spans
-}
-
-/// Return whether an instance should participate in current readiness/alignment checks.
-pub(super) fn instance_needs_data(
-    _instance: &BufferInstance,
-    _consumed_samples: usize,
-    _sample_rate: u32,
-    _channels: usize,
-) -> bool {
-    true
-    // Kept intentionally unconditional for strict alignment semantics:
-    // all instance buffers advance together via real audio or zero-fill.
 }
 
 #[cfg(feature = "buffer-map")]

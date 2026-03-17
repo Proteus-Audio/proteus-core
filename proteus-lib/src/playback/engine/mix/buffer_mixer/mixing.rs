@@ -2,7 +2,6 @@
 
 use log::{debug, warn};
 
-use super::routing_helpers::instance_needs_data;
 #[cfg(feature = "buffer-map")]
 use super::routing_helpers::{log_buffer, log_buffer_header};
 use super::routing_time::{instance_fully_past_window, samples_to_ms};
@@ -49,15 +48,9 @@ impl BufferMixer {
     }
 
     fn instance_available_samples(&mut self, instance_index: usize) -> usize {
+        // Strict alignment: every instance participates unconditionally —
+        // all buffers advance together via real audio or zero-fill.
         let instance = &mut self.instances[instance_index];
-        if !instance_needs_data(
-            instance,
-            self.consumed_samples,
-            self.sample_rate,
-            self.channels,
-        ) {
-            return usize::MAX;
-        }
 
         if instance_fully_past_window(
             instance,
@@ -116,13 +109,10 @@ impl BufferMixer {
     }
 
     fn mix_instance_into_track(&mut self, instance_index: usize, track_buffer: &mut [f32]) {
+        // Strict alignment: every instance participates unconditionally —
+        // all buffers advance together via real audio or zero-fill.
         let instance = &mut self.instances[instance_index];
-        if !instance_needs_data(
-            instance,
-            self.consumed_samples,
-            self.sample_rate,
-            self.channels,
-        ) || instance_fully_past_window(
+        if instance_fully_past_window(
             instance,
             self.consumed_samples,
             self.sample_rate,
