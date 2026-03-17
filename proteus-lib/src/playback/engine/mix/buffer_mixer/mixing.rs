@@ -105,7 +105,7 @@ impl BufferMixer {
 
             let (level, pan) = self
                 .track_mix_settings
-                .get(&track_index)
+                .get(track_index)
                 .copied()
                 .unwrap_or((1.0, 0.0));
             apply_track_gain_pan(&mut track_buffer, level, pan, self.channels);

@@ -8,7 +8,7 @@ mod packet_router;
 mod routing_helpers;
 mod routing_time;
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use crate::container::prot::{RuntimeInstanceMeta, RuntimeInstancePlan};
@@ -60,8 +60,8 @@ pub(crate) struct BufferMixer {
     pub(super) consumed_samples: usize,
     pub(super) instances: Vec<BufferInstance>,
     pub(super) track_instances: Vec<Vec<usize>>,
-    pub(super) track_mix_settings: HashMap<usize, (f32, f32)>,
-    slot_to_logical: HashMap<usize, usize>,
+    pub(super) track_mix_settings: Vec<(f32, f32)>,
+    slot_to_logical: Vec<Option<usize>>,
     pub(super) decode_backpressure: Arc<DecodeBackpressure>,
     pub(super) crossfade_ms: usize,
     pub(super) pop_warning: Vec<usize>,
@@ -80,17 +80,25 @@ impl BufferMixer {
         sample_rate: u32,
         channels: usize,
         capacity_samples: usize,
-        track_mix_settings: HashMap<usize, (f32, f32)>,
+        track_mix_settings: Vec<(f32, f32)>,
         mix_chunk_samples: usize,
     ) -> Self {
         #[cfg(feature = "buffer-map")]
         if let Err(err) = clear_logfile() {
             log::warn!("failed to clear buffer-map log file: {}", err);
         }
+        let max_slot = plan
+            .instances
+            .iter()
+            .map(|m| m.slot_index)
+            .max()
+            .unwrap_or(0);
         let mut instances = Vec::with_capacity(plan.instances.len());
-        let mut slot_to_logical = HashMap::new();
+        let mut slot_to_logical = vec![None; max_slot + 1];
         for meta in plan.instances {
-            slot_to_logical.insert(meta.slot_index, meta.logical_track_index);
+            if meta.slot_index < slot_to_logical.len() {
+                slot_to_logical[meta.slot_index] = Some(meta.logical_track_index);
+            }
             instances.push(BufferInstance::new(meta, capacity_samples));
         }
 
@@ -214,9 +222,16 @@ impl BufferMixer {
 
     /// Update per-track mix controls using a slot index.
     pub(crate) fn set_track_mix_by_slot(&mut self, slot_index: usize, level: f32, pan: f32) {
-        if let Some(logical_track_index) = self.slot_to_logical.get(&slot_index).copied() {
-            self.track_mix_settings
-                .insert(logical_track_index, (level.max(0.0), pan.clamp(-1.0, 1.0)));
+        let logical = self
+            .slot_to_logical
+            .get(slot_index)
+            .copied()
+            .flatten();
+        if let Some(logical_track_index) = logical {
+            if logical_track_index < self.track_mix_settings.len() {
+                self.track_mix_settings[logical_track_index] =
+                    (level.max(0.0), pan.clamp(-1.0, 1.0));
+            }
         }
     }
 

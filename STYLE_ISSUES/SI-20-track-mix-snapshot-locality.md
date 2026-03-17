@@ -41,10 +41,10 @@ is correct, but the data layout is still lookup-oriented rather than iteration-o
 
 ### Acceptance criteria
 
-- [ ] Hot mixing loops no longer depend on per-track `HashMap` resolution
-- [ ] Track weights and channel gains are pre-resolved into dense per-chunk structures
-- [ ] Mixing output remains bitwise or numerically equivalent to the current implementation
+- [x] Hot mixing loops no longer depend on per-track `HashMap` resolution
+- [x] Track weights and channel gains are pre-resolved into dense per-chunk structures
+- [x] Mixing output remains bitwise or numerically equivalent to the current implementation
 
 ## Status
 
-Open.
+Done.
