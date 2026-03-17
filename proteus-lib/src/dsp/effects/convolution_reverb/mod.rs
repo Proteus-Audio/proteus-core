@@ -16,7 +16,7 @@ pub mod reverb;
 mod spec;
 
 pub use ir_loader::clear_global_caches;
-pub use spec::{ImpulseResponseSpec, parse_impulse_response_string};
+pub use spec::{parse_impulse_response_string, ImpulseResponseSpec};
 
 pub(crate) const DEFAULT_DRY_WET: f32 = 0.000001;
 const DEFAULT_TAIL_DB: f32 = -60.0;

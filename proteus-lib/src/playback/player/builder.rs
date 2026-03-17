@@ -49,6 +49,7 @@ impl Player {
             reporter: None,
             buffer_settings: Arc::new(Mutex::new(PlaybackBufferSettings::new(20.0))),
             effects,
+            effect_settings_commands: Arc::new(Mutex::new(Vec::new())),
             inline_effects_update: Arc::new(Mutex::new(None)),
             inline_track_mix_updates: Arc::new(Mutex::new(Vec::new())),
             dsp_metrics: Arc::new(Mutex::new(DspChainMetrics::default())),

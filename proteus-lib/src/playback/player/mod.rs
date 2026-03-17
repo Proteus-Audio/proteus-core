@@ -29,7 +29,8 @@ use crate::{
     container::info::Info,
     dsp::effects::AudioEffect,
     playback::engine::{
-        DspChainMetrics, InlineEffectsUpdate, InlineTrackMixUpdate, PlaybackBufferSettings,
+        DspChainMetrics, EffectSettingsCommand, InlineEffectsUpdate, InlineTrackMixUpdate,
+        PlaybackBufferSettings,
     },
 };
 
@@ -174,6 +175,7 @@ pub struct Player {
     reporter: Option<Arc<Mutex<Reporter>>>,
     buffer_settings: Arc<Mutex<PlaybackBufferSettings>>,
     effects: Arc<Mutex<Vec<AudioEffect>>>,
+    effect_settings_commands: Arc<Mutex<Vec<EffectSettingsCommand>>>,
     inline_effects_update: Arc<Mutex<Option<InlineEffectsUpdate>>>,
     inline_track_mix_updates: Arc<Mutex<Vec<InlineTrackMixUpdate>>>,
     dsp_metrics: Arc<Mutex<DspChainMetrics>>,
@@ -221,6 +223,7 @@ impl Clone for Player {
             reporter: self.reporter.clone(),
             buffer_settings: self.buffer_settings.clone(),
             effects: self.effects.clone(),
+            effect_settings_commands: self.effect_settings_commands.clone(),
             inline_effects_update: self.inline_effects_update.clone(),
             inline_track_mix_updates: self.inline_track_mix_updates.clone(),
             dsp_metrics: self.dsp_metrics.clone(),

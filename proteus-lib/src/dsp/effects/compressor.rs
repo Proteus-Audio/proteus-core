@@ -2,8 +2,8 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::EffectContext;
 use super::core::level::deserialize_db_gain;
+use super::EffectContext;
 
 const DEFAULT_THRESHOLD_DB: f32 = -18.0;
 const DEFAULT_RATIO: f32 = 4.0;
@@ -316,7 +316,7 @@ fn sanitize_makeup_db(value: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::CompressorEffect;
-    use crate::dsp::effects::{EffectContext, core::DspEffect};
+    use crate::dsp::effects::{core::DspEffect, EffectContext};
 
     fn context(channels: usize) -> EffectContext {
         EffectContext::new(48_000, channels, None, None, -60.0).unwrap()

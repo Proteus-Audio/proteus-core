@@ -9,6 +9,18 @@ use crate::dsp::effects::AudioEffect;
 use super::super::state::{DspChainMetrics, PlaybackBufferSettings};
 use super::super::{InlineEffectsUpdate, InlineTrackMixUpdate};
 
+/// Incremental effect settings change pushed from the control path.
+///
+/// Commands are drained by the mix thread at chunk boundaries and applied to
+/// the real-time-owned effect chain without requiring a full chain replacement.
+#[derive(Debug, Clone)]
+pub enum EffectSettingsCommand {
+    /// Toggle the enabled state of supported reverb effects.
+    SetReverbEnabled(bool),
+    /// Update the reverb wet/dry mix ratio.
+    SetReverbMix(f32),
+}
+
 /// Arguments required to spawn the mixing thread.
 pub struct MixThreadArgs {
     pub audio_info: crate::container::info::Info,
@@ -23,6 +35,7 @@ pub struct MixThreadArgs {
     pub buffer_settings: Arc<Mutex<PlaybackBufferSettings>>,
     pub effects: Arc<Mutex<Vec<AudioEffect>>>,
     pub dsp_metrics: Arc<Mutex<DspChainMetrics>>,
+    pub effect_settings_commands: Arc<Mutex<Vec<EffectSettingsCommand>>>,
 }
 
 /// Active in-progress inline effect transition state.

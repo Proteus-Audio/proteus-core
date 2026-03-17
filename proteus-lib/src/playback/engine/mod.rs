@@ -19,6 +19,8 @@ mod state;
 
 pub use state::{DspChainMetrics, PlaybackBufferSettings};
 
+pub use mix::EffectSettingsCommand;
+
 use mix::{spawn_mix_thread, MixThreadArgs};
 
 /// Request to update the active effects chain inline during playback.
@@ -69,6 +71,8 @@ pub struct PlayerEngineConfig {
     pub inline_effects_update: Arc<Mutex<Option<InlineEffectsUpdate>>>,
     /// Pending per-track mix updates to apply on the next mix cycle.
     pub inline_track_mix_updates: Arc<Mutex<Vec<InlineTrackMixUpdate>>>,
+    /// Command queue for incremental effect settings changes from the control path.
+    pub effect_settings_commands: Arc<Mutex<Vec<EffectSettingsCommand>>>,
 }
 
 /// Internal playback engine used by the high-level
@@ -90,6 +94,7 @@ pub struct PlayerEngine {
     buffer_settings: Arc<Mutex<PlaybackBufferSettings>>,
     effects: Arc<Mutex<Vec<crate::dsp::effects::AudioEffect>>>,
     dsp_metrics: Arc<Mutex<DspChainMetrics>>,
+    effect_settings_commands: Arc<Mutex<Vec<EffectSettingsCommand>>>,
     mix_thread_handle: Option<JoinHandle<()>>,
 }
 
@@ -105,6 +110,7 @@ impl PlayerEngine {
             effects_reset,
             inline_effects_update,
             inline_track_mix_updates,
+            effect_settings_commands,
         } = config;
         let buffer_map = init_buffer_map();
         let buffer_notify = Arc::new(Condvar::new());
@@ -143,6 +149,7 @@ impl PlayerEngine {
             buffer_settings,
             effects,
             dsp_metrics,
+            effect_settings_commands,
             mix_thread_handle: None,
         }
     }
@@ -202,6 +209,7 @@ impl PlayerEngine {
             buffer_settings: self.buffer_settings.clone(),
             effects: self.effects.clone(),
             dsp_metrics: self.dsp_metrics.clone(),
+            effect_settings_commands: self.effect_settings_commands.clone(),
         });
         self.mix_thread_handle = Some(handle);
         receiver
