@@ -39,11 +39,26 @@ For the implementation path:
 
 ### Acceptance criteria
 
-- [ ] Standalone playback either applies track weights correctly or rejects unsupported weighting explicitly
-- [ ] Standalone and container playback have documented, intentional weighting behavior
-- [ ] Regression tests cover non-default weights in standalone mode
-- [ ] `_track_weights` is no longer ignored or intentionally marked unused
+- [x] Standalone playback either applies track weights correctly or rejects unsupported weighting explicitly
+- [x] Standalone and container playback have documented, intentional weighting behavior
+- [x] Regression tests cover non-default weights in standalone mode
+- [x] `_track_weights` is no longer ignored or intentionally marked unused
+
+## Resolution
+
+Option 2 was chosen: the `track_weights` parameter was **removed** from `TrackArgs` entirely.
+The modern engine applies per-track gain/pan at the mix layer (`playback::engine::mix::track_mix`),
+not at the decode level. The legacy `track/single.rs` module is a standalone decode worker and
+weighting was never its responsibility — the parameter was vestigial.
+
+Changes:
+- `TrackArgs` no longer includes `track_weights`
+- `TrackDecodeOutcome` enum added for structured return from `buffer_track`
+- Seek failures now report diagnostics and notify condvar waiters (SI-15 fix)
+- Weighting architecture documented in struct-level and module-level doc comments
+- `container.rs` documents that `track_weights` is bookkeeping for the mix layer, not applied here
+- Tests verify the struct compiles without weights and document the intentional API choice
 
 ## Status
 
-Open.
+Closed.

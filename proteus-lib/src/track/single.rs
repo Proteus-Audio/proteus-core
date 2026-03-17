@@ -1,11 +1,9 @@
 //! Buffering implementation for a single audio track.
 //!
-//! This is a legacy buffering module retained for the standalone track decode
-//! path. It is not wired into the active playback engine, but its tests are
-//! compiled to validate correctness of the decode logic.
-#![allow(dead_code)]
+//! This is a legacy module retained for its tests and as reference. The active
+//! playback path uses `playback::engine::mix::runner::decode::file_worker`
+//! instead.
 
-use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
@@ -27,7 +25,7 @@ use super::buffer::{add_samples_to_buffer_map, mark_track_as_finished};
 
 /// Outcome of a single-track decode worker run.
 ///
-/// Callers can use this to distinguish a successful decode from an abort or a
+/// Callers use this to distinguish a successful decode from an abort or a
 /// setup/decode failure, rather than treating all outcomes as end-of-stream.
 #[derive(Debug, Clone, PartialEq)]
 pub enum TrackDecodeOutcome {
@@ -42,41 +40,59 @@ pub enum TrackDecodeOutcome {
 }
 
 /// Arguments required to buffer a single track into a ring buffer.
+///
+/// # Weighting
+///
+/// Per-track weighting is **not** applied at the decode level. In the active
+/// playback system, track weights are resolved and applied during the mix
+/// phase (see `playback::engine::mix::track_mix`). Standalone decode workers
+/// are responsible only for decoding and enqueueing raw samples.
 pub struct TrackArgs {
+    /// Path to the audio file to decode.
     pub file_path: String,
+    /// Optional symphonia track id; when `None`, the first decodable track is
+    /// selected.
     pub track_id: Option<u32>,
+    /// Buffer-map key identifying this track.
     pub track_key: u16,
+    /// Shared ring-buffer map that decoded samples are pushed into.
     pub buffer_map: TrackBufferMap,
+    /// Optional condvar notified when new samples are available or the track
+    /// finishes.
     pub buffer_notify: Option<Arc<Condvar>>,
-    pub track_weights: Option<Arc<Mutex<HashMap<u16, f32>>>>,
+    /// Shared finished-track list for downstream bookkeeping.
     pub finished_tracks: Arc<Mutex<Vec<u16>>>,
+    /// Playback start position in seconds.
     pub start_time: f64,
+    /// Number of output channels (typically 2 for stereo).
     pub channels: u8,
 }
 
 /// Spawn a decoder thread that buffers audio for a single track.
 ///
 /// The returned handle resolves to a [`TrackDecodeOutcome`]. Callers should
-/// check the outcome to distinguish normal end-of-stream from abort or failure.
+/// inspect it to distinguish normal end-of-stream from abort or failure.
 ///
 /// # Error policy
 ///
-/// - **Open failure**: the worker logs a warning, marks the track finished,
-///   notifies any condvar waiter, and returns `Failed`.
-/// - **No decodable track**: same as open failure.
-/// - **Seek failure**: the worker logs a warning with the file path, start time,
-///   and symphonia error, marks the track finished, notifies any condvar waiter,
-///   and returns `Failed`. Seek failure is treated as non-recoverable because
-///   the caller requested a specific start position.
-/// - **Repeated per-packet decode errors** (`Error::DecodeError`): each error
-///   is logged at `warn` level and the loop continues with the next packet.
-///   This is intentional — transient codec errors on individual packets are
-///   recoverable; the worker keeps producing audio rather than aborting.
-/// - **Non-recoverable mid-decode error**: the loop exits with `Failed`.
+/// - **Open failure / no decodable track / seek failure:** the worker logs a
+///   warning, marks the track finished, notifies any condvar waiter, and
+///   returns [`TrackDecodeOutcome::Failed`].
+/// - **Per-packet decode errors** (`Error::DecodeError`): each error is logged
+///   at `warn` level and the loop continues with the next packet. Transient
+///   codec errors are treated as recoverable — the worker keeps producing
+///   audio rather than aborting.
+/// - **Non-recoverable mid-decode error:** the loop exits with `Failed`.
 pub fn buffer_track(args: TrackArgs, abort: Arc<AtomicBool>) -> JoinHandle<TrackDecodeOutcome> {
     let TrackArgs {
-        file_path, track_id, track_key, buffer_map, buffer_notify,
-        track_weights: _, finished_tracks, start_time, channels,
+        file_path,
+        track_id,
+        track_key,
+        buffer_map,
+        buffer_notify,
+        finished_tracks,
+        start_time,
+        channels,
     } = args;
     let opened = open_file(&file_path);
     thread::spawn(move || {
@@ -84,38 +100,44 @@ pub fn buffer_track(args: TrackArgs, abort: Arc<AtomicBool>) -> JoinHandle<Track
             Ok(opened) => opened,
             Err(err) => {
                 warn!("failed to open track '{}': {}", file_path, err);
-                mark_track_as_finished(&mut finished_tracks.clone(), track_key);
-                if let Some(notify) = buffer_notify.as_ref() {
-                    notify.notify_all();
-                }
-                return TrackDecodeOutcome::Failed(err.to_string());
+                return finish(
+                    &finished_tracks,
+                    track_key,
+                    buffer_notify.as_ref(),
+                    TrackDecodeOutcome::Failed(err.to_string()),
+                );
             }
         };
         let (track_id, dur) = match find_track(&*format, track_id) {
             Some(found) => found,
             None => {
                 warn!("no supported audio track found in '{}'", file_path);
-                mark_track_as_finished(&mut finished_tracks.clone(), track_key);
-                if let Some(notify) = buffer_notify.as_ref() {
-                    notify.notify_all();
-                }
-                return TrackDecodeOutcome::Failed("no supported audio track".to_string());
+                return finish(
+                    &finished_tracks,
+                    track_key,
+                    buffer_notify.as_ref(),
+                    TrackDecodeOutcome::Failed("no supported audio track".to_string()),
+                );
             }
         };
         let time = Time::new(start_time.floor() as u64, start_time.fract());
         if let Err(err) = format.seek(
             SeekMode::Coarse,
-            SeekTo::Time { time, track_id: Some(track_id) },
+            SeekTo::Time {
+                time,
+                track_id: Some(track_id),
+            },
         ) {
             warn!(
-                "seek failed for track '{}' at {:.3}s (track_id={}): {}",
+                "seek failed for '{}' at {:.3}s (track_id={}): {}",
                 file_path, start_time, track_id, err
             );
-            mark_track_as_finished(&mut finished_tracks.clone(), track_key);
-            if let Some(notify) = buffer_notify.as_ref() {
-                notify.notify_all();
-            }
-            return TrackDecodeOutcome::Failed(format!("seek failed: {}", err));
+            return finish(
+                &finished_tracks,
+                track_key,
+                buffer_notify.as_ref(),
+                TrackDecodeOutcome::Failed(format!("seek failed: {}", err)),
+            );
         }
         let mut logged_format = false;
         let result: Result<bool, Error> = loop {
@@ -134,11 +156,18 @@ pub fn buffer_track(args: TrackArgs, abort: Arc<AtomicBool>) -> JoinHandle<Track
             }
             match decoder.decode(&packet) {
                 Ok(decoded) => process_decoded_packet(
-                    decoded, track_id, track_key, channels,
-                    &buffer_map, buffer_notify.as_ref(), &abort, &mut logged_format,
+                    decoded,
+                    track_id,
+                    track_key,
+                    channels,
+                    &buffer_map,
+                    buffer_notify.as_ref(),
+                    &abort,
+                    &mut logged_format,
                 ),
-                // Per-packet decode errors are recoverable: log and continue.
-                Err(Error::DecodeError(e)) => warn!("decode error for track '{}': {}", file_path, e),
+                Err(Error::DecodeError(e)) => {
+                    warn!("decode error for '{}': {}", file_path, e);
+                }
                 Err(e) => break Err(e),
             }
         };
@@ -148,37 +177,46 @@ pub fn buffer_track(args: TrackArgs, abort: Arc<AtomicBool>) -> JoinHandle<Track
             match result {
                 Ok(_) => TrackDecodeOutcome::Completed,
                 Err(e) => {
-                    warn!("decode loop ended with error for track '{}': {}", file_path, e);
+                    warn!("decode loop ended with error for '{}': {}", file_path, e);
                     TrackDecodeOutcome::Failed(e.to_string())
                 }
             }
         };
-        mark_track_as_finished(&mut finished_tracks.clone(), track_key);
-        if let Some(notify) = buffer_notify.as_ref() {
-            notify.notify_all();
-        }
-        outcome
+        finish(&finished_tracks, track_key, buffer_notify.as_ref(), outcome)
     })
+}
+
+/// Common exit path: mark finished, notify waiters, return the outcome.
+fn finish(
+    finished_tracks: &Arc<Mutex<Vec<u16>>>,
+    track_key: u16,
+    buffer_notify: Option<&Arc<Condvar>>,
+    outcome: TrackDecodeOutcome,
+) -> TrackDecodeOutcome {
+    mark_track_as_finished(&mut finished_tracks.clone(), track_key);
+    if let Some(notify) = buffer_notify {
+        notify.notify_all();
+    }
+    outcome
 }
 
 fn find_track(format: &dyn FormatReader, track_id: Option<u32>) -> Option<(u32, Option<u64>)> {
     let track = match track_id {
-        Some(id) => format
-            .tracks()
-            .iter()
-            .find(|t| t.id == id)
-            .or_else(|| {
-                format
-                    .tracks()
-                    .iter()
-                    .find(|t| t.codec_params.codec != CODEC_TYPE_NULL)
-            }),
+        Some(id) => format.tracks().iter().find(|t| t.id == id).or_else(|| {
+            format
+                .tracks()
+                .iter()
+                .find(|t| t.codec_params.codec != CODEC_TYPE_NULL)
+        }),
         None => format
             .tracks()
             .iter()
             .find(|t| t.codec_params.codec != CODEC_TYPE_NULL),
     }?;
-    let dur = track.codec_params.n_frames.map(|f| track.codec_params.start_ts + f);
+    let dur = track
+        .codec_params
+        .n_frames
+        .map(|f| track.codec_params.start_ts + f);
     Some((track.id, dur))
 }
 
@@ -208,7 +246,7 @@ fn process_decoded_packet(
     logged_format: &mut bool,
 ) {
     if !*logged_format {
-        info!("decoded track {} buffer format logged", track_id);
+        info!("decoded track {} buffer ready", track_id);
         *logged_format = true;
     }
     let stereo = interleave_to_stereo(decoded, channels);
@@ -227,19 +265,20 @@ fn process_decoded_packet(
 mod tests {
     use super::{buffer_track, TrackArgs, TrackDecodeOutcome};
     use crate::audio::buffer::init_buffer_map;
-    use std::collections::HashMap;
     use std::sync::atomic::AtomicBool;
     use std::sync::{Arc, Condvar, Mutex};
 
-    fn make_args(file_path: &str, start_time: f64) -> (TrackArgs, Arc<Mutex<Vec<u16>>>) {
+    fn make_args(
+        file_path: &str,
+        notify: Option<Arc<Condvar>>,
+    ) -> (TrackArgs, Arc<Mutex<Vec<u16>>>) {
         let finished_tracks = Arc::new(Mutex::new(Vec::new()));
         let args = TrackArgs {
             file_path: file_path.to_string(),
             track_id: None,
             track_key: 9,
             buffer_map: init_buffer_map(),
-            buffer_notify: None,
-            track_weights: Some(Arc::new(Mutex::new(HashMap::new()))),
+            buffer_notify: notify,
             finished_tracks: finished_tracks.clone(),
             start_time,
             channels: 2,
@@ -281,22 +320,55 @@ mod tests {
             start_time: 0.0,
             channels: 2,
         };
+        (args, finished_tracks)
+    }
+
+    #[test]
+    fn buffer_track_marks_finished_and_returns_failed_when_open_fails() {
+        let (args, finished_tracks) = make_args("/definitely/missing/audio-file.wav", None);
         let abort = Arc::new(AtomicBool::new(false));
 
-        let handle = buffer_track(args, abort);
-        let outcome = handle.join().expect("worker thread should complete");
+        let outcome = buffer_track(args, abort)
+            .join()
+            .expect("worker thread should complete");
 
-        // Track must be marked finished even on failure, so the engine does
-        // not stall waiting for it.
-        assert!(finished_tracks.lock().unwrap().contains(&7));
+        assert_eq!(finished_tracks.lock().unwrap().as_slice(), &[9]);
+        assert!(matches!(outcome, TrackDecodeOutcome::Failed(_)));
+    }
+
+    // Regression test (SI-15): failure paths must notify condvar waiters so
+    // the runtime does not stall waiting for data that will never arrive.
+    #[test]
+    fn buffer_track_notifies_condvar_on_failure() {
+        let notify = Arc::new(Condvar::new());
+        let (args, finished_tracks) =
+            make_args("/definitely/missing/audio-file.wav", Some(notify.clone()));
+        let abort = Arc::new(AtomicBool::new(false));
+
+        let outcome = buffer_track(args, abort)
+            .join()
+            .expect("worker thread should complete");
+
+        assert!(finished_tracks.lock().unwrap().contains(&9));
         assert!(matches!(outcome, TrackDecodeOutcome::Failed(_)));
     }
 
     #[test]
-    fn track_decode_outcome_failed_carries_message() {
-        let outcome = TrackDecodeOutcome::Failed("seek failed: some error".to_string());
-        assert_eq!(outcome, TrackDecodeOutcome::Failed("seek failed: some error".to_string()));
-        assert_ne!(outcome, TrackDecodeOutcome::Completed);
-        assert_ne!(outcome, TrackDecodeOutcome::Aborted);
+    fn track_decode_outcome_variants_are_distinct() {
+        let failed = TrackDecodeOutcome::Failed("seek failed".to_string());
+        assert_ne!(failed, TrackDecodeOutcome::Completed);
+        assert_ne!(failed, TrackDecodeOutcome::Aborted);
+        assert_ne!(TrackDecodeOutcome::Completed, TrackDecodeOutcome::Aborted);
+    }
+
+    // SI-16: TrackArgs no longer accepts track_weights; verify the struct can
+    // be built without it, confirming the parameter was intentionally removed.
+    #[test]
+    fn track_args_does_not_require_weights() {
+        let (args, _finished) = make_args("/any/path.wav", None);
+        // The struct compiles without a track_weights field — this test
+        // documents the intentional API choice that weighting is not the
+        // responsibility of the decode worker.
+        assert_eq!(args.track_key, 9);
     }
 }

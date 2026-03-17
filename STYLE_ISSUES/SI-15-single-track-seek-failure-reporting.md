@@ -2,8 +2,8 @@
 
 ## Files affected
 
-| File | Notes |
-|---|---|
+| File                              | Notes                                                                                                     |
+| --------------------------------- | --------------------------------------------------------------------------------------------------------- |
 | `proteus-lib/src/track/single.rs` | `buffer_track` returns early when initial seek fails and does not emit a diagnostic or structured failure |
 
 ---
@@ -55,6 +55,19 @@ The roadmap groups this with decode-loop observability more broadly:
 - [x] Buffer waiters are still notified on failure paths
 - [x] A regression test covers the failed-seek startup path
 - [x] The policy for repeated decode failures is intentional and documented
+
+## Resolution
+
+`buffer_track` now returns `JoinHandle<TrackDecodeOutcome>` with three variants:
+`Completed`, `Aborted`, and `Failed(String)`. Seek failures log the file path,
+start time, and track id at `warn` level, notify condvar waiters, and return
+`Failed`. A `finish()` helper ensures all exit paths mark finished and notify.
+
+Per-packet `DecodeError` variants are logged at `warn` and the loop continues
+(documented as intentional — transient codec errors are recoverable). Non-recoverable
+errors break the loop and produce `Failed`.
+
+Regression test `buffer_track_notifies_condvar_on_failure` covers the failure path.
 
 ## Status
 

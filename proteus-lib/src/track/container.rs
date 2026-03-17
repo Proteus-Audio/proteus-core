@@ -1,8 +1,15 @@
 //! Buffering implementation for multiple tracks in a shared container stream.
 //!
-//! This is a legacy buffering module retained for reference. It is not wired
-//! into the active playback engine.
-#![allow(dead_code)]
+//! This is a legacy module retained for reference and tests. The active
+//! playback path uses `playback::engine::mix::runner::decode::container_worker`
+//! instead.
+//!
+//! # Weighting
+//!
+//! `track_weights` is a bookkeeping map populated during container setup to
+//! record the count of duplicate track keys for a given physical track. The
+//! weights are **not** applied at the sample level here — actual per-track gain
+//! application happens in the mix layer (`playback::engine::mix::track_mix`).
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -228,6 +235,7 @@ fn interleave_to_stereo(decoded: AudioBufferRef<'_>, channels: u8) -> Vec<f32> {
     ch1.into_iter().zip(ch2).flat_map(|(l, r)| [l, r]).collect()
 }
 
+#[allow(clippy::too_many_arguments)]
 fn check_eos_skew(
     track_decoders: &[TrackDecoder],
     finished_ids: &mut Vec<u32>,
@@ -269,7 +277,7 @@ fn push_decoded_container_packet(
     logged_formats: &mut HashMap<u32, bool>,
 ) {
     logged_formats.entry(track_id).or_insert_with(|| {
-        info!("decoded track {} buffer format logged", track_id);
+        info!("decoded track {} buffer ready", track_id);
         true
     });
     let stereo = interleave_to_stereo(decoded, channels);
