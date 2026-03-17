@@ -34,10 +34,10 @@ The runtime still depends on coarse periodic wakeups:
 
 ### Acceptance criteria
 
-- [ ] The main playback worker loop no longer depends on 20 ms timeout polling
-- [ ] Sink backpressure no longer uses fixed 5 ms sleeps
-- [ ] Shutdown, pause, and resume remain responsive under the new signaling model
+- [x] The main playback worker loop no longer depends on 20 ms timeout polling
+- [x] Sink backpressure no longer uses fixed 5 ms sleeps
+- [x] Shutdown, pause, and resume remain responsive under the new signaling model
 
 ## Status
 
-Open.
+Done.

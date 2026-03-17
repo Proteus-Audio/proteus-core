@@ -120,6 +120,7 @@ impl Player {
             buffer_done_thread_flag: self.buffering_done.clone(),
             last_chunk_ms: self.last_chunk_ms.clone(),
             last_time_update_ms: self.last_time_update_ms.clone(),
+            worker_notify: self.worker_notify.clone(),
         };
 
         let handle = thread::spawn(move || run_playback_thread(context, playback_id, ts));

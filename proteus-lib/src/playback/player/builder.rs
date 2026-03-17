@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 
 use super::{
     default_output_stream_handle, Player, PlayerInitError, PlayerInitOptions, PlayerSource,
-    PlayerState, OUTPUT_METER_REFRESH_HZ,
+    PlayerState, WorkerNotify, OUTPUT_METER_REFRESH_HZ,
 };
 use crate::container::info::Info;
 use crate::container::prot::{PathsTrack, Prot};
@@ -68,6 +68,7 @@ impl Player {
             shutdown_once: Arc::new(AtomicBool::new(false)),
             impulse_response_override: None,
             impulse_response_tail_override: None,
+            worker_notify: Arc::new(WorkerNotify::new()),
         };
 
         player.initialize_thread(None);

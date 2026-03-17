@@ -74,6 +74,7 @@ impl Player {
             .lock()
             .unwrap_or_else(|_| panic!("state lock poisoned — a thread panicked while holding it"))
             .clone_from(&PlayerState::Pausing);
+        self.worker_notify.notify();
     }
 
     /// Resume playback if paused.
@@ -88,6 +89,7 @@ impl Player {
             .lock()
             .unwrap_or_else(|_| panic!("state lock poisoned — a thread panicked while holding it"))
             .clone_from(&PlayerState::Resuming);
+        self.worker_notify.notify();
     }
 
     /// Stop playback and reset timing state.
