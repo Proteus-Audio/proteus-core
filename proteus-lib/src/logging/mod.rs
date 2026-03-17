@@ -1,4 +1,9 @@
-//! Optional log-file helpers used by debug and buffer-visualization features.
+//! Optional log-file helpers used only by feature-gated diagnostics.
+//!
+//! `buffer-map` enables the `log`/`clear_logfile` helpers consumed by the buffer
+//! mixer's occupancy tracing, while `debug` exposes `pivot_buffer_trace` for
+//! post-processing those traces. These helpers are intentionally feature-gated
+//! and are expected to disappear from builds that do not opt into diagnostics.
 
 #[cfg(feature = "debug")]
 pub mod pivot_buffer_trace;

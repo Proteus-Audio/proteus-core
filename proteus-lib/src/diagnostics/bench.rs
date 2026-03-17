@@ -57,7 +57,7 @@ pub fn bench_convolver(config: DspBenchConfig) -> DspBenchResult {
     } else {
         0.0
     };
-    let ir_segments = (ir_len + (config.fft_size / 2) - 1) / (config.fft_size / 2);
+    let ir_segments = ir_len.div_ceil(config.fft_size / 2);
 
     DspBenchResult {
         avg_ms,

@@ -227,10 +227,10 @@ The crate compiles with a large warning set that makes real regressions harder t
 - [x] Remove `SourceSpawner` from `playback/engine/mix/source_spawner.rs`
 - [x] Remove or activate `add_samples_to_buffer_map_nonblocking` in `track/buffer.rs`
 - [x] Fix `track/mod.rs` re-exports that are unused and not re-exported from `lib.rs`
-- [ ] Remove unused functions from the internal `logging` module
+- [x] Remove unused functions from the internal `logging` module
 - [x] Remove unused buffer diagnostics helpers in `playback/engine/mix/buffer_mixer/helpers.rs`
 - [x] Remove the commented-out `PartialEq` block in `container/info.rs` lines 211–222
-- [ ] Run `cargo clippy` and address all dead code warnings
+- [x] Run `cargo clippy` and address all dead code warnings
 
 ### 4.2 Split oversized files by responsibility
 
