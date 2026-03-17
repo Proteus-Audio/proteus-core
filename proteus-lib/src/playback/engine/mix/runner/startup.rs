@@ -200,17 +200,23 @@ fn compute_mix_buffer_sizes(
 fn build_track_mix_map(
     instances: &[crate::container::prot::RuntimeInstanceMeta],
     track_mix_settings_by_slot: &HashMap<u16, (f32, f32)>,
-) -> HashMap<usize, (f32, f32)> {
-    let mut track_mix_by_logical = HashMap::new();
+) -> Vec<(f32, f32)> {
+    let logical_track_count = instances
+        .iter()
+        .map(|i| i.logical_track_index)
+        .max()
+        .map(|m| m + 1)
+        .unwrap_or(0);
+    let mut track_mix_by_logical = vec![(1.0_f32, 0.0_f32); logical_track_count];
+    let mut seen = vec![false; logical_track_count];
     for instance in instances {
-        track_mix_by_logical
-            .entry(instance.logical_track_index)
-            .or_insert_with(|| {
-                track_mix_settings_by_slot
-                    .get(&(instance.slot_index as u16))
-                    .copied()
-                    .unwrap_or((1.0, 0.0))
-            });
+        let idx = instance.logical_track_index;
+        if idx < logical_track_count && !seen[idx] {
+            seen[idx] = true;
+            if let Some(&settings) = track_mix_settings_by_slot.get(&(instance.slot_index as u16)) {
+                track_mix_by_logical[idx] = settings;
+            }
+        }
     }
     track_mix_by_logical
 }

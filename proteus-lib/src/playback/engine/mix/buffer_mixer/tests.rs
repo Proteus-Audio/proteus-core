@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-
 use crate::container::prot::{
     ActiveWindow, RuntimeInstanceMeta, RuntimeInstancePlan, ShuffleSource,
 };
@@ -43,7 +41,7 @@ fn simple_plan() -> RuntimeInstancePlan {
 #[test]
 /// Verifies packet routing writes samples only to matching source instances.
 fn route_packet_targets_and_zero_fills_instances() {
-    let mut mixer = BufferMixer::new(simple_plan(), 48_000, 2, 8, HashMap::new(), 4);
+    let mut mixer = BufferMixer::new(simple_plan(), 48_000, 2, 8, Vec::new(), 4);
 
     let decision = mixer.route_packet(&[1.0, 1.0, 0.5, 0.5], SourceKey::TrackId(1), 0.0);
     assert_eq!(decision.sample_targets_written, vec![0]);
@@ -54,7 +52,7 @@ fn route_packet_targets_and_zero_fills_instances() {
 #[test]
 /// Verifies mix readiness and sample consumption stay in lockstep.
 fn readiness_and_take_samples_are_synchronized() {
-    let mut mixer = BufferMixer::new(simple_plan(), 48_000, 2, 16, HashMap::new(), 4);
+    let mut mixer = BufferMixer::new(simple_plan(), 48_000, 2, 16, Vec::new(), 4);
 
     mixer.route_packet(&[1.0, 1.0, 1.0, 1.0], SourceKey::TrackId(1), 0.0);
     assert!(!mixer.mix_ready());
@@ -71,7 +69,7 @@ fn readiness_and_take_samples_are_synchronized() {
 #[test]
 /// Verifies finish signals propagate to per-track and global finished state.
 fn signal_finish_propagates_track_and_mix_finished() {
-    let mut mixer = BufferMixer::new(simple_plan(), 48_000, 2, 8, HashMap::new(), 4);
+    let mut mixer = BufferMixer::new(simple_plan(), 48_000, 2, 8, Vec::new(), 4);
     mixer.signal_finish(&SourceKey::TrackId(1));
     assert!(mixer.track_finished(0));
     assert!(!mixer.mix_finished());
@@ -84,8 +82,7 @@ fn signal_finish_propagates_track_and_mix_finished() {
 #[test]
 /// Verifies aggregate fill-state reporting reflects per-instance fullness.
 fn fill_state_aggregates_as_expected() {
-    let mut track_mix = HashMap::new();
-    track_mix.insert(0usize, (1.0_f32, 0.0_f32));
+    let track_mix = vec![(1.0_f32, 0.0_f32), (1.0_f32, 0.0_f32)];
     let mut mixer = BufferMixer::new(simple_plan(), 48_000, 2, 2, track_mix, 4);
     assert!(!mixer.track_ready(0));
     assert_eq!(mixer.instance_buffer_fills(), vec![(0, 0), (1, 0)]);
@@ -124,7 +121,7 @@ fn route_packet_zero_fills_when_packet_is_before_window_start() {
         }],
         event_boundaries_ms: vec![0, 1000],
     };
-    let mut mixer = BufferMixer::new(plan, 48_000, 2, 16, HashMap::new(), 4);
+    let mut mixer = BufferMixer::new(plan, 48_000, 2, 16, Vec::new(), 4);
 
     let decision = mixer.route_packet(&[1.0, 1.0, 1.0, 1.0], SourceKey::TrackId(1), 0.0);
     assert!(decision.sample_targets_written.is_empty());
