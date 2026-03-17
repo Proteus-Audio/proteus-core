@@ -8,6 +8,7 @@ use rodio::buffer::SamplesBuffer;
 use crate::container::info::Info;
 use crate::container::prot::Prot;
 use crate::dsp::effects::{AudioEffect, EffectContext};
+use crate::playback::engine::premix::PremixBuffer;
 use crate::playback::engine::{DspChainMetrics, InlineEffectsUpdate, InlineTrackMixUpdate};
 
 use super::super::buffer_mixer::{BufferMixer, DecodeBackpressure};
@@ -51,7 +52,7 @@ pub(super) struct MixLoopState {
     pub(super) started: bool,
     pub(super) last_effects_reset: u64,
     pub(super) active_inline_transition: Option<ActiveInlineTransition>,
-    pub(super) pending_mix_samples: Vec<f32>,
+    pub(super) pending_mix_samples: PremixBuffer,
     pub(super) effect_drain_passes: usize,
     pub(super) effect_drain_silent_passes: usize,
     pub(super) running_count: usize,
@@ -108,7 +109,7 @@ impl MixLoopState {
             started: start_samples == 0,
             last_effects_reset,
             active_inline_transition: None,
-            pending_mix_samples: Vec::new(),
+            pending_mix_samples: PremixBuffer::new(),
             effect_drain_passes: 0,
             effect_drain_silent_passes: 0,
             running_count: 0,

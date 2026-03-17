@@ -66,7 +66,7 @@ pub(super) fn run_mix_loop(state: &mut MixLoopState, startup_trace: Instant) {
 fn take_next_samples(state: &mut MixLoopState, startup_trace: Instant) -> Option<Vec<f32>> {
     let batch = state.convolution_batch_samples;
     if batch > 0 && state.pending_mix_samples.len() >= batch {
-        return Some(state.pending_mix_samples.drain(0..batch).collect());
+        return Some(state.pending_mix_samples.pop_chunk(batch));
     }
     if let Some(samples) = state.buffer_mixer.take_samples() {
         if !state.logged_first_take_samples {
@@ -78,20 +78,20 @@ fn take_next_samples(state: &mut MixLoopState, startup_trace: Instant) -> Option
             );
         }
         if batch > 0 {
-            state.pending_mix_samples.extend_from_slice(&samples);
+            state.pending_mix_samples.push_interleaved(&samples);
             if state.pending_mix_samples.len() >= batch {
-                return Some(state.pending_mix_samples.drain(0..batch).collect());
+                return Some(state.pending_mix_samples.pop_chunk(batch));
             }
         } else {
             return Some(samples);
         }
     }
     if state.buffer_mixer.mix_finished() && !state.pending_mix_samples.is_empty() {
-        let missing = batch.saturating_sub(state.pending_mix_samples.len());
-        state
-            .pending_mix_samples
-            .extend(std::iter::repeat_n(0.0_f32, missing));
-        return Some(std::mem::take(&mut state.pending_mix_samples));
+        let remaining = state.pending_mix_samples.len();
+        let missing = batch.saturating_sub(remaining);
+        let zeros = vec![0.0_f32; missing];
+        state.pending_mix_samples.push_interleaved(&zeros);
+        return Some(state.pending_mix_samples.pop_chunk(batch));
     }
     None
 }
