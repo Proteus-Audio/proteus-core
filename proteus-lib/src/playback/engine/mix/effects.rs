@@ -44,13 +44,7 @@ mod tests {
     use super::*;
 
     fn context() -> EffectContext {
-        EffectContext {
-            sample_rate: 48_000,
-            channels: 2,
-            container_path: None,
-            impulse_response_spec: None,
-            impulse_response_tail_db: -60.0,
-        }
+        EffectContext::new(48_000, 2, None, None, -60.0).unwrap()
     }
 
     #[test]
@@ -96,7 +90,16 @@ mod tests {
         let mut effects = Vec::new();
         let input = vec![0.25_f32, -0.25];
         let context = EffectContext::new(48_000, 2, None, None, -60.0).unwrap();
-        let output = run_effect_chain(&mut effects, &input, &context, false);
-        assert_eq!(output, input);
+        let mut scratch_a = Vec::new();
+        let mut scratch_b = Vec::new();
+        run_effect_chain(
+            &mut effects,
+            &input,
+            &context,
+            false,
+            &mut scratch_a,
+            &mut scratch_b,
+        );
+        assert_eq!(scratch_a, input);
     }
 }

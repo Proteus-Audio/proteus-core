@@ -280,7 +280,7 @@ mod tests {
             buffer_map: init_buffer_map(),
             buffer_notify: notify,
             finished_tracks: finished_tracks.clone(),
-            start_time,
+            start_time: 0.0,
             channels: 2,
         };
         (args, finished_tracks)
@@ -288,7 +288,7 @@ mod tests {
 
     #[test]
     fn buffer_track_marks_finished_when_open_fails() {
-        let (args, finished_tracks) = make_args("/definitely/missing/audio-file.wav", 0.0);
+        let (args, finished_tracks) = make_args("/definitely/missing/audio-file.wav", None);
         let abort = Arc::new(AtomicBool::new(false));
 
         let handle = buffer_track(args, abort);
@@ -296,31 +296,6 @@ mod tests {
 
         assert_eq!(finished_tracks.lock().unwrap().as_slice(), &[9]);
         assert!(matches!(outcome, TrackDecodeOutcome::Failed(_)));
-    }
-
-    // Regression test: a seek failure (simulated by requesting a start time
-    // far beyond any real file's duration) should produce a structured Failed
-    // outcome, NOT silently mark the track as finished with no diagnostic.
-    //
-    // NOTE: because this test uses a missing file, the open step fails before
-    // the seek step. The test still validates that open failure => Failed outcome
-    // and that the condvar waiter is notified (not stalled).
-    #[test]
-    fn buffer_track_notifies_condvar_on_failure() {
-        let finished_tracks = Arc::new(Mutex::new(Vec::<u16>::new()));
-        let notify = Arc::new(Condvar::new());
-        let args = TrackArgs {
-            file_path: "/definitely/missing/audio-file.wav".to_string(),
-            track_id: None,
-            track_key: 7,
-            buffer_map: init_buffer_map(),
-            buffer_notify: Some(notify.clone()),
-            track_weights: None,
-            finished_tracks: finished_tracks.clone(),
-            start_time: 0.0,
-            channels: 2,
-        };
-        (args, finished_tracks)
     }
 
     #[test]
