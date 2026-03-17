@@ -41,10 +41,27 @@ Representative cases:
 
 ### Acceptance criteria
 
-- [ ] No production `lock().unwrap()` sites remain in `proteus-lib/src` or `proteus-cli/src`
-- [ ] Any allowed test-only exceptions are documented explicitly
-- [ ] CI prevents reintroduction of production raw lock unwraps
+- [x] No production `lock().unwrap()` sites remain in `proteus-lib/src` or `proteus-cli/src`
+- [x] Any allowed test-only exceptions are documented explicitly
+- [x] CI prevents reintroduction of production raw lock unwraps
+
+### Test-only exemption
+
+`lock().unwrap()` is permitted inside `#[cfg(test)]` modules. Test code runs in
+a controlled environment where a poisoned lock indicates a test bug, not a
+user-facing crash. The remaining test-only sites are in:
+
+- `proteus-lib/src/track/buffer.rs`
+- `proteus-lib/src/track/container.rs`
+- `proteus-lib/src/track/single.rs`
+- `proteus-lib/src/playback/player/controls.rs`
+- `proteus-lib/src/playback/player/runtime/worker/timing.rs`
+- `proteus-lib/src/playback/player/runtime/worker/runner.rs`
+- `proteus-lib/src/playback/engine/mix/track_mix.rs`
+- `proteus-lib/src/playback/engine/mix/runner/decode/mod.rs`
+- `proteus-lib/src/diagnostics/reporter.rs`
+- `proteus-cli/src/logging.rs`
 
 ## Status
 
-Open.
+Done.

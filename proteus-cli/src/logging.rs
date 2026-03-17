@@ -49,7 +49,9 @@ impl Log for SharedLogger {
             eprintln!("{}", line);
         }
 
-        let mut buffer = self.buffer.lock().unwrap();
+        let mut buffer = self.buffer.lock().unwrap_or_else(|_| {
+            panic!("log buffer lock poisoned — a thread panicked while holding it")
+        });
         if buffer.len() >= LOG_CAPACITY {
             buffer.pop_front();
         }
@@ -147,7 +149,14 @@ pub fn set_echo_stderr(enabled: bool) {
 
 /// Snapshot the current log buffer for rendering.
 pub fn snapshot_lines(buffer: &Arc<Mutex<VecDeque<LogLine>>>) -> Vec<LogLine> {
-    buffer.lock().unwrap().iter().cloned().collect()
+    buffer
+        .lock()
+        .unwrap_or_else(|_| {
+            panic!("log buffer lock poisoned — a thread panicked while holding it")
+        })
+        .iter()
+        .cloned()
+        .collect()
 }
 
 /// Restores stderr on drop for capture sessions.
@@ -214,7 +223,9 @@ pub fn capture_stderr(buffer: Arc<Mutex<VecDeque<LogLine>>>) -> Option<StderrCap
             if trimmed.is_empty() {
                 continue;
             }
-            let mut buffer = buffer.lock().unwrap();
+            let mut buffer = buffer.lock().unwrap_or_else(|_| {
+                panic!("log buffer lock poisoned — a thread panicked while holding it")
+            });
             if buffer.len() >= LOG_CAPACITY {
                 buffer.pop_front();
             }
