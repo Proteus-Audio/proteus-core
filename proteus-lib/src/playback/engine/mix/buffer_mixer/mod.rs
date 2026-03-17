@@ -17,7 +17,6 @@ use crate::logging::clear_logfile;
 
 use aligned_buffer::AlignedSampleBuffer;
 pub(crate) use backpressure::DecodeBackpressure;
-use routing_helpers::instance_needs_data;
 #[cfg(test)]
 pub(crate) use routing_helpers::FillState;
 pub(crate) use routing_helpers::{RouteDecision, SourceKey};
@@ -130,16 +129,10 @@ impl BufferMixer {
             return true;
         };
 
+        // Strict alignment: every instance participates unconditionally —
+        // all buffers advance together via real audio or zero-fill.
         instances.iter().all(|instance_index| {
             let instance = &self.instances[*instance_index];
-            if !instance_needs_data(
-                instance,
-                self.consumed_samples,
-                self.sample_rate,
-                self.channels,
-            ) {
-                return true;
-            }
             instance.finished || instance.buffer.len() >= min_samples.max(1)
         })
     }
