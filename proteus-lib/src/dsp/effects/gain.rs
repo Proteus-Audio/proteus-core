@@ -2,8 +2,9 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::EffectContext;
 use super::core::level::deserialize_linear_gain;
+use super::EffectContext;
+use crate::dsp::guardrails::sanitize_finite;
 
 const DEFAULT_GAIN: f32 = 1.0;
 
@@ -55,7 +56,7 @@ impl super::core::DspEffect for GainEffect {
             return samples.to_vec();
         }
 
-        let gain = sanitize_gain(self.settings.gain);
+        let gain = sanitize_finite(self.settings.gain, DEFAULT_GAIN);
         if samples.is_empty() {
             return Vec::new();
         }
@@ -120,8 +121,4 @@ mod tests {
         let expected = db_to_linear(-2.0);
         assert!((effect.settings.gain - expected).abs() < 1e-6);
     }
-}
-
-fn sanitize_gain(gain: f32) -> f32 {
-    if gain.is_finite() { gain } else { DEFAULT_GAIN }
 }

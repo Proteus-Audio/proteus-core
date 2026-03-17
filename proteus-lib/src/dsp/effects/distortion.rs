@@ -2,8 +2,9 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::EffectContext;
 use super::core::level::deserialize_linear_gain;
+use super::EffectContext;
+use crate::dsp::guardrails::sanitize_finite;
 
 const DEFAULT_GAIN: f32 = 1.0;
 const DEFAULT_THRESHOLD: f32 = 1.0;
@@ -62,7 +63,7 @@ impl super::core::DspEffect for DistortionEffect {
             return samples.to_vec();
         }
 
-        let gain = sanitize_gain(self.settings.gain);
+        let gain = sanitize_finite(self.settings.gain, DEFAULT_GAIN);
         let threshold = sanitize_threshold(self.settings.threshold);
         if samples.is_empty() {
             return Vec::new();
@@ -127,15 +128,9 @@ mod tests {
     }
 }
 
-fn sanitize_gain(gain: f32) -> f32 {
-    if gain.is_finite() { gain } else { DEFAULT_GAIN }
-}
-
 fn sanitize_threshold(threshold: f32) -> f32 {
-    if !threshold.is_finite() {
-        return DEFAULT_THRESHOLD;
-    }
-    let t = threshold.abs();
+    let value = sanitize_finite(threshold, DEFAULT_THRESHOLD);
+    let t = value.abs();
     if t <= f32::EPSILON {
         DEFAULT_THRESHOLD
     } else {

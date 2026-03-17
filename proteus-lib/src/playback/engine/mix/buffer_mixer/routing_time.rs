@@ -2,6 +2,7 @@
 
 #[cfg(test)]
 use crate::container::prot::ActiveWindow;
+use crate::dsp::guardrails::{sanitize_channels, sanitize_sample_rate};
 
 use super::BufferInstance;
 
@@ -34,8 +35,8 @@ pub(super) fn instance_past_window_ts(instance: &BufferInstance, ts: &f64) -> bo
 
 /// Convert interleaved sample count to milliseconds for logging and bookkeeping.
 pub(super) fn samples_to_ms(samples: usize, sample_rate: u32, channels: usize) -> u64 {
-    let frames = samples / channels.max(1);
-    ((frames as f64 / sample_rate.max(1) as f64) * 1000.0).round() as u64
+    let frames = samples / sanitize_channels(channels);
+    ((frames as f64 / sanitize_sample_rate(sample_rate) as f64) * 1000.0).round() as u64
 }
 
 /// Convert milliseconds to an interleaved sample count for the output format.

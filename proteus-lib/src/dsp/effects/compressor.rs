@@ -2,8 +2,11 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::EffectContext;
 use super::core::level::deserialize_db_gain;
+use super::EffectContext;
+use crate::dsp::guardrails::{
+    sanitize_channels, sanitize_finite, sanitize_finite_max, sanitize_finite_min,
+};
 
 const DEFAULT_THRESHOLD_DB: f32 = -18.0;
 const DEFAULT_RATIO: f32 = 4.0;
@@ -140,12 +143,13 @@ impl super::core::DspEffect for CompressorEffect {
 
 impl CompressorEffect {
     fn ensure_state(&mut self, context: &EffectContext) {
-        let threshold_db = sanitize_threshold_db(self.settings.threshold_db);
-        let ratio = sanitize_ratio(self.settings.ratio);
-        let attack_ms = sanitize_time_ms(self.settings.attack_ms, DEFAULT_ATTACK_MS);
-        let release_ms = sanitize_time_ms(self.settings.release_ms, DEFAULT_RELEASE_MS);
-        let makeup_gain_db = sanitize_makeup_db(self.settings.makeup_gain_db);
-        let channels = context.channels.max(1);
+        let threshold_db =
+            sanitize_finite_max(self.settings.threshold_db, DEFAULT_THRESHOLD_DB, 0.0);
+        let ratio = sanitize_finite_min(self.settings.ratio, DEFAULT_RATIO, 1.0);
+        let attack_ms = sanitize_finite_min(self.settings.attack_ms, DEFAULT_ATTACK_MS, 0.0);
+        let release_ms = sanitize_finite_min(self.settings.release_ms, DEFAULT_RELEASE_MS, 0.0);
+        let makeup_gain_db = sanitize_finite(self.settings.makeup_gain_db, DEFAULT_MAKEUP_DB);
+        let channels = sanitize_channels(context.channels);
 
         let params = CompressorParams {
             sample_rate: context.sample_rate,
@@ -250,38 +254,10 @@ fn time_to_coeff(time_ms: f32, sample_rate: u32) -> f32 {
     (-1.0 / (t * sample_rate as f32)).exp()
 }
 
-fn sanitize_threshold_db(threshold_db: f32) -> f32 {
-    if !threshold_db.is_finite() {
-        return DEFAULT_THRESHOLD_DB;
-    }
-    threshold_db.min(0.0)
-}
-
-fn sanitize_ratio(ratio: f32) -> f32 {
-    if !ratio.is_finite() {
-        return DEFAULT_RATIO;
-    }
-    ratio.max(1.0)
-}
-
-fn sanitize_time_ms(value: f32, fallback: f32) -> f32 {
-    if !value.is_finite() {
-        return fallback;
-    }
-    value.max(0.0)
-}
-
-fn sanitize_makeup_db(value: f32) -> f32 {
-    if !value.is_finite() {
-        return DEFAULT_MAKEUP_DB;
-    }
-    value
-}
-
 #[cfg(test)]
 mod tests {
     use super::CompressorEffect;
-    use crate::dsp::effects::{EffectContext, core::DspEffect};
+    use crate::dsp::effects::{core::DspEffect, EffectContext};
 
     fn context(channels: usize) -> EffectContext {
         EffectContext {

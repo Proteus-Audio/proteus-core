@@ -3,6 +3,7 @@
 use serde::{Deserialize, Serialize};
 
 use super::EffectContext;
+use crate::dsp::guardrails::sanitize_finite_clamped;
 
 const DEFAULT_PAN: f32 = 0.0;
 
@@ -67,7 +68,7 @@ impl super::core::DspEffect for PanEffect {
             return samples.to_vec();
         }
 
-        let pan = sanitize_pan(self.settings.pan);
+        let pan = sanitize_finite_clamped(self.settings.pan, DEFAULT_PAN, -1.0, 1.0);
         let theta =
             ((pan + 1.0) * std::f32::consts::FRAC_PI_4).clamp(0.0, std::f32::consts::FRAC_PI_2);
         let left_gain = theta.cos();
@@ -84,14 +85,6 @@ impl super::core::DspEffect for PanEffect {
     }
 
     fn reset_state(&mut self) {}
-}
-
-fn sanitize_pan(pan: f32) -> f32 {
-    if pan.is_finite() {
-        pan.clamp(-1.0, 1.0)
-    } else {
-        DEFAULT_PAN
-    }
 }
 
 #[cfg(test)]

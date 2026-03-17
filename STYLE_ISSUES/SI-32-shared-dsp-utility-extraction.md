@@ -32,10 +32,10 @@ spread across effect implementations and mix/runtime code.
 
 ### Acceptance criteria
 
-- [ ] Shared DSP guardrail helpers exist in one intentional utility module
-- [ ] Duplicate local implementations are removed or reduced to thin wrappers
-- [ ] Tests define shared edge-case behavior for the extracted helpers
+- [x] Shared DSP guardrail helpers exist in one intentional utility module
+- [x] Duplicate local implementations are removed or reduced to thin wrappers
+- [x] Tests define shared edge-case behavior for the extracted helpers
 
 ## Status
 
-Open.
+Done.

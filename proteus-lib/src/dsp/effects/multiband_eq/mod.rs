@@ -9,6 +9,7 @@
 use serde::{Deserialize, Serialize};
 
 use super::EffectContext;
+use crate::dsp::guardrails::{sanitize_channels, sanitize_finite_clamped, sanitize_freq};
 
 mod biquad;
 
@@ -221,15 +222,20 @@ impl super::core::DspEffect for MultibandEqEffect {
 
 impl MultibandEqEffect {
     fn ensure_state(&mut self, context: &EffectContext) {
-        let channels = context.channels.max(1);
+        let channels = sanitize_channels(context.channels);
         let points = self
             .settings
             .points
             .iter()
             .map(|point| EqPointParams {
                 freq_hz: sanitize_freq(point.freq_hz, context.sample_rate),
-                q: sanitize_q(point.q),
-                gain_db: sanitize_gain_db(point.gain_db),
+                q: sanitize_finite_clamped(point.q, DEFAULT_Q, MIN_Q, MAX_Q),
+                gain_db: sanitize_finite_clamped(
+                    point.gain_db,
+                    DEFAULT_GAIN_DB,
+                    MIN_GAIN_DB,
+                    MAX_GAIN_DB,
+                ),
             })
             .collect::<Vec<_>>();
 
@@ -275,7 +281,7 @@ fn sanitize_low_edge(edge: &LowEdgeFilterSettings, sample_rate: u32) -> LowEdgeP
     match edge {
         LowEdgeFilterSettings::HighPass { freq_hz, q } => LowEdgeParams::HighPass {
             freq_hz: sanitize_freq(*freq_hz, sample_rate),
-            q: sanitize_q(*q),
+            q: sanitize_finite_clamped(*q, DEFAULT_Q, MIN_Q, MAX_Q),
         },
         LowEdgeFilterSettings::LowShelf {
             freq_hz,
@@ -283,8 +289,8 @@ fn sanitize_low_edge(edge: &LowEdgeFilterSettings, sample_rate: u32) -> LowEdgeP
             gain_db,
         } => LowEdgeParams::LowShelf {
             freq_hz: sanitize_freq(*freq_hz, sample_rate),
-            q: sanitize_q(*q),
-            gain_db: sanitize_gain_db(*gain_db),
+            q: sanitize_finite_clamped(*q, DEFAULT_Q, MIN_Q, MAX_Q),
+            gain_db: sanitize_finite_clamped(*gain_db, DEFAULT_GAIN_DB, MIN_GAIN_DB, MAX_GAIN_DB),
         },
     }
 }
@@ -293,7 +299,7 @@ fn sanitize_high_edge(edge: &HighEdgeFilterSettings, sample_rate: u32) -> HighEd
     match edge {
         HighEdgeFilterSettings::LowPass { freq_hz, q } => HighEdgeParams::LowPass {
             freq_hz: sanitize_freq(*freq_hz, sample_rate),
-            q: sanitize_q(*q),
+            q: sanitize_finite_clamped(*q, DEFAULT_Q, MIN_Q, MAX_Q),
         },
         HighEdgeFilterSettings::HighShelf {
             freq_hz,
@@ -301,32 +307,10 @@ fn sanitize_high_edge(edge: &HighEdgeFilterSettings, sample_rate: u32) -> HighEd
             gain_db,
         } => HighEdgeParams::HighShelf {
             freq_hz: sanitize_freq(*freq_hz, sample_rate),
-            q: sanitize_q(*q),
-            gain_db: sanitize_gain_db(*gain_db),
+            q: sanitize_finite_clamped(*q, DEFAULT_Q, MIN_Q, MAX_Q),
+            gain_db: sanitize_finite_clamped(*gain_db, DEFAULT_GAIN_DB, MIN_GAIN_DB, MAX_GAIN_DB),
         },
     }
-}
-
-fn sanitize_freq(freq_hz: u32, sample_rate: u32) -> u32 {
-    let nyquist = sample_rate / 2;
-    if nyquist <= 1 {
-        return 1;
-    }
-    freq_hz.clamp(1, nyquist.saturating_sub(1).max(1))
-}
-
-fn sanitize_q(q: f32) -> f32 {
-    if !q.is_finite() {
-        return DEFAULT_Q;
-    }
-    q.clamp(MIN_Q, MAX_Q)
-}
-
-fn sanitize_gain_db(gain_db: f32) -> f32 {
-    if !gain_db.is_finite() {
-        return DEFAULT_GAIN_DB;
-    }
-    gain_db.clamp(MIN_GAIN_DB, MAX_GAIN_DB)
 }
 
 #[cfg(test)]
@@ -377,12 +361,10 @@ mod tests {
 
         assert_eq!(output.len(), samples.len());
         assert!(output.iter().all(|value| value.is_finite()));
-        assert!(
-            output
-                .iter()
-                .zip(samples.iter())
-                .any(|(out, input)| (*out - *input).abs() > 1e-6)
-        );
+        assert!(output
+            .iter()
+            .zip(samples.iter())
+            .any(|(out, input)| (*out - *input).abs() > 1e-6));
     }
 
     #[test]

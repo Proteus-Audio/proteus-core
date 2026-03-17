@@ -22,10 +22,11 @@
 use serde::{Deserialize, Serialize};
 
 use super::EffectContext;
+use crate::dsp::guardrails::sanitize_channels;
 
 mod primitives;
 
-use primitives::{DiffusionReverbState, delay_samples};
+use primitives::{delay_samples, DiffusionReverbState};
 
 const DEFAULT_PRE_DELAY_MS: u64 = 12;
 const DEFAULT_ROOM_SIZE_MS: u64 = 48;
@@ -248,7 +249,7 @@ impl DiffusionReverbEffect {
         let pre_delay_samples = delay_samples(context.sample_rate, self.settings.pre_delay_ms);
         let room_size_samples = delay_samples(context.sample_rate, self.settings.room_size_ms);
         let tuning = Tuning::new(pre_delay_samples, room_size_samples);
-        let channels = context.channels.max(1);
+        let channels = sanitize_channels(context.channels);
         let needs_reset = self
             .state
             .as_ref()

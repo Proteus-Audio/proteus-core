@@ -6,8 +6,9 @@ use std::time::Duration;
 use rodio::source::{Limit, LimitSettings, SeekError, Source};
 use serde::{Deserialize, Serialize};
 
-use super::EffectContext;
 use super::core::level::deserialize_db_gain;
+use super::EffectContext;
+use crate::dsp::guardrails::{sanitize_channels, sanitize_finite_max, sanitize_finite_min};
 
 const DEFAULT_THRESHOLD_DB: f32 = -1.0;
 const DEFAULT_KNEE_WIDTH_DB: f32 = 4.0;
@@ -114,7 +115,7 @@ impl super::core::DspEffect for LimiterEffect {
 impl LimiterEffect {
     fn ensure_state(&mut self, context: &EffectContext) {
         let settings = sanitize_settings(&self.settings);
-        let channels = context.channels.max(1);
+        let channels = sanitize_channels(context.channels);
 
         let needs_reset = self
             .state
@@ -248,32 +249,11 @@ fn build_limit_settings(settings: &LimiterSettings) -> LimitSettings {
 
 fn sanitize_settings(settings: &LimiterSettings) -> LimiterSettings {
     LimiterSettings {
-        threshold_db: sanitize_threshold_db(settings.threshold_db),
-        knee_width_db: sanitize_knee_width_db(settings.knee_width_db),
-        attack_ms: sanitize_time_ms(settings.attack_ms, DEFAULT_ATTACK_MS),
-        release_ms: sanitize_time_ms(settings.release_ms, DEFAULT_RELEASE_MS),
+        threshold_db: sanitize_finite_max(settings.threshold_db, DEFAULT_THRESHOLD_DB, 0.0),
+        knee_width_db: sanitize_finite_min(settings.knee_width_db, DEFAULT_KNEE_WIDTH_DB, 0.1),
+        attack_ms: sanitize_finite_min(settings.attack_ms, DEFAULT_ATTACK_MS, 0.0),
+        release_ms: sanitize_finite_min(settings.release_ms, DEFAULT_RELEASE_MS, 0.0),
     }
-}
-
-fn sanitize_threshold_db(value: f32) -> f32 {
-    if !value.is_finite() {
-        return DEFAULT_THRESHOLD_DB;
-    }
-    value.min(0.0)
-}
-
-fn sanitize_knee_width_db(value: f32) -> f32 {
-    if !value.is_finite() {
-        return DEFAULT_KNEE_WIDTH_DB;
-    }
-    value.max(0.1)
-}
-
-fn sanitize_time_ms(value: f32, fallback: f32) -> f32 {
-    if !value.is_finite() {
-        return fallback;
-    }
-    value.max(0.0)
 }
 
 #[cfg(test)]
