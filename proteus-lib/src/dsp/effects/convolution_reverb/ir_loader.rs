@@ -70,8 +70,8 @@ pub(super) fn build_reverb_with_impulse_response(
     let impulse_spec = impulse_spec?;
 
     use self::impulse_response::{
-        ImpulseResponseError, load_impulse_response_from_file_with_tail,
-        load_impulse_response_from_prot_attachment_with_tail,
+        load_impulse_response_from_file_with_tail,
+        load_impulse_response_from_prot_attachment_with_tail, ImpulseResponseError,
     };
 
     #[derive(Debug)]

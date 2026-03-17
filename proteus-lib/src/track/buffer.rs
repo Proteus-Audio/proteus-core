@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
-use crate::audio::buffer::{buffer_remaining_space, TrackBufferMap};
+use crate::audio::buffer::TrackBufferMap;
 
 /// Push samples into the per-track ring buffer, blocking when full.
 pub fn add_samples_to_buffer_map(

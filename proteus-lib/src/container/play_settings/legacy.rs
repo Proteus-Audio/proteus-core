@@ -6,7 +6,7 @@ use super::PlaySettingsContainer;
 
 /// Top-level wrapper for legacy settings files.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PlaySettingsLegacyFile {
+pub(crate) struct PlaySettingsLegacyFile {
     /// The legacy settings payload, which may be nested or flat.
     #[serde(flatten)]
     pub settings: PlaySettingsContainer<PlaySettingsLegacy>,
@@ -14,7 +14,7 @@ pub struct PlaySettingsLegacyFile {
 
 /// Legacy settings payload (tracks only).
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PlaySettingsLegacy {
+pub(crate) struct PlaySettingsLegacy {
     /// Per-track legacy settings read from the container.
     #[serde(default)]
     pub tracks: Vec<PlaySettingsTrackLegacy>,
@@ -22,7 +22,7 @@ pub struct PlaySettingsLegacy {
 
 /// Legacy per-track settings.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PlaySettingsTrackLegacy {
+pub(crate) struct PlaySettingsTrackLegacy {
     /// Index of the first take to use for this track.
     #[serde(rename = "startingIndex")]
     pub starting_index: Option<u32>,
