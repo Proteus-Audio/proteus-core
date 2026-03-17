@@ -9,7 +9,6 @@ use std::time::Instant;
 
 use log::{debug, warn};
 use symphonia::core::codecs::CODEC_TYPE_NULL;
-use symphonia::core::errors::Error;
 use symphonia::core::formats::{SeekMode, SeekTo};
 use symphonia::core::units::Time;
 
@@ -17,9 +16,7 @@ use crate::tools::decode::open_file;
 
 use super::super::super::buffer_mixer::{DecodeBackpressure, SourceKey};
 use super::super::super::decoder_events::DecodeWorkerEvent;
-use super::{
-    forward_decoded_packet, interleaved_samples, packet_ts_seconds, ForwardInfra, StartupLog,
-};
+use super::{decode_and_forward_packet, packet_ts_seconds, ForwardInfra, StartupLog};
 
 /// Spawn a decode worker for one standalone audio file source.
 pub(crate) fn spawn_file_decode_worker(
@@ -68,6 +65,7 @@ fn run_file_decode_worker(
         &sender,
     );
     let infra = ForwardInfra {
+        worker_label: "file",
         sender: &sender,
         decode_backpressure: decode_backpressure.as_ref(),
         abort: abort.as_ref(),
@@ -189,46 +187,10 @@ fn decode_file_packets(
         }
 
         let packet_ts = packet_ts_seconds(packet.ts(), time_base, sample_rate, start_time);
-        if !decode_and_forward_file_packet(
+        if !decode_and_forward_packet(
             decoder, &packet, channels, source_key, &infra, &mut log, packet_ts,
         ) {
             break;
-        }
-    }
-}
-
-fn decode_and_forward_file_packet(
-    decoder: &mut Box<dyn symphonia::core::codecs::Decoder>,
-    packet: &symphonia::core::formats::Packet,
-    channels: u8,
-    source_key: &SourceKey,
-    infra: &ForwardInfra<'_>,
-    log: &mut StartupLog,
-    packet_ts: f64,
-) -> bool {
-    match decoder.decode(packet) {
-        Ok(decoded) => {
-            let samples = interleaved_samples(decoded, channels);
-            if samples.is_empty() {
-                return true;
-            }
-            forward_decoded_packet("file", source_key.clone(), packet_ts, samples, infra, log)
-        }
-        Err(Error::DecodeError(err)) => {
-            let _ = infra.sender.send(DecodeWorkerEvent::SourceError {
-                source_key: source_key.clone(),
-                recoverable: true,
-                message: err.to_string(),
-            });
-            true
-        }
-        Err(err) => {
-            let _ = infra.sender.send(DecodeWorkerEvent::SourceError {
-                source_key: source_key.clone(),
-                recoverable: false,
-                message: err.to_string(),
-            });
-            false
         }
     }
 }

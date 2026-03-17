@@ -10,15 +10,12 @@ use std::time::Instant;
 
 use log::{error, warn};
 use symphonia::core::codecs::{Decoder, DecoderOptions};
-use symphonia::core::errors::Error;
 use symphonia::core::formats::{SeekMode, SeekTo};
 use symphonia::core::units::{Time, TimeBase};
 
 use super::super::super::buffer_mixer::{DecodeBackpressure, SourceKey};
 use super::super::super::decoder_events::DecodeWorkerEvent;
-use super::{
-    forward_decoded_packet, interleaved_samples, packet_ts_seconds, ForwardInfra, StartupLog,
-};
+use super::{decode_and_forward_packet, packet_ts_seconds, ForwardInfra, StartupLog};
 
 /// Spawn a single demux decode worker that services multiple container track ids.
 pub(crate) fn spawn_container_decode_worker(
@@ -66,6 +63,7 @@ fn run_container_decode_worker(
 
     seek_container_reader(format.as_mut(), start_time, &file_path, &sender, &decoders);
     let infra = ForwardInfra {
+        worker_label: "container",
         sender: &sender,
         decode_backpressure: decode_backpressure.as_ref(),
         abort: abort.as_ref(),
@@ -213,59 +211,23 @@ fn decode_container_packets(
             continue;
         };
 
+        let source_key = SourceKey::TrackId(track_id);
         let packet_ts = packet_ts_seconds(
             packet.ts(),
             time_bases.get(&track_id).copied().flatten(),
             sample_rates.get(&track_id).copied().flatten(),
             start_time,
         );
-        if !decode_and_forward_container_packet(
-            decoder, &packet, track_id, channels, &infra, &mut log, packet_ts,
+        if !decode_and_forward_packet(
+            decoder,
+            &packet,
+            channels,
+            &source_key,
+            &infra,
+            &mut log,
+            packet_ts,
         ) {
             break;
-        }
-    }
-}
-
-fn decode_and_forward_container_packet(
-    decoder: &mut Box<dyn Decoder>,
-    packet: &symphonia::core::formats::Packet,
-    track_id: u32,
-    channels: u8,
-    infra: &ForwardInfra<'_>,
-    log: &mut StartupLog,
-    packet_ts: f64,
-) -> bool {
-    match decoder.decode(packet) {
-        Ok(decoded) => {
-            let samples = interleaved_samples(decoded, channels);
-            if samples.is_empty() {
-                return true;
-            }
-            forward_decoded_packet(
-                "container",
-                SourceKey::TrackId(track_id),
-                packet_ts,
-                samples,
-                infra,
-                log,
-            )
-        }
-        Err(Error::DecodeError(err)) => {
-            let _ = infra.sender.send(DecodeWorkerEvent::SourceError {
-                source_key: SourceKey::TrackId(track_id),
-                recoverable: true,
-                message: err.to_string(),
-            });
-            true
-        }
-        Err(err) => {
-            let _ = infra.sender.send(DecodeWorkerEvent::SourceError {
-                source_key: SourceKey::TrackId(track_id),
-                recoverable: false,
-                message: err.to_string(),
-            });
-            false
         }
     }
 }
