@@ -4,7 +4,10 @@
 
 | File | Notes |
 |---|---|
-| `proteus-lib/src/playback/engine/premix.rs` | `PremixBuffer::pop_chunk` drains from the front of a `VecDeque` and collects into a new `Vec` on every chunk |
+| `proteus-lib/src/playback/engine/premix.rs` | Replaced `VecDeque<f32>` with `Vec<f32>` + head/tail indices; added `pop_chunk_into` and `compact()` |
+| `proteus-lib/src/playback/engine/mod.rs` | Declared `premix` as a `pub(crate)` module |
+| `proteus-lib/src/playback/engine/mix/runner/state.rs` | Changed `pending_mix_samples` from `Vec<f32>` to `PremixBuffer` |
+| `proteus-lib/src/playback/engine/mix/runner/loop_body.rs` | Replaced `drain(0..batch).collect()` and `extend_from_slice` with `pop_chunk` and `push_interleaved` |
 
 ---
 
@@ -40,11 +43,11 @@ the front.
 
 ### Acceptance criteria
 
-- [ ] `PremixBuffer::pop_chunk` no longer relies on `VecDeque::drain(0..take)`
-- [ ] The premix buffer uses O(1) amortized front-consumption semantics
-- [ ] Ordering and partial-chunk behavior are covered by tests
-- [ ] Chunk pop semantics remain identical to the current buffer from the caller's perspective
+- [x] `PremixBuffer::pop_chunk` no longer relies on `VecDeque::drain(0..take)`
+- [x] The premix buffer uses O(1) amortized front-consumption semantics
+- [x] Ordering and partial-chunk behavior are covered by tests
+- [x] Chunk pop semantics remain identical to the current buffer from the caller's perspective
 
 ## Status
 
-Open.
+Done.
