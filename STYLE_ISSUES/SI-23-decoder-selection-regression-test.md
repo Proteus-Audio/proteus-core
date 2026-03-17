@@ -31,10 +31,10 @@ test that proves this remains correct.
 
 ### Acceptance criteria
 
-- [ ] A regression test covers a container where the first listed track is not the first decodable audio track
-- [ ] The test fails if decoder selection regresses to `tracks()[0]`
-- [ ] Unsupported-track-only input still returns the typed `NoSupportedAudioTrack` error
+- [x] A regression test covers a container where the first listed track is not the first decodable audio track
+- [x] The test fails if decoder selection regresses to `tracks()[0]`
+- [x] Unsupported-track-only input still returns the typed `NoSupportedAudioTrack` error
 
 ## Status
 
-Open.
+Done.
