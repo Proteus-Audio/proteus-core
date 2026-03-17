@@ -9,6 +9,7 @@ use std::time::Instant;
 
 use log::{debug, warn};
 use symphonia::core::codecs::CODEC_TYPE_NULL;
+use symphonia::core::errors::Error;
 use symphonia::core::formats::{SeekMode, SeekTo};
 use symphonia::core::units::Time;
 

@@ -41,6 +41,7 @@ pub(crate) fn lock_recoverable<'a, T>(
     recover_poison(mutex.lock(), label, rationale)
 }
 
+#[allow(dead_code)]
 pub(crate) fn wait_recoverable<'a, T>(
     condvar: &Condvar,
     guard: MutexGuard<'a, T>,
@@ -71,8 +72,11 @@ pub(crate) fn wait_timeout_recoverable<'a, T>(
 #[cfg(test)]
 mod tests {
     use std::sync::{Arc, Condvar, Mutex};
+    use std::time::Duration;
 
-    use super::{lock_invariant, lock_recoverable, wait_recoverable};
+    use super::{
+        lock_invariant, lock_recoverable, wait_recoverable, wait_timeout_recoverable,
+    };
 
     #[test]
     fn lock_recoverable_returns_inner_after_poison() {
@@ -112,6 +116,29 @@ mod tests {
         let guard = wait_recoverable(cv, guard, "test condvar", "the flag is disposable");
         notifier.join().expect("notifier thread should complete");
         assert!(*guard);
+    }
+
+    #[test]
+    fn wait_timeout_recoverable_returns_inner_after_poison() {
+        let pair = Arc::new((Mutex::new(false), Condvar::new()));
+        let clone = Arc::clone(&pair);
+        let _ = std::thread::spawn(move || {
+            let (lock, _cv) = &*clone;
+            let _guard = lock.lock().expect("test mutex should lock");
+            panic!("poison recoverable timed condvar mutex");
+        })
+        .join();
+
+        let (lock, cv) = &*pair;
+        let guard = lock_recoverable(lock, "test timed condvar", "the flag is disposable");
+        let (guard, _timeout) = wait_timeout_recoverable(
+            cv,
+            guard,
+            Duration::from_millis(1),
+            "test timed condvar",
+            "the flag is disposable",
+        );
+        assert!(!*guard);
     }
 
     #[test]

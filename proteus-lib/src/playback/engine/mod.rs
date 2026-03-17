@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU64;
-use std::sync::{mpsc::Receiver, Arc, Condvar, Mutex};
+use std::sync::{mpsc::Receiver, Arc, Condvar, Mutex, MutexGuard};
 use std::thread::JoinHandle;
 
 use rodio::buffer::SamplesBuffer;
@@ -12,6 +12,7 @@ use log::warn;
 
 use crate::audio::buffer::{init_buffer_map, TrackBuffer};
 use crate::container::prot::Prot;
+use crate::playback::mutex_policy::{lock_invariant, lock_recoverable};
 
 mod mix;
 pub(crate) mod premix;
@@ -119,15 +120,17 @@ impl PlayerEngine {
         let finished_tracks: Arc<Mutex<Vec<u16>>> = Arc::new(Mutex::new(Vec::new()));
         let abort = abort_option.unwrap_or_else(|| Arc::new(AtomicBool::new(false)));
 
-        let prot_unlocked = prot
-            .lock()
-            .unwrap_or_else(|_| panic!("prot lock poisoned — a thread panicked while holding it"));
-        let start_buffer_ms = buffer_settings
-            .lock()
-            .unwrap_or_else(|_| {
-                panic!("buffer settings lock poisoned — a thread panicked while holding it")
-            })
-            .start_buffer_ms;
+        let prot_unlocked = lock_invariant(
+            &prot,
+            "player engine prot",
+            "container selection and routing metadata must stay coherent",
+        );
+        let start_buffer_ms = lock_recoverable(
+            &buffer_settings,
+            "player engine buffer settings",
+            "buffer settings are runtime configuration snapshots",
+        )
+        .start_buffer_ms;
         let channels = prot_unlocked.info.channels as usize;
         let _start_samples = ((prot_unlocked.info.sample_rate as f32 * start_buffer_ms) / 1000.0)
             as usize
@@ -156,10 +159,7 @@ impl PlayerEngine {
 
     /// Start the output loop and invoke `f` for each mixed chunk.
     pub fn run_output_loop(&mut self, f: &dyn Fn((SamplesBuffer, f64))) {
-        let prot = self
-            .prot
-            .lock()
-            .unwrap_or_else(|_| panic!("prot lock poisoned — a thread panicked while holding it"));
+        let prot = self.lock_prot_invariant();
         let keys = prot.get_keys();
         drop(prot);
         self.ready_buffer_map(&keys);
@@ -178,10 +178,7 @@ impl PlayerEngine {
 
     /// Start mixing and return a receiver for `(buffer, duration)` chunks.
     pub fn start_receiver(&mut self) -> Receiver<(SamplesBuffer, f64)> {
-        let prot = self
-            .prot
-            .lock()
-            .unwrap_or_else(|_| panic!("prot lock poisoned — a thread panicked while holding it"));
+        let prot = self.lock_prot_invariant();
         let keys = prot.get_keys();
         drop(prot);
         self.ready_buffer_map(&keys);
@@ -189,10 +186,7 @@ impl PlayerEngine {
     }
 
     fn spawn_mix_receiver(&mut self) -> Receiver<(SamplesBuffer, f64)> {
-        let prot = self
-            .prot
-            .lock()
-            .unwrap_or_else(|_| panic!("prot lock poisoned — a thread panicked while holding it"));
+        let prot = self.lock_prot_invariant();
         let audio_info = prot.info.clone();
         drop(prot);
 
@@ -217,52 +211,25 @@ impl PlayerEngine {
 
     /// Get the total duration (seconds) of the active selection.
     pub fn get_duration(&self) -> f64 {
-        let prot = self
-            .prot
-            .lock()
-            .unwrap_or_else(|_| panic!("prot lock poisoned — a thread panicked while holding it"));
+        let prot = self.lock_prot_invariant();
         *prot.get_duration()
     }
 
     /// Get finished engine track keys as a detached snapshot.
     pub fn finished_track_keys(&self) -> Vec<u16> {
-        self.finished_tracks
-            .lock()
-            .unwrap_or_else(|_| {
-                panic!("finished tracks lock poisoned — a thread panicked while holding it")
-            })
-            .clone()
+        self.lock_finished_tracks_recoverable().clone()
     }
 
     fn ready_buffer_map(&mut self, keys: &[u32]) {
         self.buffer_map = init_buffer_map();
-        self.track_weights
-            .lock()
-            .unwrap_or_else(|_| {
-                panic!("track weights lock poisoned — a thread panicked while holding it")
-            })
-            .clear();
-        self.track_channel_gains
-            .lock()
-            .unwrap_or_else(|_| {
-                panic!("track channel gains lock poisoned — a thread panicked while holding it")
-            })
-            .clear();
+        self.lock_track_weights_recoverable().clear();
+        self.lock_track_channel_gains_recoverable().clear();
 
-        let prot = self
-            .prot
-            .lock()
-            .unwrap_or_else(|_| panic!("prot lock poisoned — a thread panicked while holding it"));
+        let prot = self.lock_prot_invariant();
         let sample_rate = prot.info.sample_rate;
         let channels = prot.info.channels as usize;
         let track_mix_settings = prot.get_track_mix_settings();
-        let start_buffer_ms = self
-            .buffer_settings
-            .lock()
-            .unwrap_or_else(|_| {
-                panic!("buffer settings lock poisoned — a thread panicked while holding it")
-            })
-            .start_buffer_ms;
+        let start_buffer_ms = self.lock_buffer_settings_recoverable().start_buffer_ms;
         drop(prot);
         let start_samples = ((sample_rate as f32 * start_buffer_ms) / 1000.0) as usize * channels;
         let buffer_size = (sample_rate as usize * 10).max(start_samples * 2);
@@ -279,41 +246,24 @@ impl PlayerEngine {
                     0.0;
                     buffer_size
                 ])));
-            self.buffer_map
-                .lock()
-                .unwrap_or_else(|_| {
-                    panic!("buffer map lock poisoned — a thread panicked while holding it")
-                })
+            self.lock_buffer_map_recoverable()
                 .insert(track_key, ring_buffer);
-            self.track_weights
-                .lock()
-                .unwrap_or_else(|_| {
-                    panic!("track weights lock poisoned — a thread panicked while holding it")
-                })
+            self.lock_track_weights_recoverable()
                 .insert(track_key, 1.0);
             let (level, pan) = track_mix_settings
                 .get(&track_key)
                 .copied()
                 .unwrap_or((1.0, 0.0));
             let gains = compute_track_channel_gains(level, pan, channels);
-            self.track_channel_gains
-                .lock()
-                .unwrap_or_else(|_| {
-                    panic!("track channel gains lock poisoned — a thread panicked while holding it")
-                })
+            self.lock_track_channel_gains_recoverable()
                 .insert(track_key, gains);
         }
     }
 
     /// Return true if all tracks have reported end-of-stream.
     pub fn finished_buffering(&self) -> bool {
-        let finished_tracks = self.finished_tracks.lock().unwrap_or_else(|_| {
-            panic!("finished tracks lock poisoned — a thread panicked while holding it")
-        });
-        let prot = self
-            .prot
-            .lock()
-            .unwrap_or_else(|_| panic!("prot lock poisoned — a thread panicked while holding it"));
+        let finished_tracks = self.lock_finished_tracks_recoverable();
+        let prot = self.lock_prot_invariant();
         let keys = prot.get_keys();
         drop(prot);
 
@@ -331,6 +281,62 @@ impl PlayerEngine {
         }
 
         true
+    }
+
+    /// Invariant-only poison policy: engine container metadata must remain coherent.
+    fn lock_prot_invariant(&self) -> MutexGuard<'_, Prot> {
+        lock_invariant(
+            &self.prot,
+            "player engine prot",
+            "container selection and routing metadata must stay coherent",
+        )
+    }
+
+    /// Recoverable poison policy: engine buffer settings are runtime configuration snapshots.
+    fn lock_buffer_settings_recoverable(&self) -> MutexGuard<'_, PlaybackBufferSettings> {
+        lock_recoverable(
+            &self.buffer_settings,
+            "player engine buffer settings",
+            "buffer settings are runtime configuration snapshots",
+        )
+    }
+
+    /// Recoverable poison policy: finished-track bookkeeping is rebuildable runtime state.
+    fn lock_finished_tracks_recoverable(&self) -> MutexGuard<'_, Vec<u16>> {
+        lock_recoverable(
+            &self.finished_tracks,
+            "player engine finished tracks",
+            "finished-track bookkeeping is rebuildable runtime state",
+        )
+    }
+
+    /// Recoverable poison policy: the engine buffer map is rebuildable runtime state.
+    fn lock_buffer_map_recoverable(&self) -> MutexGuard<'_, HashMap<u16, TrackBuffer>> {
+        lock_recoverable(
+            &self.buffer_map,
+            "player engine buffer map",
+            "per-track sample buffers are rebuildable runtime state",
+        )
+    }
+
+    /// Recoverable poison policy: track weights are runtime mix configuration snapshots.
+    fn lock_track_weights_recoverable(&self) -> MutexGuard<'_, HashMap<u16, f32>> {
+        lock_recoverable(
+            &self.track_weights,
+            "player engine track weights",
+            "track weights are runtime mix configuration snapshots",
+        )
+    }
+
+    /// Recoverable poison policy: per-track channel gains are derived runtime mix state.
+    fn lock_track_channel_gains_recoverable(
+        &self,
+    ) -> MutexGuard<'_, HashMap<u16, Vec<f32>>> {
+        lock_recoverable(
+            &self.track_channel_gains,
+            "player engine track channel gains",
+            "per-track channel gains are derived runtime mix state",
+        )
     }
 }
 

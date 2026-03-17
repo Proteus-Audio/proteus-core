@@ -91,11 +91,11 @@ impl super::core::DspEffect for PanEffect {
         context: &EffectContext,
         _drain: bool,
     ) {
-        if !self.enabled || input.is_empty() || context.channels != 2 {
+        if !self.enabled || input.is_empty() || context.channels() != 2 {
             output.extend_from_slice(input);
             return;
         }
-        let pan = sanitize_pan(self.settings.pan);
+        let pan = sanitize_finite_clamped(self.settings.pan, DEFAULT_PAN, -1.0, 1.0);
         let theta =
             ((pan + 1.0) * std::f32::consts::FRAC_PI_4).clamp(0.0, std::f32::consts::FRAC_PI_2);
         let left_gain = theta.cos();

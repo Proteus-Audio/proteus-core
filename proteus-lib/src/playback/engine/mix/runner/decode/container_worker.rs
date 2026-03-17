@@ -10,6 +10,7 @@ use std::time::Instant;
 
 use log::{error, warn};
 use symphonia::core::codecs::{Decoder, DecoderOptions};
+use symphonia::core::errors::Error;
 use symphonia::core::formats::{SeekMode, SeekTo};
 use symphonia::core::units::{Time, TimeBase};
 
