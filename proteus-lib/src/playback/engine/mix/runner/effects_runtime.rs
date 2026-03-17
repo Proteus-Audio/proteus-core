@@ -320,11 +320,12 @@ fn rebuild_effect_context(
     let prot = prot_locked
         .lock()
         .unwrap_or_else(|_| panic!("prot lock poisoned — a thread panicked while holding it"));
-    EffectContext {
-        sample_rate: prot.info.sample_rate,
-        channels: prot.info.channels as usize,
-        container_path: prot.get_container_path(),
-        impulse_response_spec: prot.get_impulse_response_spec(),
-        impulse_response_tail_db: prot.get_impulse_response_tail_db().unwrap_or(-60.0),
-    }
+    EffectContext::new(
+        prot.info.sample_rate,
+        prot.info.channels as usize,
+        prot.get_container_path(),
+        prot.get_impulse_response_spec(),
+        prot.get_impulse_response_tail_db().unwrap_or(-60.0),
+    )
+    .expect("prot info must have valid sample rate and channel count")
 }

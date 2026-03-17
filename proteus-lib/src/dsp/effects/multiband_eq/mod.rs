@@ -221,13 +221,13 @@ impl super::core::DspEffect for MultibandEqEffect {
 
 impl MultibandEqEffect {
     fn ensure_state(&mut self, context: &EffectContext) {
-        let channels = context.channels.max(1);
+        let channels = context.channels().max(1);
         let points = self
             .settings
             .points
             .iter()
             .map(|point| EqPointParams {
-                freq_hz: sanitize_freq(point.freq_hz, context.sample_rate),
+                freq_hz: sanitize_freq(point.freq_hz, context.sample_rate()),
                 q: sanitize_q(point.q),
                 gain_db: sanitize_gain_db(point.gain_db),
             })
@@ -237,19 +237,19 @@ impl MultibandEqEffect {
             .settings
             .low_edge
             .as_ref()
-            .map(|edge| sanitize_low_edge(edge, context.sample_rate));
+            .map(|edge| sanitize_low_edge(edge, context.sample_rate()));
         let high_edge = self
             .settings
             .high_edge
             .as_ref()
-            .map(|edge| sanitize_high_edge(edge, context.sample_rate));
+            .map(|edge| sanitize_high_edge(edge, context.sample_rate()));
 
         let needs_reset = self
             .state
             .as_ref()
             .map(|state| {
                 state.matches(
-                    context.sample_rate,
+                    context.sample_rate(),
                     channels,
                     &points,
                     &low_edge,
@@ -261,7 +261,7 @@ impl MultibandEqEffect {
 
         if needs_reset {
             self.state = Some(MultibandEqState::new(
-                context.sample_rate,
+                context.sample_rate(),
                 channels,
                 points,
                 low_edge,
@@ -335,13 +335,7 @@ mod tests {
     use super::*;
 
     fn context() -> EffectContext {
-        EffectContext {
-            sample_rate: 48_000,
-            channels: 2,
-            container_path: None,
-            impulse_response_spec: None,
-            impulse_response_tail_db: -60.0,
-        }
+        EffectContext::new(48_000, 2, None, None, -60.0).unwrap()
     }
 
     #[test]

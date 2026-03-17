@@ -114,16 +114,16 @@ impl super::core::DspEffect for LimiterEffect {
 impl LimiterEffect {
     fn ensure_state(&mut self, context: &EffectContext) {
         let settings = sanitize_settings(&self.settings);
-        let channels = context.channels.max(1);
+        let channels = context.channels().max(1);
 
         let needs_reset = self
             .state
             .as_ref()
-            .map(|state| !state.matches(context.sample_rate, channels, &settings))
+            .map(|state| !state.matches(context.sample_rate(), channels, &settings))
             .unwrap_or(true);
 
         if needs_reset {
-            self.state = Some(LimiterState::new(context.sample_rate, channels, settings));
+            self.state = Some(LimiterState::new(context.sample_rate(), channels, settings));
         }
     }
 }
@@ -282,13 +282,7 @@ mod tests {
     use super::*;
 
     fn context(channels: usize) -> EffectContext {
-        EffectContext {
-            sample_rate: 48_000,
-            channels,
-            container_path: None,
-            impulse_response_spec: None,
-            impulse_response_tail_db: -60.0,
-        }
+        EffectContext::new(48_000, channels, None, None, -60.0).unwrap()
     }
 
     fn approx_eq(a: f32, b: f32, eps: f32) -> bool {

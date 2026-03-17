@@ -62,13 +62,7 @@ mod tests {
     fn default_warm_up_is_noop_and_trait_methods_work() {
         let mut effect = DummyEffect::default();
 
-        let context = super::EffectContext {
-            sample_rate: 48_000,
-            channels: 2,
-            container_path: None,
-            impulse_response_spec: None,
-            impulse_response_tail_db: -60.0,
-        };
+        let context = super::EffectContext::new(48_000, 2, None, None, -60.0).unwrap();
 
         let out = effect.process(&[0.1, 0.2, 0.3, 0.4], &context, false);
         assert_eq!(out, vec![0.1, 0.2, 0.3, 0.4]);

@@ -186,17 +186,17 @@ impl ConvolutionReverbEffect {
                     .as_deref()
                     .and_then(parse_impulse_response_string)
             })
-            .or_else(|| context.impulse_response_spec.clone());
+            .or_else(|| context.impulse_response_spec().cloned());
 
         let tail_db = self
             .settings
             .impulse_response_tail_db
             .or(self.settings.impulse_response_tail)
-            .unwrap_or(context.impulse_response_tail_db);
+            .unwrap_or(context.impulse_response_tail_db());
 
         ResolvedConfig {
-            channels: context.channels,
-            container_path: context.container_path.clone(),
+            channels: context.channels(),
+            container_path: context.container_path().map(String::from),
             impulse_spec,
             tail_db,
         }
@@ -367,13 +367,7 @@ mod tests {
         let mut effect = ConvolutionReverbEffect::default();
         effect.enabled = false;
         let input = vec![0.2_f32, -0.2, 0.1, -0.1];
-        let context = EffectContext {
-            sample_rate: 48_000,
-            channels: 2,
-            container_path: None,
-            impulse_response_spec: None,
-            impulse_response_tail_db: -60.0,
-        };
+        let context = EffectContext::new(48_000, 2, None, None, -60.0).unwrap();
         let output = effect.process(&input, &context, false);
         assert_eq!(output, input);
     }

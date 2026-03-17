@@ -145,10 +145,10 @@ impl CompressorEffect {
         let attack_ms = sanitize_time_ms(self.settings.attack_ms, DEFAULT_ATTACK_MS);
         let release_ms = sanitize_time_ms(self.settings.release_ms, DEFAULT_RELEASE_MS);
         let makeup_gain_db = sanitize_makeup_db(self.settings.makeup_gain_db);
-        let channels = context.channels.max(1);
+        let channels = context.channels().max(1);
 
         let params = CompressorParams {
-            sample_rate: context.sample_rate,
+            sample_rate: context.sample_rate(),
             channels,
             threshold_db,
             ratio,
@@ -284,13 +284,7 @@ mod tests {
     use crate::dsp::effects::{EffectContext, core::DspEffect};
 
     fn context(channels: usize) -> EffectContext {
-        EffectContext {
-            sample_rate: 48_000,
-            channels,
-            container_path: None,
-            impulse_response_spec: None,
-            impulse_response_tail_db: -60.0,
-        }
+        EffectContext::new(48_000, channels, None, None, -60.0).unwrap()
     }
 
     fn approx_eq(a: f32, b: f32, eps: f32) -> bool {

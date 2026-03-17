@@ -78,13 +78,7 @@ mod tests {
     use rodio::math::db_to_linear;
 
     fn context() -> EffectContext {
-        EffectContext {
-            sample_rate: 44_100,
-            channels: 1,
-            container_path: None,
-            impulse_response_spec: None,
-            impulse_response_tail_db: -60.0,
-        }
+        EffectContext::new(44_100, 1, None, None, -60.0).unwrap()
     }
 
     #[test]

@@ -88,8 +88,8 @@ impl HighPassFilterEffect {
             .map(|state| {
                 !state.matches(
                     BiquadKind::HighPass,
-                    context.sample_rate,
-                    context.channels,
+                    context.sample_rate(),
+                    context.channels(),
                     self.settings.freq_hz,
                     self.settings.q,
                 )
@@ -99,8 +99,8 @@ impl HighPassFilterEffect {
         if needs_reset {
             self.state = Some(BiquadState::new(
                 BiquadKind::HighPass,
-                context.sample_rate,
-                context.channels,
+                context.sample_rate(),
+                context.channels(),
                 self.settings.freq_hz,
                 self.settings.q,
             ));
@@ -114,13 +114,7 @@ mod tests {
     use super::*;
 
     fn context() -> EffectContext {
-        EffectContext {
-            sample_rate: 48_000,
-            channels: 2,
-            container_path: None,
-            impulse_response_spec: None,
-            impulse_response_tail_db: -60.0,
-        }
+        EffectContext::new(48_000, 2, None, None, -60.0).unwrap()
     }
 
     #[test]

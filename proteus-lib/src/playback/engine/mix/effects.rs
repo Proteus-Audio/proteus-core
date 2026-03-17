@@ -35,13 +35,7 @@ mod tests {
     fn run_effect_chain_passthrough_when_empty() {
         let mut effects = Vec::new();
         let input = vec![0.25_f32, -0.25];
-        let context = EffectContext {
-            sample_rate: 48_000,
-            channels: 2,
-            container_path: None,
-            impulse_response_spec: None,
-            impulse_response_tail_db: -60.0,
-        };
+        let context = EffectContext::new(48_000, 2, None, None, -60.0).unwrap();
         let output = run_effect_chain(&mut effects, &input, &context, false);
         assert_eq!(output, input);
     }

@@ -131,8 +131,8 @@ impl DelayReverbEffect {
 
     fn ensure_state(&mut self, context: &EffectContext) {
         let delay_samples = delay_samples(
-            context.sample_rate,
-            context.channels,
+            context.sample_rate(),
+            context.channels(),
             self.settings.duration_ms,
         );
         let needs_reset = self
@@ -228,13 +228,7 @@ mod tests {
     use crate::dsp::effects::core::DspEffect;
 
     fn context() -> EffectContext {
-        EffectContext {
-            sample_rate: 48_000,
-            channels: 2,
-            container_path: None,
-            impulse_response_spec: None,
-            impulse_response_tail_db: -60.0,
-        }
+        EffectContext::new(48_000, 2, None, None, -60.0).unwrap()
     }
 
     #[test]

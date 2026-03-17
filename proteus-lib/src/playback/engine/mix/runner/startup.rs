@@ -110,13 +110,14 @@ fn prepare_runtime_startup(
     RuntimeStartup {
         instance_plan: p.build_runtime_instance_plan(start_time),
         container_path: p.get_container_path(),
-        effect_context: EffectContext {
-            sample_rate: p.info.sample_rate,
-            channels: p.info.channels as usize,
-            container_path: p.get_container_path(),
-            impulse_response_spec: p.get_impulse_response_spec(),
-            impulse_response_tail_db: p.get_impulse_response_tail_db().unwrap_or(-60.0),
-        },
+        effect_context: EffectContext::new(
+            p.info.sample_rate,
+            p.info.channels as usize,
+            p.get_container_path(),
+            p.get_impulse_response_spec(),
+            p.get_impulse_response_tail_db().unwrap_or(-60.0),
+        )
+        .expect("prot info must have valid sample rate and channel count"),
         track_mix_settings_by_slot: p.get_track_mix_settings(),
     }
 }

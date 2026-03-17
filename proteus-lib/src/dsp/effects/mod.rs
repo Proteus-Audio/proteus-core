@@ -40,19 +40,96 @@ pub use multiband_eq::{
 };
 pub use pan::{PanEffect, PanSettings};
 
+/// Error returned when constructing an [`EffectContext`] with invalid parameters.
+#[derive(Debug, Clone)]
+pub enum EffectContextError {
+    /// Sample rate must be greater than zero.
+    ZeroSampleRate,
+    /// Channel count must be at least one.
+    ZeroChannels,
+}
+
+impl std::fmt::Display for EffectContextError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::ZeroSampleRate => write!(f, "sample rate must be greater than zero"),
+            Self::ZeroChannels => write!(f, "channel count must be at least one"),
+        }
+    }
+}
+
+impl std::error::Error for EffectContextError {}
+
 /// Shared context for preparing and running DSP effects.
 #[derive(Debug, Clone)]
 pub struct EffectContext {
+    sample_rate: u32,
+    channels: usize,
+    container_path: Option<String>,
+    impulse_response_spec: Option<ImpulseResponseSpec>,
+    impulse_response_tail_db: f32,
+}
+
+impl EffectContext {
+    /// Create a new effect context after validating invariants.
+    ///
+    /// # Arguments
+    ///
+    /// * `sample_rate` - Sample rate of the audio stream in Hz; must be > 0.
+    /// * `channels` - Number of interleaved audio channels; must be >= 1.
+    /// * `container_path` - Optional path to the loaded container file.
+    /// * `impulse_response_spec` - Optional IR spec for convolution reverb.
+    /// * `impulse_response_tail_db` - dB level below peak for tail silence detection.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EffectContextError`] if `sample_rate` is zero or `channels` is zero.
+    pub fn new(
+        sample_rate: u32,
+        channels: usize,
+        container_path: Option<String>,
+        impulse_response_spec: Option<ImpulseResponseSpec>,
+        impulse_response_tail_db: f32,
+    ) -> Result<Self, EffectContextError> {
+        if sample_rate == 0 {
+            return Err(EffectContextError::ZeroSampleRate);
+        }
+        if channels == 0 {
+            return Err(EffectContextError::ZeroChannels);
+        }
+        Ok(Self {
+            sample_rate,
+            channels,
+            container_path,
+            impulse_response_spec,
+            impulse_response_tail_db,
+        })
+    }
+
     /// Sample rate of the audio stream, in Hz.
-    pub sample_rate: u32,
+    pub fn sample_rate(&self) -> u32 {
+        self.sample_rate
+    }
+
     /// Number of interleaved audio channels in each sample buffer.
-    pub channels: usize,
-    /// Filesystem path to the loaded container, used to resolve embedded attachments.
-    pub container_path: Option<String>,
+    pub fn channels(&self) -> usize {
+        self.channels
+    }
+
+    /// Filesystem path to the loaded container, if any.
+    pub fn container_path(&self) -> Option<&str> {
+        self.container_path.as_deref()
+    }
+
     /// Specification for the impulse response used by convolution-reverb effects.
-    pub impulse_response_spec: Option<ImpulseResponseSpec>,
+    pub fn impulse_response_spec(&self) -> Option<&ImpulseResponseSpec> {
+        self.impulse_response_spec.as_ref()
+    }
+
     /// dB level below peak at which the impulse response tail is considered silent.
-    pub impulse_response_tail_db: f32,
+    pub fn impulse_response_tail_db(&self) -> f32 {
+        self.impulse_response_tail_db
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -264,5 +341,60 @@ mod tests {
 
         let decoded: Vec<AudioEffect> = serde_json::from_str(json).expect("deserialize effects");
         assert_eq!(decoded.len(), 12);
+    }
+
+    #[test]
+    fn effect_context_new_valid() {
+        let ctx = EffectContext::new(48_000, 2, None, None, -60.0);
+        assert!(ctx.is_ok());
+        let ctx = ctx.unwrap();
+        assert_eq!(ctx.sample_rate(), 48_000);
+        assert_eq!(ctx.channels(), 2);
+        assert!(ctx.container_path().is_none());
+        assert!(ctx.impulse_response_spec().is_none());
+        assert!((ctx.impulse_response_tail_db() - (-60.0)).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn effect_context_new_with_optional_fields() {
+        let ctx = EffectContext::new(
+            44_100,
+            1,
+            Some("/path/to/file.prot".to_string()),
+            None,
+            -40.0,
+        )
+        .unwrap();
+        assert_eq!(ctx.sample_rate(), 44_100);
+        assert_eq!(ctx.channels(), 1);
+        assert_eq!(ctx.container_path(), Some("/path/to/file.prot"));
+    }
+
+    #[test]
+    fn effect_context_rejects_zero_sample_rate() {
+        let result = EffectContext::new(0, 2, None, None, -60.0);
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            EffectContextError::ZeroSampleRate
+        ));
+    }
+
+    #[test]
+    fn effect_context_rejects_zero_channels() {
+        let result = EffectContext::new(48_000, 0, None, None, -60.0);
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            EffectContextError::ZeroChannels
+        ));
+    }
+
+    #[test]
+    fn effect_context_clone_preserves_validity() {
+        let ctx = EffectContext::new(48_000, 2, None, None, -60.0).unwrap();
+        let cloned = ctx.clone();
+        assert_eq!(cloned.sample_rate(), 48_000);
+        assert_eq!(cloned.channels(), 2);
     }
 }
