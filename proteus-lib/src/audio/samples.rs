@@ -17,11 +17,16 @@ use rodio::{buffer::SamplesBuffer, Source};
 /// assert_eq!(a.count(), b.count());
 /// ```
 pub fn clone_samples_buffer(buffer: SamplesBuffer) -> (SamplesBuffer, SamplesBuffer) {
+    let channels = buffer.channels();
     let sample_rate = buffer.sample_rate();
-    let buffered = buffer.buffered();
-    let vector_samples = buffered.clone().collect::<Vec<f32>>();
-    let clone1 = SamplesBuffer::new(buffered.channels(), sample_rate, vector_samples.clone());
-    let clone2 = SamplesBuffer::new(buffered.channels(), sample_rate, vector_samples);
+
+    // Collect once to extract the owned sample data from the source buffer.
+    let samples: Vec<f32> = buffer.buffered().collect();
+
+    // One clone is unavoidable: two independent `SamplesBuffer`s each need an
+    // owned `Vec<f32>`, so we must duplicate the data exactly once.
+    let clone1 = SamplesBuffer::new(channels, sample_rate, samples.clone());
+    let clone2 = SamplesBuffer::new(channels, sample_rate, samples);
 
     (clone1, clone2)
 }
