@@ -3,8 +3,8 @@
 use rodio::buffer::SamplesBuffer;
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{mpsc::RecvTimeoutError, Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 use log::debug;
 
@@ -16,10 +16,8 @@ use super::guard::PlaybackThreadGuard;
 use super::sink::{append_startup_silence, initialize_sink, update_sink};
 #[cfg(feature = "debug")]
 use super::timing::log_drain_loop_start;
-use super::timing::{
-    mark_buffering_complete, play_trace_elapsed_ms, run_drain_loop, update_chunk_lengths,
-};
-use super::transitions::{apply_end_of_stream_action, check_runtime_state};
+use super::timing::{mark_buffering_complete, play_trace_elapsed_ms, run_drain_loop};
+use super::transitions::apply_end_of_stream_action;
 
 // Per-run mutable state for playback time, buffering, and append timing.
 pub(super) struct LoopState {
@@ -138,7 +136,7 @@ fn run_engine_receive_loop(
         if ctx.abort.load(Ordering::SeqCst) {
             break;
         }
-        match receiver.recv_timeout(Duration::from_millis(20)) {
+        match receiver.recv() {
             Ok(chunk) => {
                 if !logged_first_engine_chunk {
                     logged_first_engine_chunk = true;
@@ -151,13 +149,7 @@ fn run_engine_receive_loop(
                     break;
                 }
             }
-            Err(RecvTimeoutError::Timeout) => {
-                update_chunk_lengths(ctx, loop_state);
-                if !check_runtime_state(ctx, loop_state) {
-                    break;
-                }
-            }
-            Err(RecvTimeoutError::Disconnected) => break,
+            Err(_) => break,
         }
     }
 }

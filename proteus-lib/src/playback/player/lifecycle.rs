@@ -25,6 +25,7 @@ impl Player {
             sink.stop();
         }
         self.abort.store(true, Ordering::SeqCst);
+        self.worker_notify.notify();
 
         while !self.thread_finished() {
             thread::sleep(Duration::from_millis(10));

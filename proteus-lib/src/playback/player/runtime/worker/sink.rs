@@ -205,7 +205,7 @@ pub(super) fn wait_for_sink_capacity(
         if !check_runtime_state(ctx, loop_state) {
             return false;
         }
-        thread::sleep(Duration::from_millis(5));
+        ctx.worker_notify.wait_timeout(Duration::from_millis(20));
     }
 }
 

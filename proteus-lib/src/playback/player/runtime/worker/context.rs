@@ -11,6 +11,7 @@ use crate::playback::engine::{
     DspChainMetrics, InlineEffectsUpdate, InlineTrackMixUpdate, PlaybackBufferSettings,
 };
 use crate::playback::output_meter::OutputMeter;
+use crate::playback::player::notify::WorkerNotify;
 
 use super::super::super::{EndOfStreamAction, PlayerState};
 
@@ -44,6 +45,7 @@ pub(in crate::playback::player::runtime) struct ThreadContext {
     pub(in crate::playback::player::runtime) buffer_done_thread_flag: Arc<AtomicBool>,
     pub(in crate::playback::player::runtime) last_chunk_ms: Arc<AtomicU64>,
     pub(in crate::playback::player::runtime) last_time_update_ms: Arc<AtomicU64>,
+    pub(in crate::playback::player::runtime) worker_notify: Arc<WorkerNotify>,
 }
 
 #[cfg(test)]

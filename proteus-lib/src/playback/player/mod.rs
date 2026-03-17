@@ -12,6 +12,7 @@ mod builder;
 mod controls;
 mod effects;
 mod lifecycle;
+mod notify;
 mod runtime;
 mod settings;
 mod state;
@@ -32,6 +33,8 @@ use crate::{
         DspChainMetrics, InlineEffectsUpdate, InlineTrackMixUpdate, PlaybackBufferSettings,
     },
 };
+
+use notify::WorkerNotify;
 
 /// High-level playback state for the player.
 ///
@@ -175,6 +178,7 @@ pub struct Player {
     shutdown_once: Arc<AtomicBool>,
     impulse_response_override: Option<ImpulseResponseSpec>,
     impulse_response_tail_override: Option<f32>,
+    worker_notify: Arc<WorkerNotify>,
 }
 
 impl Clone for Player {
@@ -213,6 +217,7 @@ impl Clone for Player {
             shutdown_once: self.shutdown_once.clone(),
             impulse_response_override: self.impulse_response_override.clone(),
             impulse_response_tail_override: self.impulse_response_tail_override,
+            worker_notify: self.worker_notify.clone(),
         }
     }
 }
