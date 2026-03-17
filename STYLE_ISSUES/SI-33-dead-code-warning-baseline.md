@@ -11,9 +11,8 @@
 
 ## Current state
 
-Most of the roadmap's named dead-code removals appear to be completed, but the issue is not fully
-closed because the warning baseline has not been re-established and the internal logging helpers are
-still called out by the roadmap as needing review.
+The remaining internal logging helpers are still live behind feature gates, and the crate's
+dead-code baseline has now been revalidated.
 
 ### Why this matters
 
@@ -21,19 +20,21 @@ still called out by the roadmap as needing review.
 - Leaving the last verification step undone invites new dead code to accumulate unnoticed
 - The internal logging module is feature-gated enough that stale code can linger quietly
 
-### Recommended remediation
+### Remediation performed
 
-1. Audit `proteus-lib/src/logging/mod.rs` for feature-gated helpers that are no longer needed
-2. Run `cargo clippy -p proteus-lib -- -D warnings` and treat dead-code warnings as actionable
-3. Resolve any remaining dead-code warnings or document intentional feature-gated exceptions
-4. Consider adding a CI guard so the dead-code baseline does not regress again
+1. Audited `proteus-lib/src/logging/mod.rs` and confirmed the helpers are still used by the
+   `buffer-map` and `debug` diagnostics paths
+2. Documented that intentional feature-gated usage directly in `proteus-lib/src/logging/mod.rs`
+3. Ran `cargo clippy -p proteus-lib -- -D warnings` on March 17, 2026 and confirmed a clean lint baseline
+4. Ran `cargo clippy -p proteus-lib --all-features -- -D warnings` on March 17, 2026 to verify the
+   feature-gated logging paths are also warning-clean when enabled
 
 ### Acceptance criteria
 
-- [ ] Remaining internal logging helpers are either justified by feature use or removed
-- [ ] `cargo clippy -p proteus-lib -- -D warnings` is clean with respect to dead-code findings
-- [ ] Any intentional feature-gated exceptions are documented
+- [x] Remaining internal logging helpers are either justified by feature use or removed
+- [x] `cargo clippy -p proteus-lib -- -D warnings` is clean with respect to dead-code findings
+- [x] Any intentional feature-gated exceptions are documented
 
 ## Status
 
-Open.
+Closed on March 17, 2026.

@@ -175,7 +175,7 @@ impl BufferLog {
 
     fn observe(&mut self, value: f32) {
         self.count += 1;
-        if self.count % self.divisor == 0 {
+        if self.count.is_multiple_of(self.divisor) {
             self.entries
                 .push(if self.aggregate != 0.0 { "X" } else { "_" });
         }
