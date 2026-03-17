@@ -182,7 +182,21 @@ fn decode_file_packets(
 
         let packet = match format.next_packet() {
             Ok(packet) => packet,
-            Err(_) => break,
+            Err(Error::IoError(ref err)) if err.kind() == std::io::ErrorKind::UnexpectedEof => {
+                break;
+            }
+            Err(err) => {
+                warn!(
+                    "file decode packet-read error: source={:?} err={}",
+                    source_key, err
+                );
+                let _ = infra.sender.send(DecodeWorkerEvent::SourceError {
+                    source_key: source_key.clone(),
+                    recoverable: false,
+                    message: format!("packet-read failed: {}", err),
+                });
+                break;
+            }
         };
         if packet.track_id() != track.id {
             continue;
@@ -235,10 +249,108 @@ fn decode_and_forward_file_packet(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::mpsc;
+
+    use symphonia::core::errors::Error;
+
+    use super::super::super::super::buffer_mixer::SourceKey;
+    use super::super::super::super::decoder_events::DecodeWorkerEvent;
     use super::spawn_file_decode_worker;
 
     #[test]
     fn file_worker_symbol_is_linked() {
         let _ = spawn_file_decode_worker;
+    }
+
+    /// Returns true when the error is an EOF (UnexpectedEof), mirroring the
+    /// match pattern used in `decode_file_packets`.
+    fn is_eof(err: &Error) -> bool {
+        matches!(err, Error::IoError(io) if io.kind() == std::io::ErrorKind::UnexpectedEof)
+    }
+
+    #[test]
+    fn eof_error_classified_as_end_of_stream() {
+        let err = Error::IoError(std::io::Error::new(
+            std::io::ErrorKind::UnexpectedEof,
+            "end of stream",
+        ));
+        assert!(is_eof(&err));
+    }
+
+    #[test]
+    fn io_error_not_classified_as_eof() {
+        let err = Error::IoError(std::io::Error::new(
+            std::io::ErrorKind::BrokenPipe,
+            "disk failure",
+        ));
+        assert!(!is_eof(&err));
+    }
+
+    #[test]
+    fn decode_error_not_classified_as_eof() {
+        let err = Error::DecodeError("malformed frame");
+        assert!(!is_eof(&err));
+    }
+
+    #[test]
+    fn reset_required_not_classified_as_eof() {
+        let err = Error::ResetRequired;
+        assert!(!is_eof(&err));
+    }
+
+    #[test]
+    fn eof_does_not_emit_source_error() {
+        let (sender, receiver) = mpsc::sync_channel::<DecodeWorkerEvent>(16);
+        let source_key = SourceKey::FilePath("test.wav".to_string());
+        let err = Error::IoError(std::io::Error::new(
+            std::io::ErrorKind::UnexpectedEof,
+            "end of stream",
+        ));
+
+        // Simulate the EOF branch: no SourceError should be sent
+        if !is_eof(&err) {
+            let _ = sender.send(DecodeWorkerEvent::SourceError {
+                source_key,
+                recoverable: false,
+                message: err.to_string(),
+            });
+        }
+        drop(sender);
+
+        let events: Vec<_> = receiver.try_iter().collect();
+        assert!(
+            events.is_empty(),
+            "EOF should not produce a SourceError event"
+        );
+    }
+
+    #[test]
+    fn real_io_error_emits_source_error() {
+        let (sender, receiver) = mpsc::sync_channel::<DecodeWorkerEvent>(16);
+        let source_key = SourceKey::FilePath("test.wav".to_string());
+        let err = Error::IoError(std::io::Error::new(
+            std::io::ErrorKind::BrokenPipe,
+            "disk failure",
+        ));
+
+        // Simulate the real-error branch
+        if !is_eof(&err) {
+            let _ = sender.send(DecodeWorkerEvent::SourceError {
+                source_key,
+                recoverable: false,
+                message: format!("packet-read failed: {}", err),
+            });
+        }
+        drop(sender);
+
+        let events: Vec<_> = receiver.try_iter().collect();
+        assert_eq!(events.len(), 1, "real IO error should emit SourceError");
+        assert!(matches!(
+            &events[0],
+            DecodeWorkerEvent::SourceError {
+                recoverable: false,
+                ..
+            }
+        ));
     }
 }
