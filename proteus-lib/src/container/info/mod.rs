@@ -283,12 +283,15 @@ pub struct Info {
 }
 
 impl Info {
-    /// Build info for a single container file by scanning all packets.
+    /// Build info for a single container file.
+    ///
+    /// Uses metadata-based duration probing first and falls back to a full
+    /// packet scan only when metadata is missing or all-zero.
     pub fn new(file_path: String) -> Self {
         let track_info = gather_track_info(&file_path);
 
         Self {
-            duration_map: get_durations_by_scan(&file_path),
+            duration_map: get_durations_best_effort(&file_path),
             file_paths: vec![file_path],
             channels: track_info.channel_count,
             sample_rate: track_info.sample_rate,

@@ -30,10 +30,10 @@ does a full packet scan during `Info::new`.
 
 ### Acceptance criteria
 
-- [ ] `Info::new` uses metadata-first duration probing
-- [ ] Full packet scans happen only as a fallback when metadata is insufficient
-- [ ] User-facing documentation reflects the metadata-vs-scan behavior
+- [x] `Info::new` uses metadata-first duration probing
+- [x] Full packet scans happen only as a fallback when metadata is insufficient
+- [x] User-facing documentation reflects the metadata-vs-scan behavior
 
 ## Status
 
-Open.
+Done.
