@@ -12,6 +12,7 @@ mod builder;
 mod controls;
 mod effects;
 mod lifecycle;
+mod locks;
 mod runtime;
 mod settings;
 mod state;

@@ -3,6 +3,7 @@
 use std::collections::HashMap;
 
 use crate::audio::buffer::TrackBuffer;
+use crate::playback::mutex_policy::lock_recoverable;
 
 use super::super::premix::PremixBuffer;
 
@@ -146,9 +147,11 @@ fn mix_active_tracks(
     for (track_key, buffer) in active_buffer_snapshot {
         let weight = weights_snapshot.get(track_key).copied().unwrap_or(1.0);
         let channel_gains = channel_gains_snapshot.get(track_key).map(Vec::as_slice);
-        let mut buffer = buffer.lock().unwrap_or_else(|_| {
-            panic!("track buffer lock poisoned — a thread panicked while holding it")
-        });
+        let mut buffer = lock_recoverable(
+            buffer,
+            "track buffer",
+            "per-track sample queues are rebuildable runtime state",
+        );
         let take = buffer.len().min(current_chunk);
         for (sample_index, sample) in mix_buffer.iter_mut().take(take).enumerate() {
             if let Some(value) = buffer.pop() {
@@ -181,9 +184,11 @@ fn mix_fading_tracks(
         }
         let weight = weights_snapshot.get(track_key).copied().unwrap_or(1.0);
         let channel_gains = channel_gains_snapshot.get(track_key).map(Vec::as_slice);
-        let mut buffer = buffer.lock().unwrap_or_else(|_| {
-            panic!("track buffer lock poisoned — a thread panicked while holding it")
-        });
+        let mut buffer = lock_recoverable(
+            buffer,
+            "track buffer",
+            "per-track sample queues are rebuildable runtime state",
+        );
         let take = buffer.len().min(current_chunk);
         for (sample_index, sample) in mix_buffer.iter_mut().take(take).enumerate() {
             let Some(value) = buffer.pop() else {

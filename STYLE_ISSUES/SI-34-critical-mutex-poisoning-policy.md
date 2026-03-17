@@ -33,10 +33,26 @@ poison-handling policy. They now fail more descriptively, but not more intention
 
 ### Acceptance criteria
 
-- [ ] Critical runtime mutexes have an explicit, documented poison-handling policy
-- [ ] Recovery-capable mutexes no longer default to panic-on-poison
-- [ ] Invariant-only panic sites are intentionally documented as such
+- [x] Critical runtime mutexes have an explicit, documented poison-handling policy
+- [x] Recovery-capable mutexes no longer default to panic-on-poison
+- [x] Invariant-only panic sites are intentionally documented as such
 
 ## Status
 
-Open.
+Closed.
+
+## Resolution
+
+Critical playback/runtime mutexes now acquire through centralized poison-policy helpers instead of
+ad hoc `lock().unwrap_or_else(...)` sites.
+
+- `Player`, `ThreadContext`, `LoopState`, `MixLoopState`, and `DecodeBackpressure` now declare
+  each critical mutex as either `recoverable` or `invariant-only` behind helper accessors.
+- Recoverable runtime state now uses `into_inner()`-based recovery through
+  `playback::mutex_policy::lock_recoverable` / `wait_recoverable`, covering sink/effects state,
+  runtime telemetry, inline-update queues, backpressure bookkeeping, and related coordination
+  mutexes.
+- Invariant-only sites are now explicitly documented where state-machine or container coherence is
+  required, and continue to panic intentionally through `lock_invariant`.
+- Recovery behavior is covered by unit tests for the shared helper, player sink/effects locks, and
+  decode backpressure recovery.

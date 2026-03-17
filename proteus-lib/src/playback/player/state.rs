@@ -13,28 +13,17 @@ impl Player {
 
     /// Return true if playback is currently active.
     pub fn is_playing(&self) -> bool {
-        *self
-            .state
-            .lock()
-            .unwrap_or_else(|_| panic!("state lock poisoned — a thread panicked while holding it"))
-            == PlayerState::Playing
+        *self.lock_state_invariant() == PlayerState::Playing
     }
 
     /// Return true if playback is currently paused.
     pub fn is_paused(&self) -> bool {
-        *self
-            .state
-            .lock()
-            .unwrap_or_else(|_| panic!("state lock poisoned — a thread panicked while holding it"))
-            == PlayerState::Paused
+        *self.lock_state_invariant() == PlayerState::Paused
     }
 
     /// Get the current playback time in seconds.
     pub fn playback_position_secs(&self) -> f64 {
-        *self
-            .ts
-            .lock()
-            .unwrap_or_else(|_| panic!("ts lock poisoned — a thread panicked while holding it"))
+        *self.lock_ts_recoverable()
     }
 
     /// Get the current playback time in seconds.
@@ -44,12 +33,7 @@ impl Player {
 
     /// Get the finished track identifiers as a detached snapshot.
     pub fn finished_track_indices(&self) -> Vec<i32> {
-        self.finished_tracks
-            .lock()
-            .unwrap_or_else(|_| {
-                panic!("finished tracks lock poisoned — a thread panicked while holding it")
-            })
-            .clone()
+        self.lock_finished_tracks_recoverable().clone()
     }
 
     /// Return `true` when no playback worker thread is alive.
@@ -76,17 +60,12 @@ impl Player {
 
     /// Get the total duration (seconds) of the active selection.
     pub fn get_duration(&self) -> f64 {
-        *self.duration.lock().unwrap_or_else(|_| {
-            panic!("duration lock poisoned — a thread panicked while holding it")
-        })
+        *self.lock_duration_recoverable()
     }
 
     /// Get the track identifiers used for display.
     pub fn get_ids(&self) -> Vec<String> {
-        self.prot
-            .lock()
-            .unwrap_or_else(|_| panic!("prot lock poisoned — a thread panicked while holding it"))
-            .get_ids()
+        self.lock_prot_invariant().get_ids()
     }
 
     /// Get the full timestamped shuffle schedule used by playback.
@@ -95,9 +74,6 @@ impl Player {
     /// inner groups map to logical tracks and contain all selections for each
     /// track (for example when `selections_count > 1`).
     pub fn get_shuffle_schedule(&self) -> Vec<(f64, Vec<Vec<String>>)> {
-        self.prot
-            .lock()
-            .unwrap_or_else(|_| panic!("prot lock poisoned — a thread panicked while holding it"))
-            .get_shuffle_schedule()
+        self.lock_prot_invariant().get_shuffle_schedule()
     }
 }

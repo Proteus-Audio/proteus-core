@@ -1,13 +1,14 @@
 //! Mix loop state and constructor.
 
 use std::sync::atomic::{AtomicBool, AtomicU64};
-use std::sync::{mpsc, Arc, Condvar, Mutex};
+use std::sync::{mpsc, Arc, Condvar, Mutex, MutexGuard};
 
 use rodio::buffer::SamplesBuffer;
 
 use crate::container::info::Info;
 use crate::container::prot::Prot;
 use crate::dsp::effects::{AudioEffect, EffectContext};
+use crate::playback::mutex_policy::lock_recoverable;
 use crate::playback::engine::{DspChainMetrics, InlineEffectsUpdate, InlineTrackMixUpdate};
 
 use super::super::buffer_mixer::{BufferMixer, DecodeBackpressure};
@@ -131,5 +132,43 @@ impl MixLoopState {
             #[cfg(feature = "debug")]
             max_chain_ksps: 0.0,
         }
+    }
+
+    /// Recoverable poison policy: the effect chain is hot-swappable runtime state.
+    pub(super) fn lock_effects_recoverable(&self) -> MutexGuard<'_, Vec<AudioEffect>> {
+        lock_recoverable(
+            &self.effects,
+            "mix runtime effects",
+            "the effect chain is hot-swappable runtime state",
+        )
+    }
+
+    /// Recoverable poison policy: DSP metrics are derived telemetry.
+    pub(super) fn lock_dsp_metrics_recoverable(&self) -> MutexGuard<'_, DspChainMetrics> {
+        lock_recoverable(
+            &self.dsp_metrics,
+            "mix runtime DSP metrics",
+            "DSP metrics are derived telemetry that can be rebuilt",
+        )
+    }
+
+    /// Recoverable poison policy: pending inline effect updates are a disposable queue.
+    pub(super) fn lock_inline_effects_update_recoverable(
+        &self,
+    ) -> MutexGuard<'_, Option<InlineEffectsUpdate>> {
+        lock_recoverable(
+            &self.inline_effects_update,
+            "mix runtime inline effects update",
+            "pending inline effect updates are a disposable queue",
+        )
+    }
+
+    /// Recoverable poison policy: finished-track bookkeeping is rebuildable runtime state.
+    pub(super) fn lock_finished_tracks_recoverable(&self) -> MutexGuard<'_, Vec<u16>> {
+        lock_recoverable(
+            &self.finished_tracks,
+            "mix runtime finished tracks",
+            "finished-track bookkeeping is rebuildable runtime state",
+        )
     }
 }
