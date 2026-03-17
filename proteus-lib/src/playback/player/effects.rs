@@ -8,7 +8,7 @@ use std::sync::atomic::Ordering;
 use crate::dsp::effects::convolution_reverb::{parse_impulse_response_string, ImpulseResponseSpec};
 use crate::{
     dsp::effects::{normalize_legacy_effect_aliases, AudioEffect},
-    playback::engine::{DspChainMetrics, InlineEffectsUpdate},
+    playback::engine::{DspChainMetrics, EffectSettingsCommand, InlineEffectsUpdate},
 };
 
 use super::{Player, ReverbSettingsSnapshot};
@@ -56,8 +56,10 @@ impl Player {
     /// Enable or disable supported reverb effects in the active chain.
     ///
     /// The toggle is applied to convolution and delay-reverb instances when
-    /// present.
+    /// present. The update is queued for the mix thread and also applied to the
+    /// shared chain so that control-path reads reflect the new value.
     pub fn set_reverb_enabled(&self, enabled: bool) {
+        self.push_effect_settings_command(EffectSettingsCommand::SetReverbEnabled(enabled));
         let mut effects = self.effects.lock().unwrap_or_else(|_| {
             panic!("effects lock poisoned — a thread panicked while holding it")
         });
@@ -78,8 +80,10 @@ impl Player {
     /// Set the reverb wet/dry mix (clamped to `[0.0, 1.0]`).
     ///
     /// The value is mapped across convolution, delay, and diffusion reverb
-    /// variants when those effects are part of the chain.
+    /// variants when those effects are part of the chain. The update is queued
+    /// for the mix thread and also applied to the shared chain for reads.
     pub fn set_reverb_mix(&self, dry_wet: f32) {
+        self.push_effect_settings_command(EffectSettingsCommand::SetReverbMix(dry_wet));
         let mut effects = self.effects.lock().unwrap_or_else(|_| {
             panic!("effects lock poisoned — a thread panicked while holding it")
         });
@@ -260,6 +264,18 @@ impl Player {
     /// Bump the effects reset generation consumed by the runtime engine.
     pub(super) fn request_effects_reset(&self) {
         self.effects_reset.fetch_add(1, Ordering::SeqCst);
+    }
+
+    /// Enqueue an incremental effect settings command for the mix thread.
+    fn push_effect_settings_command(&self, command: EffectSettingsCommand) {
+        self.effect_settings_commands
+            .lock()
+            .unwrap_or_else(|_| {
+                panic!(
+                    "effect settings commands lock poisoned — a thread panicked while holding it"
+                )
+            })
+            .push(command);
     }
 
     /// Drop any pending inline effects transition update.

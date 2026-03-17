@@ -12,7 +12,7 @@ use crate::playback::engine::{DspChainMetrics, InlineEffectsUpdate, InlineTrackM
 
 use super::super::buffer_mixer::{BufferMixer, DecodeBackpressure};
 use super::super::decoder_events::DecodeWorkerEvent;
-use super::super::types::{ActiveInlineTransition, MixThreadArgs};
+use super::super::types::{ActiveInlineTransition, EffectSettingsCommand, MixThreadArgs};
 use super::decode::DecodeWorkerJoinGuard;
 
 /// Precomputed mixing buffer sizes.
@@ -35,6 +35,8 @@ pub(super) struct MixLoopState {
     pub(super) buffer_mixer: BufferMixer,
     pub(super) decode_backpressure: Arc<DecodeBackpressure>,
     pub(super) effects: Arc<Mutex<Vec<AudioEffect>>>,
+    pub(super) local_effects: Vec<AudioEffect>,
+    pub(super) effect_settings_commands: Arc<Mutex<Vec<EffectSettingsCommand>>>,
     pub(super) effect_context: EffectContext,
     pub(super) sender: mpsc::SyncSender<(SamplesBuffer, f64)>,
     pub(super) buffer_notify: Arc<Condvar>,
@@ -86,12 +88,21 @@ impl MixLoopState {
     ) -> Self {
         let last_effects_reset = args.effects_reset.load(std::sync::atomic::Ordering::SeqCst);
         let start_samples = sizes.start_samples;
+        let local_effects = args
+            .effects
+            .lock()
+            .unwrap_or_else(|_| {
+                panic!("effects lock poisoned — a thread panicked while holding it")
+            })
+            .clone();
         Self {
             abort: args.abort,
             packet_rx: decode_handle.packet_rx,
             buffer_mixer,
             decode_backpressure: decode_handle.decode_backpressure,
             effects: args.effects,
+            local_effects,
+            effect_settings_commands: args.effect_settings_commands,
             effect_context,
             sender,
             buffer_notify: args.buffer_notify,

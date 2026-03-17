@@ -1,4 +1,9 @@
 //! Effect-chain processing, draining, and runtime update helpers.
+//!
+//! The mix thread owns a local copy of the effect chain (`local_effects`) and
+//! runs all DSP processing on it without holding the shared effects mutex.
+//! Control-path settings changes arrive through a lightweight command queue
+//! that is drained at chunk boundaries.
 
 use std::sync::atomic::Ordering;
 use std::time::Instant;
@@ -11,6 +16,7 @@ use crate::logging::pivot_buffer_trace::pivot_buffer;
 
 use super::super::effects::run_effect_chain;
 use super::super::output_stage;
+use super::super::types::EffectSettingsCommand;
 use super::loop_body::{
     DRAIN_SILENCE_EPSILON, DRAIN_SILENT_PASSES_TO_STOP, MAX_EFFECT_DRAIN_PASSES,
 };
@@ -76,7 +82,7 @@ pub(super) fn process_and_send_samples(
 }
 
 fn process_effects(samples: &[f32], state: &mut MixLoopState) -> Vec<f32> {
-    if let Some(transition) = state.active_inline_transition.as_mut() {
+    let result = if let Some(transition) = state.active_inline_transition.as_mut() {
         let old_out = run_effect_chain(
             &mut transition.old_effects,
             samples,
@@ -107,23 +113,34 @@ fn process_effects(samples: &[f32], state: &mut MixLoopState) -> Vec<f32> {
         transition.remaining_samples = transition
             .remaining_samples
             .saturating_sub(samples.len().max(1));
-        if transition.remaining_samples == 0 {
-            *state.effects.lock().unwrap_or_else(|_| {
-                panic!("effects lock poisoned — a thread panicked while holding it")
-            }) = transition.new_effects.clone();
-            state.active_inline_transition = None;
-        }
         blended
     } else {
+        // DSP runs on the mix-thread-owned local chain — no mutex held.
         run_effect_chain(
-            &mut state.effects.lock().unwrap_or_else(|_| {
-                panic!("effects lock poisoned — a thread panicked while holding it")
-            }),
+            &mut state.local_effects,
             samples,
             &state.effect_context,
             false,
         )
+    };
+
+    // Finalize transition: adopt new effects as the local chain and sync shared.
+    if state
+        .active_inline_transition
+        .as_ref()
+        .is_some_and(|t| t.remaining_samples == 0)
+    {
+        if let Some(transition) = state.active_inline_transition.take() {
+            let completed = transition.new_effects;
+            // Brief lock: update shared for control-path reads.
+            *state.effects.lock().unwrap_or_else(|_| {
+                panic!("effects lock poisoned — a thread panicked while holding it")
+            }) = completed.clone();
+            state.local_effects = completed;
+        }
     }
+
+    result
 }
 
 #[cfg(feature = "debug")]
@@ -209,14 +226,8 @@ pub(super) fn drain_effect_tail(state: &mut MixLoopState) -> bool {
         }
         blended
     } else {
-        run_effect_chain(
-            &mut state.effects.lock().unwrap_or_else(|_| {
-                panic!("effects lock poisoned — a thread panicked while holding it")
-            }),
-            &[],
-            &state.effect_context,
-            true,
-        )
+        // Drain runs on the local chain — no mutex held.
+        run_effect_chain(&mut state.local_effects, &[], &state.effect_context, true)
     };
     if drained.is_empty() {
         return false;
@@ -249,12 +260,20 @@ pub(super) fn drain_effect_tail(state: &mut MixLoopState) -> bool {
 }
 
 pub(super) fn apply_effect_runtime_updates(state: &mut MixLoopState) {
+    // Drain incremental settings commands from the control path.
+    drain_effect_settings_commands(state);
+
     let current_reset = state.effects_reset.load(Ordering::SeqCst);
     if current_reset != state.last_effects_reset {
-        let mut effects_guard = state.effects.lock().unwrap_or_else(|_| {
-            panic!("effects lock poisoned — a thread panicked while holding it")
-        });
-        for effect in effects_guard.iter_mut() {
+        // Full reset: clone the new chain from shared into local.
+        state.local_effects = state
+            .effects
+            .lock()
+            .unwrap_or_else(|_| {
+                panic!("effects lock poisoned — a thread panicked while holding it")
+            })
+            .clone();
+        for effect in state.local_effects.iter_mut() {
             effect.reset_state();
         }
         state.active_inline_transition = None;
@@ -282,22 +301,18 @@ pub(super) fn apply_effect_runtime_updates(state: &mut MixLoopState) {
             .round() as usize
             * state.audio_info.channels.max(1) as usize;
         if transition_samples == 0 {
-            let mut effects_guard = state.effects.lock().unwrap_or_else(|_| {
-                panic!("effects lock poisoned — a thread panicked while holding it")
-            });
-            *effects_guard = update.effects;
-            for effect in effects_guard.iter_mut() {
+            // Instant replacement: adopt new chain as local, sync shared.
+            state.local_effects = update.effects;
+            for effect in state.local_effects.iter_mut() {
                 effect.warm_up(&state.effect_context);
             }
+            *state.effects.lock().unwrap_or_else(|_| {
+                panic!("effects lock poisoned — a thread panicked while holding it")
+            }) = state.local_effects.clone();
             state.active_inline_transition = None;
         } else {
-            let old_effects = state
-                .effects
-                .lock()
-                .unwrap_or_else(|_| {
-                    panic!("effects lock poisoned — a thread panicked while holding it")
-                })
-                .clone();
+            // Crossfade transition: snapshot local chain as old, warm up new.
+            let old_effects = state.local_effects.clone();
             let mut new_effects = update.effects;
             for effect in new_effects.iter_mut() {
                 effect.warm_up(&state.effect_context);
@@ -310,6 +325,47 @@ pub(super) fn apply_effect_runtime_updates(state: &mut MixLoopState) {
                     remaining_samples: transition_samples,
                 },
             );
+        }
+    }
+}
+
+/// Drain queued effect settings commands and apply them to the local chain.
+fn drain_effect_settings_commands(state: &mut MixLoopState) {
+    let commands = {
+        let mut pending = state.effect_settings_commands.lock().unwrap_or_else(|_| {
+            panic!("effect settings commands lock poisoned — a thread panicked while holding it")
+        });
+        if pending.is_empty() {
+            return;
+        }
+        std::mem::take(&mut *pending)
+    };
+    for command in commands {
+        match command {
+            EffectSettingsCommand::SetReverbEnabled(enabled) => {
+                for effect in state.local_effects.iter_mut() {
+                    if let Some(e) = effect.as_convolution_reverb_mut() {
+                        e.enabled = enabled;
+                    }
+                    if let Some(e) = effect.as_delay_reverb_mut() {
+                        e.enabled = enabled;
+                    }
+                }
+            }
+            EffectSettingsCommand::SetReverbMix(dry_wet) => {
+                let clamped = dry_wet.clamp(0.0, 1.0);
+                for effect in state.local_effects.iter_mut() {
+                    if let Some(e) = effect.as_convolution_reverb_mut() {
+                        e.dry_wet = clamped;
+                    }
+                    if let Some(e) = effect.as_delay_reverb_mut() {
+                        e.mix = clamped;
+                    }
+                    if let Some(e) = effect.as_diffusion_reverb_mut() {
+                        e.mix = clamped;
+                    }
+                }
+            }
         }
     }
 }

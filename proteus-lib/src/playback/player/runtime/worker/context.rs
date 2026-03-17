@@ -8,7 +8,8 @@ use crate::container::info::Info;
 use crate::container::prot::Prot;
 use crate::dsp::effects::AudioEffect;
 use crate::playback::engine::{
-    DspChainMetrics, InlineEffectsUpdate, InlineTrackMixUpdate, PlaybackBufferSettings,
+    DspChainMetrics, EffectSettingsCommand, InlineEffectsUpdate, InlineTrackMixUpdate,
+    PlaybackBufferSettings,
 };
 use crate::playback::output_meter::OutputMeter;
 
@@ -26,6 +27,8 @@ pub(in crate::playback::player::runtime) struct ThreadContext {
     pub(in crate::playback::player::runtime) prot: Arc<Mutex<Prot>>,
     pub(in crate::playback::player::runtime) buffer_settings: Arc<Mutex<PlaybackBufferSettings>>,
     pub(in crate::playback::player::runtime) effects: Arc<Mutex<Vec<AudioEffect>>>,
+    pub(in crate::playback::player::runtime) effect_settings_commands:
+        Arc<Mutex<Vec<EffectSettingsCommand>>>,
     pub(in crate::playback::player::runtime) inline_effects_update:
         Arc<Mutex<Option<InlineEffectsUpdate>>>,
     pub(in crate::playback::player::runtime) inline_track_mix_updates:

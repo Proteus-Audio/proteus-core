@@ -11,7 +11,7 @@ mod complex_fft {
     use std::collections::VecDeque;
     use std::sync::Arc;
 
-    use rustfft::{Fft, FftPlanner, num_complex::Complex};
+    use rustfft::{num_complex::Complex, Fft, FftPlanner};
 
     // Taken from https://github.com/BordenJardine/reverb_vst
 
@@ -199,7 +199,7 @@ mod real_fft {
     use std::sync::Arc;
 
     use log::error;
-    use realfft::{ComplexToReal, RealFftPlanner, RealToComplex, num_complex::Complex};
+    use realfft::{num_complex::Complex, ComplexToReal, RealFftPlanner, RealToComplex};
 
     /// Overlap-add convolver based on real FFTs.
     #[derive(Clone)]
@@ -393,11 +393,9 @@ mod tests {
         let mut convolver = Convolver::new(&[1.0, 0.5], 64);
         let _ = convolver.process(&[0.2_f32; 16]);
         convolver.clear_state();
-        assert!(
-            convolver
-                .previous_tail
-                .iter()
-                .all(|sample| sample.abs() < 1e-9)
-        );
+        assert!(convolver
+            .previous_tail
+            .iter()
+            .all(|sample| sample.abs() < 1e-9));
     }
 }

@@ -328,7 +328,7 @@ fn is_supported_audio_file(path: &Path) -> bool {
 mod tests {
     use super::*;
     use std::io::Write;
-    use tempfile::{NamedTempFile, tempdir};
+    use tempfile::{tempdir, NamedTempFile};
 
     #[test]
     fn load_effects_json_parses_effects() {

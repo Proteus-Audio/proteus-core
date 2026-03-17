@@ -44,10 +44,10 @@ That means the mutex protecting the effect chain is held across all DSP processi
 
 ### Acceptance criteria
 
-- [ ] The real-time mix thread no longer holds the shared effects mutex while executing the full DSP chain
-- [ ] Inline effect updates still apply correctly with the new ownership/handoff model
-- [ ] Drain/tail processing follows the same low-contention design
+- [x] The real-time mix thread no longer holds the shared effects mutex while executing the full DSP chain
+- [x] Inline effect updates still apply correctly with the new ownership/handoff model
+- [x] Drain/tail processing follows the same low-contention design
 
 ## Status
 
-Open.
+Resolved.

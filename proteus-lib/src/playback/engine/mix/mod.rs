@@ -19,7 +19,7 @@ mod track_stage;
 mod types;
 
 pub use runner::spawn_mix_thread;
-pub use types::MixThreadArgs;
+pub use types::{EffectSettingsCommand, MixThreadArgs};
 
 #[cfg(test)]
 mod tests {

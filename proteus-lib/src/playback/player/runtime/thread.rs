@@ -98,6 +98,7 @@ impl Player {
             prot: self.prot.clone(),
             buffer_settings: self.buffer_settings.clone(),
             effects: self.effects.clone(),
+            effect_settings_commands: self.effect_settings_commands.clone(),
             inline_effects_update: self.inline_effects_update.clone(),
             inline_track_mix_updates: self.inline_track_mix_updates.clone(),
             dsp_metrics: self.dsp_metrics.clone(),
