@@ -52,11 +52,11 @@ impl EffectContext {
 
 ### Acceptance criteria
 
-- [ ] `EffectContext` no longer exposes raw public fields
-- [ ] Construction flows through a validated constructor or builder
-- [ ] Call sites compile against accessors rather than direct field access
-- [ ] Tests cover both valid and invalid construction
+- [x] `EffectContext` no longer exposes raw public fields
+- [x] Construction flows through a validated constructor or builder
+- [x] Call sites compile against accessors rather than direct field access
+- [x] Tests cover both valid and invalid construction
 
 ## Status
 
-Open.
+Done.

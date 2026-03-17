@@ -63,7 +63,7 @@ impl super::core::DspEffect for PanEffect {
 
         // Stereo-only for now. For future multi-channel support, this should
         // be generalized to channel-layout-aware panning.
-        if context.channels != 2 {
+        if context.channels() != 2 {
             return samples.to_vec();
         }
 
@@ -124,23 +124,11 @@ mod tests {
     use super::*;
 
     fn stereo_context() -> EffectContext {
-        EffectContext {
-            sample_rate: 48_000,
-            channels: 2,
-            container_path: None,
-            impulse_response_spec: None,
-            impulse_response_tail_db: -60.0,
-        }
+        EffectContext::new(48_000, 2, None, None, -60.0).unwrap()
     }
 
     fn mono_context() -> EffectContext {
-        EffectContext {
-            sample_rate: 48_000,
-            channels: 1,
-            container_path: None,
-            impulse_response_spec: None,
-            impulse_response_tail_db: -60.0,
-        }
+        EffectContext::new(48_000, 1, None, None, -60.0).unwrap()
     }
 
     #[test]

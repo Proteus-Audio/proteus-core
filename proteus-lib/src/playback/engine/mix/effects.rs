@@ -59,7 +59,14 @@ mod tests {
         let input = vec![0.25_f32, -0.25];
         let mut scratch_a = Vec::new();
         let mut scratch_b = Vec::new();
-        run_effect_chain(&mut effects, &input, &context(), false, &mut scratch_a, &mut scratch_b);
+        run_effect_chain(
+            &mut effects,
+            &input,
+            &context(),
+            false,
+            &mut scratch_a,
+            &mut scratch_b,
+        );
         assert_eq!(scratch_a, input);
     }
 
@@ -73,7 +80,23 @@ mod tests {
         let input = vec![0.5_f32, -0.5];
         let mut scratch_a = Vec::new();
         let mut scratch_b = Vec::new();
-        run_effect_chain(&mut effects, &input, &context(), false, &mut scratch_a, &mut scratch_b);
+        run_effect_chain(
+            &mut effects,
+            &input,
+            &context(),
+            false,
+            &mut scratch_a,
+            &mut scratch_b,
+        );
         assert_eq!(scratch_a, vec![1.0_f32, -1.0]);
+    }
+
+    #[test]
+    fn run_effect_chain_passthrough_when_empty() {
+        let mut effects = Vec::new();
+        let input = vec![0.25_f32, -0.25];
+        let context = EffectContext::new(48_000, 2, None, None, -60.0).unwrap();
+        let output = run_effect_chain(&mut effects, &input, &context, false);
+        assert_eq!(output, input);
     }
 }

@@ -288,10 +288,10 @@ impl DiffusionReverbEffect {
     }
 
     fn ensure_state(&mut self, context: &EffectContext) {
-        let pre_delay_samples = delay_samples(context.sample_rate, self.settings.pre_delay_ms);
-        let room_size_samples = delay_samples(context.sample_rate, self.settings.room_size_ms);
+        let pre_delay_samples = delay_samples(context.sample_rate(), self.settings.pre_delay_ms);
+        let room_size_samples = delay_samples(context.sample_rate(), self.settings.room_size_ms);
         let tuning = Tuning::new(pre_delay_samples, room_size_samples);
-        let channels = context.channels.max(1);
+        let channels = context.channels().max(1);
         let needs_reset = self
             .state
             .as_ref()
@@ -400,13 +400,7 @@ mod tests {
     use crate::dsp::effects::core::DspEffect;
 
     fn context() -> EffectContext {
-        EffectContext {
-            sample_rate: 48_000,
-            channels: 2,
-            container_path: None,
-            impulse_response_spec: None,
-            impulse_response_tail_db: -60.0,
-        }
+        EffectContext::new(48_000, 2, None, None, -60.0).unwrap()
     }
 
     #[test]
