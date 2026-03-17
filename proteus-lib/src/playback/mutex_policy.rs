@@ -1,6 +1,7 @@
 //! Shared mutex poison-policy helpers for playback runtime state.
 
-use std::sync::{Condvar, LockResult, Mutex, MutexGuard};
+use std::sync::{Condvar, LockResult, Mutex, MutexGuard, WaitTimeoutResult};
+use std::time::Duration;
 
 use log::warn;
 
@@ -47,6 +48,24 @@ pub(crate) fn wait_recoverable<'a, T>(
     rationale: &str,
 ) -> MutexGuard<'a, T> {
     recover_poison(condvar.wait(guard), label, rationale)
+}
+
+pub(crate) fn wait_timeout_recoverable<'a, T>(
+    condvar: &Condvar,
+    guard: MutexGuard<'a, T>,
+    timeout: Duration,
+    label: &str,
+    rationale: &str,
+) -> (MutexGuard<'a, T>, WaitTimeoutResult) {
+    match condvar.wait_timeout(guard, timeout) {
+        Ok(result) => result,
+        Err(err) => {
+            warn!(
+                "{label} lock poisoned; recovering with the inner value because {rationale}"
+            );
+            err.into_inner()
+        }
+    }
 }
 
 #[cfg(test)]

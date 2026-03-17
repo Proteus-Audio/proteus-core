@@ -9,7 +9,8 @@ use crate::container::prot::Prot;
 use crate::diagnostics::reporter::Reporter;
 use crate::dsp::effects::AudioEffect;
 use crate::playback::engine::{
-    DspChainMetrics, InlineEffectsUpdate, InlineTrackMixUpdate, PlaybackBufferSettings,
+    DspChainMetrics, EffectSettingsCommand, InlineEffectsUpdate, InlineTrackMixUpdate,
+    PlaybackBufferSettings,
 };
 use crate::playback::mutex_policy::{lock_invariant, lock_recoverable};
 use crate::playback::output_meter::OutputMeter;
@@ -121,6 +122,17 @@ impl Player {
             &self.effects,
             "player effects",
             "the effect chain is hot-swappable runtime state",
+        )
+    }
+
+    /// Recoverable poison policy: effect settings commands are a disposable control queue.
+    pub(in crate::playback::player) fn lock_effect_settings_commands_recoverable(
+        &self,
+    ) -> MutexGuard<'_, Vec<EffectSettingsCommand>> {
+        lock_recoverable(
+            &self.effect_settings_commands,
+            "player effect settings commands",
+            "incremental effect settings commands are a disposable control queue",
         )
     }
 
