@@ -50,12 +50,12 @@ The roadmap groups this with decode-loop observability more broadly:
 
 ### Acceptance criteria
 
-- [ ] Seek failure produces a structured diagnostic, not silent early return
-- [ ] Callers can distinguish decode failure from normal end-of-stream
-- [ ] Buffer waiters are still notified on failure paths
-- [ ] A regression test covers the failed-seek startup path
-- [ ] The policy for repeated decode failures is intentional and documented
+- [x] Seek failure produces a structured diagnostic, not silent early return
+- [x] Callers can distinguish decode failure from normal end-of-stream
+- [x] Buffer waiters are still notified on failure paths
+- [x] A regression test covers the failed-seek startup path
+- [x] The policy for repeated decode failures is intentional and documented
 
 ## Status
 
-Open.
+Closed.
