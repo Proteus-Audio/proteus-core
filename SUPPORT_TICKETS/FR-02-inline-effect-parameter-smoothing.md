@@ -330,7 +330,11 @@ Both mechanisms should coexist. The authoring app should use `set_effect_paramet
 
 ### Relationship to FR-01 (per-effect metering)
 
-No conflict. Metering observes the output of `process_into` which already reflects smoothed parameters. The metering snapshots will naturally show the smooth transition rather than a discontinuous jump.
+No conflict for Tier 1 (time-domain levels) or Tier 3 (spectral analysis) — metering observes the output of `process_into` which already reflects smoothed parameters. The metering snapshots will naturally show the smooth transition rather than a discontinuous jump.
+
+**Tier 2 interaction (analytical filter response curves).** FR-01 Tier 2 computes analytical frequency response from biquad coefficients. When Phase 2 of this ticket introduces coefficient smoothing, mid-ramp coefficients don't represent a coherent filter shape. `SmoothedBiquadState` (or equivalent) must expose a `target_coefficients()` accessor so FR-01's `frequency_response()` evaluates against the destination shape, not the in-progress ramp values.
+
+**Enable/disable crossfade placement.** Phase 3's enable/disable crossfade should happen inside the `AudioEffect` dispatch (within `process_into`), not at the `run_effect_chain` level. This keeps it inside FR-01's metering measurement brackets so Tier 1 meters naturally capture the post-fade output without additional coordination.
 
 ### Real-time safety
 

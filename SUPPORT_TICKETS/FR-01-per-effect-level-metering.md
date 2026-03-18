@@ -341,6 +341,14 @@ The `run_effect_chain` ping-pong scratch buffer architecture is ideal for meteri
 
 Metering data publication happens while the effects mutex is already held (during `run_effect_chain`). If SI-24's recommendations are implemented (snapshot-based handoff), metering data should travel with the snapshot rather than requiring its own synchronization.
 
+### Interaction with FR-02 (inline parameter smoothing)
+
+FR-02 introduces per-parameter smoothing (gain ramps, biquad coefficient interpolation) inside individual effects. Two interactions to be aware of:
+
+**Tier 2 analytical curves and mid-ramp coefficients.** When FR-02's biquad coefficient smoothing is active, the filter's *current* coefficients are mid-ramp values that don't represent a coherent filter shape. `frequency_response()` must evaluate against the *target* coefficients, not the in-progress ramp values, so the UI curve shows the destination shape rather than wobbling during a 5 ms transition. If FR-02 uses `SmoothedBiquadState`, expose a `target_coefficients()` accessor and use that in `frequency_response()`.
+
+**Enable/disable crossfade and metering hook point.** FR-02 Phase 3 proposes an enable/disable crossfade at the `AudioEffect` dispatch level (inside `process_into`). This is the correct boundary for FR-01 compatibility: Tier 1 metering wraps `process_into` from outside in `run_effect_chain`, so it naturally captures the post-fade output without additional coordination. If the enable/disable fade is instead lifted to `run_effect_chain` level, it must be placed *inside* the metering measurement brackets so meters reflect what the listener actually hears.
+
 ### Effect chain changes at runtime
 
 When effects are added/removed via `set_effects()` or `set_effects_inline()`, the metering `Vec` must be resized to match. Handle this in the same code path that resizes scratch buffers.
