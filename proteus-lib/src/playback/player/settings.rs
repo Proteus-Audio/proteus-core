@@ -14,6 +14,16 @@ fn clamp_non_negative(value: f32) -> f32 {
 }
 
 impl Player {
+    /// Apply the opt-in live-authoring profile without changing library defaults.
+    ///
+    /// This is intended for editor-style workflows where bounded control
+    /// latency matters more than maximum buffering headroom. Player apps should
+    /// continue using their existing stable playback settings unless they
+    /// explicitly want this tradeoff.
+    pub fn configure_for_live_authoring(&self) {
+        self.set_buffer_settings(PlaybackBufferSettings::live_authoring());
+    }
+
     /// Apply a cohesive in-place update to buffer settings under one lock.
     ///
     /// # Arguments
@@ -225,6 +235,21 @@ mod tests {
             player.lock_buffer_settings_recoverable().parameter_ramp_ms,
             12.5
         );
+    }
+
+    #[test]
+    fn configure_for_live_authoring_applies_opt_in_profile() {
+        let player = test_player();
+        player.configure_for_live_authoring();
+        let settings = *player.lock_buffer_settings_recoverable();
+        assert_eq!(settings.start_buffer_ms, 20.0);
+        assert_eq!(settings.start_sink_chunks, 1);
+        assert_eq!(settings.max_sink_chunks, 2);
+        assert_eq!(settings.startup_fade_ms, 80.0);
+        assert_eq!(settings.seek_fade_out_ms, 20.0);
+        assert_eq!(settings.seek_fade_in_ms, 50.0);
+        assert_eq!(settings.inline_effects_transition_ms, 15.0);
+        assert_eq!(settings.parameter_ramp_ms, 5.0);
     }
 
     fn test_player() -> Player {

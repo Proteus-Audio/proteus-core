@@ -169,10 +169,7 @@ fn parse_type_block(
     Ok(i)
 }
 
-fn format_pivoted_output(
-    type_order: &[String],
-    types: &HashMap<String, TypeData>,
-) -> String {
+fn format_pivoted_output(type_order: &[String], types: &HashMap<String, TypeData>) -> String {
     let mut out = String::new();
 
     for tkey in type_order {

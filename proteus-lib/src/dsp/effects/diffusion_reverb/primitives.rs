@@ -3,8 +3,8 @@
 //! Contains the per-channel reverb lane, its component filters, the runtime
 //! state struct that owns the lane collection, and the `delay_samples` helper.
 
-use crate::dsp::guardrails::sanitize_channels;
 use crate::dsp::effects::core::smoother::ParamSmoother;
+use crate::dsp::guardrails::sanitize_channels;
 
 // Upper bound for synthetic silence-fed tail flushing.
 const DRAIN_MAX_TAIL_MULTIPLIER: usize = 64;

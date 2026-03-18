@@ -102,8 +102,11 @@ impl super::core::DspEffect for LowPassFilterEffect {
 impl LowPassFilterEffect {
     fn ensure_state(&mut self, context: &EffectContext) {
         if let Some(state) = self.state.as_mut() {
-            if state.matches_structure(BiquadKind::LowPass, context.sample_rate(), context.channels())
-            {
+            if state.matches_structure(
+                BiquadKind::LowPass,
+                context.sample_rate(),
+                context.channels(),
+            ) {
                 // Structure unchanged — smoothly ramp to new coefficients if
                 // freq/Q have changed, preserving the delay line.
                 state.update_coefficients(

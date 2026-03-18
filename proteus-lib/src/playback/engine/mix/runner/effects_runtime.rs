@@ -428,7 +428,13 @@ fn schedule_effect_enable_fade(state: &mut MixLoopState, effect_index: usize, en
         .get(effect_index)
         .and_then(Option::as_ref)
         .map_or_else(
-            || if audio_effect_enabled(effect) { 1.0 } else { 0.0 },
+            || {
+                if audio_effect_enabled(effect) {
+                    1.0
+                } else {
+                    0.0
+                }
+            },
             EffectEnableFade::current_mix,
         );
     let target_mix = if enabled { 1.0 } else { 0.0 };
@@ -462,10 +468,7 @@ fn schedule_effect_enable_fade(state: &mut MixLoopState, effect_index: usize, en
         Some(EffectEnableFade::new(current_mix, enabled, ramp_frames));
 }
 
-fn apply_effect_parameter(
-    effect: &mut crate::dsp::effects::AudioEffect,
-    param: EffectParameter,
-) {
+fn apply_effect_parameter(effect: &mut crate::dsp::effects::AudioEffect, param: EffectParameter) {
     use crate::dsp::effects::AudioEffect;
     match param {
         EffectParameter::Gain(v) => {
@@ -613,5 +616,7 @@ fn rebuild_effect_context(
 
 fn sync_effect_context_from_buffer_settings(state: &mut MixLoopState) {
     let parameter_ramp_ms = state.lock_buffer_settings_recoverable().parameter_ramp_ms;
-    state.effect_context.set_parameter_ramp_ms(parameter_ramp_ms);
+    state
+        .effect_context
+        .set_parameter_ramp_ms(parameter_ramp_ms);
 }

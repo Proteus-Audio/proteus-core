@@ -147,11 +147,15 @@ pub fn buffer_track(args: TrackArgs, abort: Arc<AtomicBool>) -> JoinHandle<Track
             finished_tracks,
             channels,
         };
-        let result = run_single_decode_loop(
-            &mut *format, &mut *decoder, track_id, track_key, dur, &ctx,
-        );
+        let result =
+            run_single_decode_loop(&mut *format, &mut *decoder, track_id, track_key, dur, &ctx);
         let outcome = resolve_decode_outcome(result, &ctx.abort, &file_path);
-        finish(&ctx.finished_tracks, track_key, ctx.buffer_notify.as_ref(), outcome)
+        finish(
+            &ctx.finished_tracks,
+            track_key,
+            ctx.buffer_notify.as_ref(),
+            outcome,
+        )
     })
 }
 

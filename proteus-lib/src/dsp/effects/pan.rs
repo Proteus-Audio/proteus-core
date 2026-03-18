@@ -144,8 +144,7 @@ impl PanEffect {
 }
 
 fn pan_gains(pan: f32) -> (f32, f32) {
-    let theta =
-        ((pan + 1.0) * std::f32::consts::FRAC_PI_4).clamp(0.0, std::f32::consts::FRAC_PI_2);
+    let theta = ((pan + 1.0) * std::f32::consts::FRAC_PI_4).clamp(0.0, std::f32::consts::FRAC_PI_2);
     (theta.cos(), theta.sin())
 }
 

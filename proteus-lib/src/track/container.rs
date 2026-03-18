@@ -136,12 +136,8 @@ pub fn buffer_container_tracks(args: ContainerTrackArgs, abort: Arc<AtomicBool>)
             channels,
         };
         let eos_seconds = (track_eos_ms.max(0.0) / 1000.0) as f64;
-        let finished_ids = run_container_decode_loop(
-            &mut *format,
-            &mut track_decoders,
-            eos_seconds,
-            &ctx,
-        );
+        let finished_ids =
+            run_container_decode_loop(&mut *format, &mut track_decoders, eos_seconds, &ctx);
         for td in &track_decoders {
             if !finished_ids.contains(&td.track_id) {
                 for &key in &td.track_keys {
@@ -345,13 +341,9 @@ fn run_container_decode_loop(
             });
         let tid_for_log = td.track_id;
         match td.decoder.decode(&packet) {
-            Ok(decoded) => push_decoded_container_packet(
-                tid_for_log,
-                decoded,
-                pkey,
-                ctx,
-                &mut logged_formats,
-            ),
+            Ok(decoded) => {
+                push_decoded_container_packet(tid_for_log, decoded, pkey, ctx, &mut logged_formats)
+            }
             Err(Error::DecodeError(e)) => warn!("decode error: {}", e),
             Err(e) => break Err(e),
         }

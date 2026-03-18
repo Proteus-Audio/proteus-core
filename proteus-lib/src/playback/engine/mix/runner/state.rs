@@ -15,8 +15,8 @@ use crate::playback::engine::{
 use crate::playback::mutex_policy::lock_recoverable;
 
 use super::super::buffer_mixer::{BufferMixer, DecodeBackpressure};
-use super::super::effects::EffectEnableFade;
 use super::super::decoder_events::DecodeWorkerEvent;
+use super::super::effects::EffectEnableFade;
 use super::super::types::{ActiveInlineTransition, EffectSettingsCommand, MixThreadArgs};
 use super::decode::DecodeWorkerJoinGuard;
 

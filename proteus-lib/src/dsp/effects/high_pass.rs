@@ -102,8 +102,11 @@ impl super::core::DspEffect for HighPassFilterEffect {
 impl HighPassFilterEffect {
     fn ensure_state(&mut self, context: &EffectContext) {
         if let Some(state) = self.state.as_mut() {
-            if state.matches_structure(BiquadKind::HighPass, context.sample_rate(), context.channels())
-            {
+            if state.matches_structure(
+                BiquadKind::HighPass,
+                context.sample_rate(),
+                context.channels(),
+            ) {
                 state.update_coefficients(
                     self.settings.freq_hz,
                     self.settings.q,

@@ -163,12 +163,16 @@ impl MultibandEqState {
         update_edge_biquad(
             &mut self.low_edge,
             low_edge_params.map(|p| match p {
-                LowEdgeParams::HighPass { freq_hz, q } => {
-                    BiquadDesign::HighPass { freq_hz, q }
-                }
-                LowEdgeParams::LowShelf { freq_hz, q, gain_db } => {
-                    BiquadDesign::LowShelf { freq_hz, q, gain_db }
-                }
+                LowEdgeParams::HighPass { freq_hz, q } => BiquadDesign::HighPass { freq_hz, q },
+                LowEdgeParams::LowShelf {
+                    freq_hz,
+                    q,
+                    gain_db,
+                } => BiquadDesign::LowShelf {
+                    freq_hz,
+                    q,
+                    gain_db,
+                },
             }),
             self.sample_rate,
             self.channels,
@@ -179,12 +183,16 @@ impl MultibandEqState {
         update_edge_biquad(
             &mut self.high_edge,
             high_edge_params.map(|p| match p {
-                HighEdgeParams::LowPass { freq_hz, q } => {
-                    BiquadDesign::LowPass { freq_hz, q }
-                }
-                HighEdgeParams::HighShelf { freq_hz, q, gain_db } => {
-                    BiquadDesign::HighShelf { freq_hz, q, gain_db }
-                }
+                HighEdgeParams::LowPass { freq_hz, q } => BiquadDesign::LowPass { freq_hz, q },
+                HighEdgeParams::HighShelf {
+                    freq_hz,
+                    q,
+                    gain_db,
+                } => BiquadDesign::HighShelf {
+                    freq_hz,
+                    q,
+                    gain_db,
+                },
             }),
             self.sample_rate,
             self.channels,

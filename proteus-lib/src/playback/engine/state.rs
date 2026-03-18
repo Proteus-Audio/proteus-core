@@ -47,6 +47,30 @@ impl PlaybackBufferSettings {
             parameter_ramp_ms: 5.0,
         }
     }
+
+    /// Build an opt-in profile for editor-style live effect authoring.
+    ///
+    /// This keeps the sink backlog shallow and shortens transition fades so
+    /// effect tweaks are heard sooner, while leaving diagnostics disabled by
+    /// default. The library does not apply this automatically; player-style
+    /// apps should opt in only when lower control latency is worth the reduced
+    /// buffering headroom.
+    pub fn live_authoring() -> Self {
+        Self {
+            start_buffer_ms: 20.0,
+            track_eos_ms: 1000.0,
+            start_sink_chunks: 1,
+            max_sink_chunks: 2,
+            startup_silence_ms: 0.0,
+            startup_fade_ms: 80.0,
+            seek_fade_out_ms: 20.0,
+            seek_fade_in_ms: 50.0,
+            inline_effects_transition_ms: 15.0,
+            append_jitter_log_ms: 0.0,
+            effect_boundary_log: false,
+            parameter_ramp_ms: 5.0,
+        }
+    }
 }
 
 /// Aggregated DSP chain performance metrics used by debug UI.
@@ -105,10 +129,26 @@ mod tests {
         let settings = PlaybackBufferSettings::new(25.0);
         assert_eq!(settings.start_buffer_ms, 25.0);
         assert_eq!(settings.track_eos_ms, 1000.0);
+        assert_eq!(settings.start_sink_chunks, 0);
+        assert_eq!(settings.max_sink_chunks, 0);
         assert_eq!(settings.startup_fade_ms, 150.0);
         assert_eq!(settings.seek_fade_out_ms, 30.0);
         assert_eq!(settings.seek_fade_in_ms, 80.0);
         assert!(!settings.effect_boundary_log);
+    }
+
+    #[test]
+    fn playback_buffer_settings_live_authoring_profile_is_opt_in() {
+        let settings = PlaybackBufferSettings::live_authoring();
+        assert_eq!(settings.start_buffer_ms, 20.0);
+        assert_eq!(settings.start_sink_chunks, 1);
+        assert_eq!(settings.max_sink_chunks, 2);
+        assert_eq!(settings.startup_fade_ms, 80.0);
+        assert_eq!(settings.seek_fade_out_ms, 20.0);
+        assert_eq!(settings.seek_fade_in_ms, 50.0);
+        assert_eq!(settings.inline_effects_transition_ms, 15.0);
+        assert_eq!(settings.append_jitter_log_ms, 0.0);
+        assert_eq!(settings.parameter_ramp_ms, 5.0);
     }
 
     #[test]

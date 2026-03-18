@@ -348,10 +348,14 @@ impl ConvolutionReverbState {
             self.block_in.clear();
             self.block_in.extend(self.input_buffer.drain(0..take));
             if let Some(smoother) = dry_wet_smoother.as_deref_mut() {
-                self.reverb
-                    .process_into_with_smoother(&self.block_in, &mut self.block_out, smoother);
+                self.reverb.process_into_with_smoother(
+                    &self.block_in,
+                    &mut self.block_out,
+                    smoother,
+                );
             } else {
-                self.reverb.process_into(&self.block_in, &mut self.block_out);
+                self.reverb
+                    .process_into(&self.block_in, &mut self.block_out);
             }
             self.output_buffer.extend_from_slice(&self.block_out);
             if take < batch_samples {
@@ -367,10 +371,14 @@ impl ConvolutionReverbState {
             self.block_in.clear();
             self.block_in.extend(self.input_buffer.drain(0..take));
             if let Some(smoother) = dry_wet_smoother.as_deref_mut() {
-                self.reverb
-                    .process_into_with_smoother(&self.block_in, &mut self.block_out, smoother);
+                self.reverb.process_into_with_smoother(
+                    &self.block_in,
+                    &mut self.block_out,
+                    smoother,
+                );
             } else {
-                self.reverb.process_into(&self.block_in, &mut self.block_out);
+                self.reverb
+                    .process_into(&self.block_in, &mut self.block_out);
             }
             self.output_buffer.extend_from_slice(&self.block_out);
         }

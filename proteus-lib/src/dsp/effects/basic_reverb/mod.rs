@@ -90,7 +90,10 @@ impl crate::dsp::effects::core::DspEffect for DelayReverbEffect {
         }
 
         self.update_mix_smoother(context);
-        let current_mix = self.mix_smoother.as_ref().map_or(0.0, ParamSmoother::current);
+        let current_mix = self
+            .mix_smoother
+            .as_ref()
+            .map_or(0.0, ParamSmoother::current);
         let mix_settled = self
             .mix_smoother
             .as_ref()
@@ -137,7 +140,10 @@ impl crate::dsp::effects::core::DspEffect for DelayReverbEffect {
         }
 
         self.update_mix_smoother(context);
-        let current_mix = self.mix_smoother.as_ref().map_or(0.0, ParamSmoother::current);
+        let current_mix = self
+            .mix_smoother
+            .as_ref()
+            .map_or(0.0, ParamSmoother::current);
         let mix_settled = self
             .mix_smoother
             .as_ref()
