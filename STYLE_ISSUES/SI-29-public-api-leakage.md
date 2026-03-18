@@ -39,3 +39,7 @@ now `pub(crate)`, but other internal implementation types are still public.
 ## Status
 
 Resolved.
+
+Note: `PlaySettings` and `EffectSettings` have since been re-exposed because related
+applications depend on them. They are an intentional part of the public API and should
+remain public.
