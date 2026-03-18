@@ -75,9 +75,10 @@ Behavior:
 
 - if configured, the playback worker uses tracked queued chunk durations to keep the sink from getting further ahead than the requested time budget
 - this should coexist with the existing chunk-count settings for backward compatibility
-- if both a time budget and `max_sink_chunks` are configured, the stricter effective cap should win
+- the two controls are orthogonal: if `max_sink_chunks` is at its default of `0` (disabled), a configured time budget should still apply on its own; if both are active, the stricter effective cap should win
 - the setting should remain disabled by default
 - the time-based budget should be the preferred authoring control because it remains meaningful when chunk sizes vary by effect chain
+- the worker already tracks per-chunk durations in a `VecDeque<f64>` for the playback clock; after the played-chunk drain pass, the remaining entries represent queued audio, so computing queued milliseconds is a cheap sum over a typically tiny collection
 
 ### B. Expose queued-output diagnostics publicly
 
@@ -91,6 +92,8 @@ Without this, the editor can only inspect `sink_len`, which is not enough when o
 
 These diagnostics should be cheap to poll and available in normal builds. The editor should not need debug-only plumbing just to know whether authoring mode is meeting its target.
 
+The editor already polls `DspChainMetrics` (via `get_dsp_metrics()`) for overrun, underrun, and late-append data. Adding queued-sink-ms and output-chunk-ms fields to that struct, or exposing them through a similarly lightweight `Player` accessor, would keep the diagnostics surface cohesive rather than introducing a separate polling path.
+
 ### C. Decouple internal DSP batch size from audible output slice size
 
 In authoring mode, large internal processing batches should not automatically force equally large sink appends.
@@ -102,7 +105,11 @@ This matters most for convolution reverb:
 
 The library should support smaller output append slices even when an effect internally processes a larger block. This is the structural change needed to make convolution-heavy chains feel more like an editor and less like an offline render queue.
 
-The current coupling appears to live primarily in mix-runner scheduling and chunk emission, not necessarily in convolution correctness itself. Implementation should start there. Also, smaller output slices increase send/append frequency, so they should be explicitly enabled for authoring mode rather than made universal.
+The current coupling appears to live primarily in mix-runner scheduling and chunk emission, not necessarily in convolution correctness itself. The convolution effect itself processes correctly regardless of how the output is later subdivided — the FFT/convolution math runs on the full aligned batch, and the resulting processed audio is ordinary interleaved samples that can be sliced freely. The natural slicing point is therefore *after* the effect chain runs, in or around `output_stage::send_samples()`, which currently wraps the entire processed batch into a single `SamplesBuffer` and sends it over the bounded `mpsc::sync_channel(1)` to the worker thread. In authoring mode, that function could instead slice the processed output into smaller time-aligned chunks (e.g. ~30 ms) and send each individually.
+
+The `sync_channel(1)` between the mix thread and the worker thread is worth noting here: it has a capacity of one item, so the mix thread blocks after sending until the worker consumes the chunk and appends it to the sink. When slicing a large batch into N smaller chunks, this means N send/recv cycles per batch, each gated by sink backpressure. This is desirable — it naturally prevents the mix thread from racing ahead and makes the time-based budget in Section A effective even when the internal DSP batch is large.
+
+Because this increases per-batch overhead (more channel operations and sink appends), it should be explicitly enabled for authoring mode rather than made universal.
 
 ### D. Add an explicit low-latency authoring profile/helper
 
@@ -119,7 +126,8 @@ The helper/profile should apply or expose a cohesive set of controls for:
 
 - low startup buffer
 - minimal start sink gate
-- finite sink latency cap
+- finite sink latency cap (a default `max_sink_latency_ms` value, e.g. 50–80 ms)
+- output slice size suitable for live editing on convolution chains
 - short parameter ramps
 - short inline chain transition time
 
@@ -142,6 +150,7 @@ This is harder than passive backpressure because already-appended audio cannot b
 | `proteus-lib/src/playback/engine/mix/runner/startup.rs` | Compute internal batch size separately from authoring-facing output slice size |
 | `proteus-lib/src/playback/engine/mix/runner/state.rs` | Carry separate internal-batch and sink-slice settings through the runtime |
 | `proteus-lib/src/playback/engine/mix/runner/loop_body.rs` | Emit smaller sink-facing slices without changing internal DSP batching |
+| `proteus-lib/src/playback/engine/mix/output_stage.rs` | Slice post-DSP output into smaller chunks before sending to the worker thread |
 
 ---
 
@@ -152,6 +161,7 @@ This is harder than passive backpressure because already-appended audio cannot b
 - [ ] If both chunk-count and time-based sink limits are configured, the stricter cap wins
 - [ ] Inline `set_effect_parameter()` / `set_effect_enabled()` changes become audible within the configured output-latency budget on non-convolution chains, absent device/OS buffering outside Proteus
 - [ ] Convolution-enabled chains can opt into smaller sink append slices without forcing that behavior on stability-first playback modes
+- [ ] `configure_for_live_authoring()` / `PlaybackBufferSettings::live_authoring()` sets a default `max_sink_latency_ms` and enables output slicing, so the editor gets a bounded latency contract from a single call
 - [ ] Existing default behavior remains the default for higher-buffer, stability-first playback modes
 
 ## Status

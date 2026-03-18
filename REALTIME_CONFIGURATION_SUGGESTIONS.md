@@ -21,6 +21,8 @@ That does not mean the library defaults should change globally. The editor and t
 
 Today, `max_sink_chunks == 0` means "no sink backpressure at all". If the editor leaves that setting at `0`, the sink can get far ahead of the playback head, which turns a fast control-path update into a slow audible update.
 
+There is also a natural backpressure point between the mix thread and the playback worker: the bounded `sync_channel(1)` that carries rendered chunks. This channel has a capacity of one, so the mix thread blocks after sending a chunk until the worker consumes it and appends it to the sink. This means the mix thread can never be more than one chunk ahead of the worker — but with `max_sink_chunks = 0`, the worker immediately appends without waiting, so audio still accumulates in the sink itself.
+
 ### 2. Chunk size is already about 30 ms minimum
 
 The mix runtime currently renders in chunks with a floor of about 30 ms. That is a reasonable realtime control granularity for most effects.
@@ -58,7 +60,7 @@ Interpretation:
 
 For non-convolution chains, `max_sink_chunks = 2` usually means roughly a few tens of milliseconds of Proteus-managed sink backlog, not seconds of buffered audio. End-to-end control latency will still include the current in-flight chunk plus device/OS buffering.
 
-For convolution-heavy chains, try `max_sink_chunks = 1` first. Because each chunk can already be much larger there, chunk-count-based buffering is a blunt tool and configuration alone will only get you so far until the library adds a time-based cap and smaller sink-facing output slices.
+For convolution-heavy chains, try `max_sink_chunks = 1` first. Because each chunk is convolution-batch aligned (currently ~171 ms at stereo 48 kHz), even `max_sink_chunks = 1` allows up to ~171 ms of queued audio in the sink plus up to one more chunk in the mix-to-worker channel — roughly 340 ms of library-side latency before the audio device adds its own buffering. Chunk-count-based backpressure is fundamentally the wrong unit here: it cannot distinguish between one 30 ms chunk and one 171 ms chunk. Configuration alone will only get you so far until the library adds a time-based cap and smaller sink-facing output slices (`FR-03`).
 
 ## API Usage Recommendations
 
