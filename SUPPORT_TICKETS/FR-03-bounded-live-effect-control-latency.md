@@ -6,6 +6,8 @@
 
 In the current playback architecture, a parameter change can reach the mix thread quickly and still be heard noticeably later because the output side may already have a backlog of previously rendered audio queued in the sink. For authoring workflows, the library needs an explicit control-latency contract, not just artifact-free parameter ramps.
 
+Any solution here must remain opt-in. The editor wants bounded live-edit response, but player applications still need the current stability-first behavior and should not pay extra wakeup, slicing, or buffering costs unless they explicitly choose that tradeoff.
+
 ---
 
 ## Motivation
@@ -52,7 +54,7 @@ The library exposes `sink_len` and DSP metrics, but not a direct "queued output 
 
 ## Desired Outcome
 
-The library should support a deliberate low-latency authoring mode where effect parameter changes become audible within a bounded, measurable time budget, while preserving the current stable/high-buffer behavior for non-authoring use cases.
+The library should support a deliberate low-latency authoring mode where effect parameter changes become audible within a bounded, measurable time budget, while preserving the current stable/high-buffer behavior as the default for non-authoring use cases.
 
 ---
 
@@ -73,21 +75,25 @@ Behavior:
 
 - if configured, the playback worker uses tracked queued chunk durations to keep the sink from getting further ahead than the requested time budget
 - this should coexist with the existing chunk-count settings for backward compatibility
+- if both a time budget and `max_sink_chunks` are configured, the stricter effective cap should win
+- the setting should remain disabled by default
 - the time-based budget should be the preferred authoring control because it remains meaningful when chunk sizes vary by effect chain
 
 ### B. Expose queued-output diagnostics publicly
 
 Add public diagnostics that let the editor reason about responsiveness directly, for example:
 
-- queued sink audio in milliseconds
+- queued sink audio in milliseconds managed by Proteus
 - current output append chunk duration in milliseconds
-- estimated control-to-audible latency budget
+- estimated library-side control-to-audible latency budget
 
 Without this, the editor can only inspect `sink_len`, which is not enough when one chunk may represent 30 ms in one chain and ~171 ms in another.
 
+These diagnostics should be cheap to poll and available in normal builds. The editor should not need debug-only plumbing just to know whether authoring mode is meeting its target.
+
 ### C. Decouple internal DSP batch size from audible output slice size
 
-Large internal processing batches should not automatically force equally large sink appends.
+In authoring mode, large internal processing batches should not automatically force equally large sink appends.
 
 This matters most for convolution reverb:
 
@@ -96,18 +102,23 @@ This matters most for convolution reverb:
 
 The library should support smaller output append slices even when an effect internally processes a larger block. This is the structural change needed to make convolution-heavy chains feel more like an editor and less like an offline render queue.
 
+The current coupling appears to live primarily in mix-runner scheduling and chunk emission, not necessarily in convolution correctness itself. Implementation should start there. Also, smaller output slices increase send/append frequency, so they should be explicitly enabled for authoring mode rather than made universal.
+
 ### D. Add an explicit low-latency authoring profile/helper
 
 The public API should make the intended mode obvious. Examples:
 
 - `player.configure_for_live_authoring()`
+- `PlaybackBufferSettings::live_authoring()`
 - `PlaybackMode::Authoring`
 - `set_target_control_latency_ms(...)`
 
-This helper can apply a cohesive profile for:
+A first step now exists via `player.configure_for_live_authoring()` / `PlaybackBufferSettings::live_authoring()`, which provide an opt-in low-latency baseline without changing defaults. This FR is still needed because a profile helper alone does not create a bounded latency contract.
+
+The helper/profile should apply or expose a cohesive set of controls for:
 
 - low startup buffer
-- zero or minimal start sink gate
+- minimal start sink gate
 - finite sink latency cap
 - short parameter ramps
 - short inline chain transition time
@@ -116,7 +127,7 @@ This helper can apply a cohesive profile for:
 
 If the sink backlog exceeds the configured authoring budget, consider an opt-in strategy that reduces queued audio more aggressively when an inline effect change arrives.
 
-This is harder than passive backpressure because already-appended audio cannot be edited in place. Any implementation would need to preserve continuity and avoid audible transport artifacts. Treat this as a follow-up only if a time-based cap plus smaller output slices still does not meet the authoring target.
+This is harder than passive backpressure because already-appended audio cannot be edited in place. Any implementation would need to preserve continuity and avoid audible transport artifacts. Treat this as a separate follow-up only if a time-based cap plus smaller output slices still does not meet the authoring target, and keep it disabled by default.
 
 ---
 
@@ -124,22 +135,24 @@ This is harder than passive backpressure because already-appended audio cannot b
 
 | File | Why |
 |---|---|
-| `proteus-lib/src/playback/engine/state.rs` | Add time-based latency budget fields |
-| `proteus-lib/src/playback/player/settings.rs` | Add public setters/helpers for authoring mode |
+| `proteus-lib/src/playback/engine/state.rs` | Add time-based latency budget fields and profile defaults |
+| `proteus-lib/src/playback/player/settings.rs` | Add public setters/helpers and latency diagnostics accessors |
 | `proteus-lib/src/playback/player/runtime/worker/sink.rs` | Enforce queued-output time budget and surface diagnostics |
 | `proteus-lib/src/playback/player/runtime/worker/timing.rs` | Reuse tracked chunk-duration bookkeeping for latency estimation |
-| `proteus-lib/src/playback/engine/mix/runner/startup.rs` | Reduce or decouple output slice size from internal processing batch size |
-| `proteus-lib/src/dsp/effects/convolution_reverb/*` | Preserve convolution correctness while allowing smaller sink-facing output slices |
+| `proteus-lib/src/playback/engine/mix/runner/startup.rs` | Compute internal batch size separately from authoring-facing output slice size |
+| `proteus-lib/src/playback/engine/mix/runner/state.rs` | Carry separate internal-batch and sink-slice settings through the runtime |
+| `proteus-lib/src/playback/engine/mix/runner/loop_body.rs` | Emit smaller sink-facing slices without changing internal DSP batching |
 
 ---
 
 ## Acceptance Criteria
 
-- [ ] The library exposes a time-based queued-output limit suitable for live authoring
-- [ ] The editor can query queued output latency in milliseconds through the public API
+- [ ] The library exposes an opt-in time-based queued-output limit suitable for live authoring
+- [ ] The editor can query queued output latency in milliseconds through the public API without relying on debug-only plumbing
+- [ ] If both chunk-count and time-based sink limits are configured, the stricter cap wins
 - [ ] Inline `set_effect_parameter()` / `set_effect_enabled()` changes become audible within the configured output-latency budget on non-convolution chains, absent device/OS buffering outside Proteus
-- [ ] Convolution-enabled chains no longer force overly large sink append slices solely because of internal batch size
-- [ ] Existing default behavior remains available for higher-buffer, stability-first playback modes
+- [ ] Convolution-enabled chains can opt into smaller sink append slices without forcing that behavior on stability-first playback modes
+- [ ] Existing default behavior remains the default for higher-buffer, stability-first playback modes
 
 ## Status
 
