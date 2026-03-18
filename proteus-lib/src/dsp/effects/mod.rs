@@ -11,6 +11,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::dsp::effects::convolution_reverb::ImpulseResponseSpec;
+use crate::dsp::effects::core::smoother;
 
 pub mod basic_reverb;
 pub mod compressor;
@@ -68,6 +69,7 @@ pub struct EffectContext {
     container_path: Option<String>,
     impulse_response_spec: Option<ImpulseResponseSpec>,
     impulse_response_tail_db: f32,
+    parameter_ramp_samples: usize,
 }
 
 impl EffectContext {
@@ -103,6 +105,10 @@ impl EffectContext {
             container_path,
             impulse_response_spec,
             impulse_response_tail_db,
+            parameter_ramp_samples: smoother::ramp_samples(
+                smoother::DEFAULT_PARAMETER_RAMP_MS,
+                sample_rate,
+            ),
         })
     }
 
@@ -129,6 +135,16 @@ impl EffectContext {
     /// dB level below peak at which the impulse response tail is considered silent.
     pub fn impulse_response_tail_db(&self) -> f32 {
         self.impulse_response_tail_db
+    }
+
+    /// Number of samples over which parameter changes should be linearly ramped.
+    pub fn parameter_ramp_samples(&self) -> usize {
+        self.parameter_ramp_samples
+    }
+
+    /// Override the parameter ramp duration.
+    pub fn set_parameter_ramp_ms(&mut self, ms: f32) {
+        self.parameter_ramp_samples = smoother::ramp_samples(ms.max(0.0), self.sample_rate);
     }
 }
 

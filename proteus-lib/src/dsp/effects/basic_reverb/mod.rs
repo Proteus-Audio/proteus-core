@@ -3,6 +3,7 @@
 use log::info;
 use serde::{Deserialize, Serialize};
 
+use super::core::smoother::ParamSmoother;
 use super::EffectContext;
 
 const DEFAULT_DURATION_MS: u64 = 100;
@@ -55,6 +56,8 @@ pub struct DelayReverbEffect {
     pub settings: DelayReverbSettings,
     #[serde(skip)]
     state: Option<DelayReverbState>,
+    #[serde(skip)]
+    mix_smoother: Option<ParamSmoother>,
 }
 
 impl Default for DelayReverbEffect {
@@ -64,6 +67,7 @@ impl Default for DelayReverbEffect {
             mix: 0.0,
             settings: DelayReverbSettings::default(),
             state: None,
+            mix_smoother: None,
         }
     }
 }
@@ -81,7 +85,17 @@ impl std::fmt::Debug for DelayReverbEffect {
 impl crate::dsp::effects::core::DspEffect for DelayReverbEffect {
     fn process(&mut self, samples: &[f32], context: &EffectContext, drain: bool) -> Vec<f32> {
         self.ensure_state(context);
-        if !self.enabled || self.mix <= 0.0 {
+        if !self.enabled {
+            return samples.to_vec();
+        }
+
+        self.update_mix_smoother(context);
+        let current_mix = self.mix_smoother.as_ref().map_or(0.0, ParamSmoother::current);
+        let mix_settled = self
+            .mix_smoother
+            .as_ref()
+            .is_none_or(ParamSmoother::is_settled);
+        if mix_settled && current_mix <= 0.0 {
             return samples.to_vec();
         }
 
@@ -89,21 +103,23 @@ impl crate::dsp::effects::core::DspEffect for DelayReverbEffect {
             return samples.to_vec();
         };
 
-        let amplitude = if self.mix > 0.0 {
-            self.mix.clamp(0.0, MAX_AMPLITUDE)
-        } else {
-            self.settings.amplitude()
-        };
-
         if samples.is_empty() {
             if drain {
-                return state.drain_tail(amplitude);
+                return state.drain_tail(current_mix);
             }
             return Vec::new();
         }
 
         let mut output = Vec::with_capacity(samples.len());
-        state.process_samples(samples, amplitude, &mut output);
+        if mix_settled {
+            state.process_samples(samples, current_mix, &mut output);
+        } else {
+            let mix_smoother = self
+                .mix_smoother
+                .as_mut()
+                .expect("delay reverb mix smoother must be initialized");
+            state.process_samples_smoothed(samples, context.channels(), mix_smoother, &mut output);
+        }
         output
     }
 
@@ -115,27 +131,42 @@ impl crate::dsp::effects::core::DspEffect for DelayReverbEffect {
         drain: bool,
     ) {
         self.ensure_state(context);
-        if !self.enabled || self.mix <= 0.0 {
+        if !self.enabled {
             output.extend_from_slice(input);
             return;
         }
+
+        self.update_mix_smoother(context);
+        let current_mix = self.mix_smoother.as_ref().map_or(0.0, ParamSmoother::current);
+        let mix_settled = self
+            .mix_smoother
+            .as_ref()
+            .is_none_or(ParamSmoother::is_settled);
+        if mix_settled && current_mix <= 0.0 {
+            output.extend_from_slice(input);
+            return;
+        }
+
         let Some(state) = self.state.as_mut() else {
             output.extend_from_slice(input);
             return;
         };
-        let amplitude = if self.mix > 0.0 {
-            self.mix.clamp(0.0, MAX_AMPLITUDE)
-        } else {
-            self.settings.amplitude()
-        };
         if input.is_empty() {
             if drain {
-                let tail = state.drain_tail(amplitude);
+                let tail = state.drain_tail(current_mix);
                 output.extend(tail);
             }
             return;
         }
-        state.process_samples(input, amplitude, output);
+        if mix_settled {
+            state.process_samples(input, current_mix, output);
+        } else {
+            let mix_smoother = self
+                .mix_smoother
+                .as_mut()
+                .expect("delay reverb mix smoother must be initialized");
+            state.process_samples_smoothed(input, context.channels(), mix_smoother, output);
+        }
     }
 
     fn reset_state(&mut self) {
@@ -143,6 +174,7 @@ impl crate::dsp::effects::core::DspEffect for DelayReverbEffect {
             state.reset();
         }
         self.state = None;
+        self.mix_smoother = None;
     }
 }
 
@@ -158,6 +190,25 @@ impl DelayReverbEffect {
     /// Mutable access to settings.
     pub fn settings_mut(&mut self) -> &mut DelayReverbSettings {
         &mut self.settings
+    }
+
+    fn mix_target(&self) -> f32 {
+        let target = if self.mix > 0.0 {
+            self.mix.clamp(0.0, MAX_AMPLITUDE)
+        } else {
+            self.settings.amplitude()
+        };
+        target
+    }
+
+    fn update_mix_smoother(&mut self, context: &EffectContext) {
+        let target = self.mix_target();
+        let smoother = self
+            .mix_smoother
+            .get_or_insert_with(|| ParamSmoother::new(target));
+        if (smoother.target() - target).abs() > f32::EPSILON {
+            smoother.set_target(target, context.parameter_ramp_samples());
+        }
     }
 
     fn ensure_state(&mut self, context: &EffectContext) {
@@ -216,6 +267,36 @@ impl DelayReverbState {
             self.write_pos += 1;
             if self.write_pos >= delay_len {
                 self.write_pos = 0;
+            }
+        }
+    }
+
+    fn process_samples_smoothed(
+        &mut self,
+        samples: &[f32],
+        channels: usize,
+        amplitude: &mut ParamSmoother,
+        out: &mut Vec<f32>,
+    ) {
+        if self.delay_samples == 0 {
+            out.extend_from_slice(samples);
+            return;
+        }
+
+        let delay_len = self.delay_line.len();
+        let channels = channels.max(1);
+        for frame in samples.chunks(channels) {
+            let frame_amplitude = amplitude.next();
+            for &sample in frame {
+                let delayed = self.delay_line[self.write_pos];
+                let output = sample + (delayed * frame_amplitude);
+                out.push(output);
+
+                self.delay_line[self.write_pos] = sample + (delayed * frame_amplitude);
+                self.write_pos += 1;
+                if self.write_pos >= delay_len {
+                    self.write_pos = 0;
+                }
             }
         }
     }
@@ -283,5 +364,26 @@ mod tests {
         let input = vec![0.5_f32, -0.5, 0.25, -0.25];
         let output = effect.process(&input, &context(), false);
         assert_eq!(output.len(), input.len());
+    }
+
+    #[test]
+    fn delay_reverb_mix_uses_smoother() {
+        let mut effect = DelayReverbEffect::new(0.2);
+        effect.enabled = true;
+        effect.settings.duration_ms = 1;
+
+        let mut context = EffectContext::new(8_000, 1, None, None, -60.0).unwrap();
+        context.set_parameter_ramp_ms(1.0);
+
+        let _ = effect.process(&[1.0_f32; 8], &context, false);
+        effect.mix = 0.8;
+        let _ = effect.process(&[1.0_f32; 4], &context, false);
+
+        let smoother = effect
+            .mix_smoother
+            .as_ref()
+            .expect("delay reverb mix smoother should exist");
+        assert!(smoother.current() > 0.2);
+        assert!(smoother.current() < 0.8);
     }
 }

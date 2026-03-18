@@ -25,6 +25,8 @@ pub struct PlaybackBufferSettings {
     pub append_jitter_log_ms: f32,
     /// When `true`, logs a message each time an effect boundary is crossed.
     pub effect_boundary_log: bool,
+    /// Duration in milliseconds for per-parameter smoothing ramps (default: 5.0).
+    pub parameter_ramp_ms: f32,
 }
 
 impl PlaybackBufferSettings {
@@ -42,6 +44,7 @@ impl PlaybackBufferSettings {
             inline_effects_transition_ms: 25.0,
             append_jitter_log_ms: 0.0,
             effect_boundary_log: false,
+            parameter_ramp_ms: 5.0,
         }
     }
 }

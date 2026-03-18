@@ -123,6 +123,17 @@ impl Player {
         });
     }
 
+    /// Configure the duration (ms) used for per-parameter smoothing ramps.
+    ///
+    /// This controls how quickly individual effect parameter changes (gain,
+    /// filter cutoff, etc.) are ramped to their new values. The default is
+    /// 5.0 ms. A value of 0.0 disables smoothing (parameters snap instantly).
+    pub fn set_parameter_ramp_ms(&self, ms: f32) {
+        self.update_buffer_settings(|settings| {
+            settings.parameter_ramp_ms = clamp_non_negative(ms);
+        });
+    }
+
     /// Update per-slot track level/pan without restarting playback.
     ///
     /// This mutates the underlying track model and queues an inline update for
@@ -192,6 +203,9 @@ impl Player {
 #[cfg(test)]
 mod tests {
     use super::clamp_non_negative;
+    use crate::container::prot::PathsTrack;
+    use crate::playback::player::{Player, PlayerState};
+    use std::sync::atomic::Ordering;
 
     #[test]
     fn clamp_non_negative_zeroes_negative_values() {
@@ -201,5 +215,26 @@ mod tests {
     #[test]
     fn clamp_non_negative_keeps_positive_values() {
         assert_eq!(clamp_non_negative(12.5), 12.5);
+    }
+
+    #[test]
+    fn set_parameter_ramp_ms_updates_buffer_settings() {
+        let player = test_player();
+        player.set_parameter_ramp_ms(12.5);
+        assert_eq!(
+            player.lock_buffer_settings_recoverable().parameter_ramp_ms,
+            12.5
+        );
+    }
+
+    fn test_player() -> Player {
+        let player = Player::new_from_file_paths(vec![PathsTrack::new_from_file_paths(vec![
+            "/tmp/nonexistent.wav".to_string(),
+        ])]);
+        player.playback_thread_exists.store(false, Ordering::SeqCst);
+        player.abort.store(true, Ordering::SeqCst);
+        *player.lock_playback_thread_handle_invariant() = None;
+        *player.lock_state_invariant() = PlayerState::Stopped;
+        player
     }
 }

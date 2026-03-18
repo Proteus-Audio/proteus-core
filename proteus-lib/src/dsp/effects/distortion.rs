@@ -3,6 +3,7 @@
 use serde::{Deserialize, Serialize};
 
 use super::core::level::deserialize_linear_gain;
+use super::core::smoother::ParamSmoother;
 use super::EffectContext;
 use crate::dsp::guardrails::sanitize_finite;
 
@@ -46,6 +47,10 @@ pub struct DistortionEffect {
     /// Distortion parameters such as pre-gain and clipping threshold.
     #[serde(flatten)]
     pub settings: DistortionSettings,
+    #[serde(skip)]
+    gain_smoother: Option<ParamSmoother>,
+    #[serde(skip)]
+    threshold_smoother: Option<ParamSmoother>,
 }
 
 impl std::fmt::Debug for DistortionEffect {
@@ -58,23 +63,35 @@ impl std::fmt::Debug for DistortionEffect {
 }
 
 impl super::core::DspEffect for DistortionEffect {
-    fn process(&mut self, samples: &[f32], _context: &EffectContext, _drain: bool) -> Vec<f32> {
+    fn process(&mut self, samples: &[f32], context: &EffectContext, _drain: bool) -> Vec<f32> {
         if !self.enabled {
             return samples.to_vec();
         }
-
-        let gain = sanitize_finite(self.settings.gain, DEFAULT_GAIN);
-        let threshold = sanitize_threshold(self.settings.threshold);
         if samples.is_empty() {
             return Vec::new();
         }
 
-        let mut out = Vec::with_capacity(samples.len());
-        for &sample in samples {
-            let v = sample * gain;
-            out.push(v.clamp(-threshold, threshold));
-        }
+        self.update_smoothers(context);
+        let gs = self.gain_smoother.as_mut().unwrap();
+        let ts = self.threshold_smoother.as_mut().unwrap();
+        let channels = context.channels().max(1);
 
+        let mut out = Vec::with_capacity(samples.len());
+        if gs.is_settled() && ts.is_settled() {
+            let gain = gs.current();
+            let threshold = ts.current();
+            for &sample in samples {
+                out.push((sample * gain).clamp(-threshold, threshold));
+            }
+        } else {
+            for frame in samples.chunks(channels) {
+                let gain = gs.next();
+                let threshold = ts.next();
+                for &sample in frame {
+                    out.push((sample * gain).clamp(-threshold, threshold));
+                }
+            }
+        }
         out
     }
 
@@ -82,21 +99,62 @@ impl super::core::DspEffect for DistortionEffect {
         &mut self,
         input: &[f32],
         output: &mut Vec<f32>,
-        _context: &EffectContext,
+        context: &EffectContext,
         _drain: bool,
     ) {
         if !self.enabled {
             output.extend_from_slice(input);
             return;
         }
-        let gain = sanitize_finite(self.settings.gain, DEFAULT_GAIN);
-        let threshold = sanitize_threshold(self.settings.threshold);
-        for &sample in input {
-            output.push((sample * gain).clamp(-threshold, threshold));
+
+        self.update_smoothers(context);
+        let gs = self.gain_smoother.as_mut().unwrap();
+        let ts = self.threshold_smoother.as_mut().unwrap();
+        let channels = context.channels().max(1);
+
+        if gs.is_settled() && ts.is_settled() {
+            let gain = gs.current();
+            let threshold = ts.current();
+            for &sample in input {
+                output.push((sample * gain).clamp(-threshold, threshold));
+            }
+        } else {
+            for frame in input.chunks(channels) {
+                let gain = gs.next();
+                let threshold = ts.next();
+                for &sample in frame {
+                    output.push((sample * gain).clamp(-threshold, threshold));
+                }
+            }
         }
     }
 
-    fn reset_state(&mut self) {}
+    fn reset_state(&mut self) {
+        self.gain_smoother = None;
+        self.threshold_smoother = None;
+    }
+}
+
+impl DistortionEffect {
+    fn update_smoothers(&mut self, context: &EffectContext) {
+        let target_gain = sanitize_finite(self.settings.gain, DEFAULT_GAIN);
+        let target_threshold = sanitize_threshold(self.settings.threshold);
+        let ramp = context.parameter_ramp_samples();
+
+        let gs = self
+            .gain_smoother
+            .get_or_insert_with(|| ParamSmoother::new(target_gain));
+        if (gs.target() - target_gain).abs() > f32::EPSILON {
+            gs.set_target(target_gain, ramp);
+        }
+
+        let ts = self
+            .threshold_smoother
+            .get_or_insert_with(|| ParamSmoother::new(target_threshold));
+        if (ts.target() - target_threshold).abs() > f32::EPSILON {
+            ts.set_target(target_threshold, ramp);
+        }
+    }
 }
 
 #[cfg(test)]

@@ -9,6 +9,7 @@ use log::debug;
 
 use super::convolution::Convolver;
 use super::impulse_response::ImpulseResponse;
+use crate::dsp::effects::core::smoother::ParamSmoother;
 
 const IDENTITY_IMPULSE_RESPONSE: &[f32] = &[1.0];
 
@@ -94,7 +95,7 @@ impl Reverb {
         }
 
         let mut out = Vec::new();
-        self.process_into(input_buffer, &mut out);
+        self.process_into_internal(input_buffer, &mut out, None);
         out
     }
 
@@ -110,9 +111,8 @@ impl Reverb {
         segment_size * self.channels
     }
 
-    fn process_channel(&mut self, channel: &[f32], index: usize) -> Vec<f32> {
+    fn process_channel(convolver: &mut Convolver, channel: &[f32], index: usize) -> Vec<f32> {
         let start = Instant::now();
-        let convolver = &mut self.convolvers[index];
 
         debug!("convolver fft size: {:?}", convolver.fft_size);
         debug!("channel length: {:?}", channel.len());
@@ -131,6 +131,24 @@ impl Reverb {
     ///
     /// The output buffer is cleared and replaced with the processed samples.
     pub fn process_into(&mut self, input_buffer: &[f32], out: &mut Vec<f32>) {
+        self.process_into_internal(input_buffer, out, None);
+    }
+
+    pub(crate) fn process_into_with_smoother(
+        &mut self,
+        input_buffer: &[f32],
+        out: &mut Vec<f32>,
+        dry_wet_smoother: &mut ParamSmoother,
+    ) {
+        self.process_into_internal(input_buffer, out, Some(dry_wet_smoother));
+    }
+
+    fn process_into_internal(
+        &mut self,
+        input_buffer: &[f32],
+        out: &mut Vec<f32>,
+        dry_wet_smoother: Option<&mut ParamSmoother>,
+    ) {
         if self.dry_wet <= 0.0 {
             out.clear();
             out.extend_from_slice(input_buffer);
@@ -165,8 +183,8 @@ impl Reverb {
 
         let channels = self.channels;
         for ch in 0..channels {
-            let input = self.scratch_dry[ch].clone();
-            let processed = self.process_channel(&input, ch);
+            let input = &self.scratch_dry[ch];
+            let processed = Self::process_channel(&mut self.convolvers[ch], input, ch);
             self.scratch_wet[ch] = processed;
         }
 
@@ -175,14 +193,38 @@ impl Reverb {
             self.scratch_mixed.resize(total_samples, 0.0);
         }
 
-        let dry_amount = 1.0 - self.dry_wet;
-        let wet_amount = self.dry_wet;
+        if let Some(smoother) = dry_wet_smoother {
+            if smoother.is_settled() {
+                let dry_amount = 1.0 - smoother.current();
+                let wet_amount = smoother.current();
+                for frame in 0..frames {
+                    let base = frame * self.channels;
+                    for ch in 0..self.channels {
+                        self.scratch_mixed[base + ch] = (self.scratch_dry[ch][frame] * dry_amount)
+                            + (self.scratch_wet[ch][frame] * wet_amount);
+                    }
+                }
+            } else {
+                for frame in 0..frames {
+                    let wet_amount = smoother.next();
+                    let dry_amount = 1.0 - wet_amount;
+                    let base = frame * self.channels;
+                    for ch in 0..self.channels {
+                        self.scratch_mixed[base + ch] = (self.scratch_dry[ch][frame] * dry_amount)
+                            + (self.scratch_wet[ch][frame] * wet_amount);
+                    }
+                }
+            }
+        } else {
+            let dry_amount = 1.0 - self.dry_wet;
+            let wet_amount = self.dry_wet;
 
-        for frame in 0..frames {
-            let base = frame * self.channels;
-            for ch in 0..self.channels {
-                self.scratch_mixed[base + ch] = (self.scratch_dry[ch][frame] * dry_amount)
-                    + (self.scratch_wet[ch][frame] * wet_amount);
+            for frame in 0..frames {
+                let base = frame * self.channels;
+                for ch in 0..self.channels {
+                    self.scratch_mixed[base + ch] = (self.scratch_dry[ch][frame] * dry_amount)
+                        + (self.scratch_wet[ch][frame] * wet_amount);
+                }
             }
         }
 

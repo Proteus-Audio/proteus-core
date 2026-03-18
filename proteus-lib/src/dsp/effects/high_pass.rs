@@ -101,29 +101,25 @@ impl super::core::DspEffect for HighPassFilterEffect {
 
 impl HighPassFilterEffect {
     fn ensure_state(&mut self, context: &EffectContext) {
-        let needs_reset = self
-            .state
-            .as_ref()
-            .map(|state| {
-                !state.matches(
-                    BiquadKind::HighPass,
-                    context.sample_rate(),
-                    context.channels(),
+        if let Some(state) = self.state.as_mut() {
+            if state.matches_structure(BiquadKind::HighPass, context.sample_rate(), context.channels())
+            {
+                state.update_coefficients(
                     self.settings.freq_hz,
                     self.settings.q,
-                )
-            })
-            .unwrap_or(true);
-
-        if needs_reset {
-            self.state = Some(BiquadState::new(
-                BiquadKind::HighPass,
-                context.sample_rate(),
-                context.channels(),
-                self.settings.freq_hz,
-                self.settings.q,
-            ));
+                    context.parameter_ramp_samples(),
+                );
+                return;
+            }
         }
+
+        self.state = Some(BiquadState::new(
+            BiquadKind::HighPass,
+            context.sample_rate(),
+            context.channels(),
+            self.settings.freq_hz,
+            self.settings.q,
+        ));
     }
 }
 
@@ -154,5 +150,32 @@ mod tests {
         assert_eq!(output.len(), samples.len());
         assert!(output.iter().any(|value| value.abs() < 0.999));
         assert!(output.iter().all(|value| value.is_finite()));
+    }
+
+    #[test]
+    fn high_pass_q_change_stays_continuous() {
+        let mut effect = HighPassFilterEffect::default();
+        effect.enabled = true;
+        effect.settings.freq_hz = 1_200;
+        effect.settings.q = 0.6;
+
+        let mut context = context();
+        context.set_parameter_ramp_ms(5.0);
+
+        let signal = (0..512)
+            .map(|index| {
+                let phase = 2.0 * std::f32::consts::PI * 250.0 * index as f32 / 48_000.0;
+                phase.sin()
+            })
+            .flat_map(|sample| [sample, sample])
+            .collect::<Vec<_>>();
+
+        let first = effect.process(&signal[..256], &context, false);
+        let previous = *first.last().unwrap();
+        effect.settings.q = 1.4;
+        let second = effect.process(&signal[256..], &context, false);
+
+        assert!((second[0] - previous).abs() < 0.2);
+        assert!(second.iter().all(|sample| sample.is_finite()));
     }
 }

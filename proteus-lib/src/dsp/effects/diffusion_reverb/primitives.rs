@@ -4,6 +4,7 @@
 //! state struct that owns the lane collection, and the `delay_samples` helper.
 
 use crate::dsp::guardrails::sanitize_channels;
+use crate::dsp::effects::core::smoother::ParamSmoother;
 
 // Upper bound for synthetic silence-fed tail flushing.
 const DRAIN_MAX_TAIL_MULTIPLIER: usize = 64;
@@ -81,6 +82,40 @@ impl DiffusionReverbState {
                     output_diffusion,
                 );
                 out.push(sample * (1.0 - mix) + wet * mix);
+            }
+        }
+
+        let remainder = samples.len() % channels;
+        if remainder != 0 {
+            let start = samples.len() - remainder;
+            out.extend_from_slice(&samples[start..]);
+        }
+    }
+
+    /// Process interleaved samples while ramping the dry/wet mix per frame.
+    pub(super) fn process_samples_smoothed(
+        &mut self,
+        samples: &[f32],
+        mix: &mut ParamSmoother,
+        decay: f32,
+        damping: f32,
+        diffusion: f32,
+        out: &mut Vec<f32>,
+    ) {
+        let channels = sanitize_channels(self.channels);
+        let (input_diffusion, output_diffusion) = diffusion_coeffs(diffusion);
+
+        for frame in samples.chunks_exact(channels) {
+            let frame_mix = mix.next();
+            for (channel, &sample) in frame.iter().enumerate() {
+                let wet = self.lanes[channel].process_sample(
+                    sample,
+                    decay,
+                    damping,
+                    input_diffusion,
+                    output_diffusion,
+                );
+                out.push(sample * (1.0 - frame_mix) + wet * frame_mix);
             }
         }
 

@@ -7,6 +7,7 @@
 use log::info;
 use serde::{Deserialize, Serialize};
 
+use super::core::smoother::ParamSmoother;
 use super::EffectContext;
 
 pub mod convolution;
@@ -71,6 +72,8 @@ pub struct ConvolutionReverbEffect {
     state: Option<ConvolutionReverbState>,
     #[serde(skip)]
     resolved_config: Option<ResolvedConfig>,
+    #[serde(skip)]
+    dry_wet_smoother: Option<ParamSmoother>,
 }
 
 impl std::fmt::Debug for ConvolutionReverbEffect {
@@ -91,23 +94,60 @@ impl Default for ConvolutionReverbEffect {
             settings: ConvolutionReverbSettings::default(),
             state: None,
             resolved_config: None,
+            dry_wet_smoother: None,
         }
     }
 }
 
 impl crate::dsp::effects::core::DspEffect for ConvolutionReverbEffect {
     fn process(&mut self, samples: &[f32], context: &EffectContext, drain: bool) -> Vec<f32> {
+        let mut out = Vec::new();
+        self.process_into(samples, &mut out, context, drain);
+        out
+    }
+
+    fn process_into(
+        &mut self,
+        input: &[f32],
+        output: &mut Vec<f32>,
+        context: &EffectContext,
+        drain: bool,
+    ) {
         self.ensure_state(context);
-        if !self.enabled || self.dry_wet <= 0.0 {
-            return samples.to_vec();
+        if !self.enabled {
+            output.extend_from_slice(input);
+            return;
+        }
+
+        self.update_dry_wet_smoother(context);
+        let current_mix = self
+            .dry_wet_smoother
+            .as_ref()
+            .map_or(DEFAULT_DRY_WET, ParamSmoother::current);
+        let mix_settled = self
+            .dry_wet_smoother
+            .as_ref()
+            .is_none_or(ParamSmoother::is_settled);
+        if mix_settled && current_mix <= 0.0 {
+            output.extend_from_slice(input);
+            return;
         }
 
         let Some(state) = self.state.as_mut() else {
-            return samples.to_vec();
+            output.extend_from_slice(input);
+            return;
         };
 
-        state.reverb.set_dry_wet(self.dry_wet);
-        state.process(samples, drain)
+        if mix_settled {
+            state.reverb.set_dry_wet(current_mix);
+            state.process_into(input, drain, output, None);
+        } else {
+            let dry_wet_smoother = self
+                .dry_wet_smoother
+                .as_mut()
+                .expect("convolution reverb smoother must be initialized");
+            state.process_into(input, drain, output, Some(dry_wet_smoother));
+        }
     }
 
     fn reset_state(&mut self) {
@@ -116,6 +156,7 @@ impl crate::dsp::effects::core::DspEffect for ConvolutionReverbEffect {
         }
         self.state = None;
         self.resolved_config = None;
+        self.dry_wet_smoother = None;
     }
 
     fn warm_up(&mut self, context: &EffectContext) {
@@ -140,6 +181,16 @@ impl ConvolutionReverbEffect {
     /// Mutable access to the stored impulse response settings.
     pub fn settings_mut(&mut self) -> &mut ConvolutionReverbSettings {
         &mut self.settings
+    }
+
+    fn update_dry_wet_smoother(&mut self, context: &EffectContext) {
+        let target = self.dry_wet.clamp(0.0, 1.0);
+        let smoother = self
+            .dry_wet_smoother
+            .get_or_insert_with(|| ParamSmoother::new(target));
+        if (smoother.target() - target).abs() > f32::EPSILON {
+            smoother.set_target(target, context.parameter_ramp_samples());
+        }
     }
 
     fn ensure_state(&mut self, context: &EffectContext) {
@@ -216,6 +267,7 @@ struct ConvolutionReverbState {
     reverb: reverb::Reverb,
     input_buffer: Vec<f32>,
     output_buffer: Vec<f32>,
+    block_in: Vec<f32>,
     block_out: Vec<f32>,
     block_samples: usize,
     tail_drained: bool,
@@ -230,6 +282,7 @@ impl ConvolutionReverbState {
             reverb,
             input_buffer: Vec::new(),
             output_buffer: Vec::new(),
+            block_in: Vec::new(),
             block_out: Vec::new(),
             block_samples,
             tail_drained: false,
@@ -240,46 +293,66 @@ impl ConvolutionReverbState {
         self.reverb.clear_state();
         self.input_buffer.clear();
         self.output_buffer.clear();
+        self.block_in.clear();
         self.block_out.clear();
         self.block_samples = self.reverb.block_size_samples();
         self.tail_drained = false;
     }
 
-    fn process(&mut self, samples: &[f32], drain: bool) -> Vec<f32> {
+    fn process_into(
+        &mut self,
+        samples: &[f32],
+        drain: bool,
+        out: &mut Vec<f32>,
+        dry_wet_smoother: Option<&mut ParamSmoother>,
+    ) {
         if samples.is_empty() {
             if !drain {
-                return Vec::new();
+                return;
             }
             if self.tail_drained {
-                return Vec::new();
+                return;
             }
 
-            let mut out = Vec::new();
             if !self.output_buffer.is_empty() {
-                out.append(&mut self.output_buffer);
+                out.extend(self.output_buffer.drain(..));
             }
             out.extend(self.drain_tail_blocks());
             self.tail_drained = true;
-            return out;
+            return;
         }
 
         self.tail_drained = false;
 
         if self.block_samples == 0 {
-            return self.reverb.process(samples);
+            if let Some(smoother) = dry_wet_smoother {
+                self.reverb
+                    .process_into_with_smoother(samples, &mut self.block_out, smoother);
+            } else {
+                self.reverb.process_into(samples, &mut self.block_out);
+            }
+            out.extend_from_slice(&self.block_out);
+            return;
         }
 
         self.input_buffer.extend_from_slice(samples);
         let batch_samples = self.block_samples * REVERB_BATCH_BLOCKS;
         let should_flush = drain && !self.input_buffer.is_empty();
+        let mut dry_wet_smoother = dry_wet_smoother;
         while self.input_buffer.len() >= batch_samples || should_flush {
             let take = if self.input_buffer.len() >= batch_samples {
                 batch_samples
             } else {
                 self.input_buffer.len()
             };
-            let block: Vec<f32> = self.input_buffer.drain(0..take).collect();
-            self.reverb.process_into(&block, &mut self.block_out);
+            self.block_in.clear();
+            self.block_in.extend(self.input_buffer.drain(0..take));
+            if let Some(smoother) = dry_wet_smoother.as_deref_mut() {
+                self.reverb
+                    .process_into_with_smoother(&self.block_in, &mut self.block_out, smoother);
+            } else {
+                self.reverb.process_into(&self.block_in, &mut self.block_out);
+            }
             self.output_buffer.extend_from_slice(&self.block_out);
             if take < batch_samples {
                 break;
@@ -291,23 +364,29 @@ impl ConvolutionReverbState {
         // input immediately instead of emitting silence.
         while self.output_buffer.len() < samples.len() && !self.input_buffer.is_empty() {
             let take = self.input_buffer.len().min(batch_samples.max(1));
-            let block: Vec<f32> = self.input_buffer.drain(0..take).collect();
-            self.reverb.process_into(&block, &mut self.block_out);
+            self.block_in.clear();
+            self.block_in.extend(self.input_buffer.drain(0..take));
+            if let Some(smoother) = dry_wet_smoother.as_deref_mut() {
+                self.reverb
+                    .process_into_with_smoother(&self.block_in, &mut self.block_out, smoother);
+            } else {
+                self.reverb.process_into(&self.block_in, &mut self.block_out);
+            }
             self.output_buffer.extend_from_slice(&self.block_out);
         }
 
         let chunk_len = samples.len();
         if self.output_buffer.len() < chunk_len {
-            let mut out: Vec<f32> = self.output_buffer.drain(..).collect();
-            let out_len = out.len();
+            let out_len = self.output_buffer.len();
+            out.extend(self.output_buffer.drain(..));
             if out_len < chunk_len {
                 out.extend_from_slice(&samples[out_len..chunk_len]);
             }
             self.output_buffer.clear();
-            return out;
+            return;
         }
 
-        self.output_buffer.drain(0..chunk_len).collect()
+        out.extend(self.output_buffer.drain(0..chunk_len));
     }
 
     fn drain_tail_blocks(&mut self) -> Vec<f32> {
@@ -349,7 +428,10 @@ impl ConvolutionReverbState {
 
 #[cfg(test)]
 mod tests {
-    use super::{ConvolutionReverbEffect, ConvolutionReverbSettings, EffectContext};
+    use super::{
+        reverb::Reverb, ConvolutionReverbEffect, ConvolutionReverbSettings, ConvolutionReverbState,
+        EffectContext, ResolvedConfig,
+    };
     use crate::dsp::effects::core::DspEffect;
 
     #[test]
@@ -370,5 +452,32 @@ mod tests {
         let context = EffectContext::new(48_000, 2, None, None, -60.0).unwrap();
         let output = effect.process(&input, &context, false);
         assert_eq!(output, input);
+    }
+
+    #[test]
+    fn convolution_reverb_mix_uses_smoother() {
+        let mut effect = ConvolutionReverbEffect::new(0.2);
+        effect.enabled = true;
+        effect.state = Some(ConvolutionReverbState::new(Reverb::new(1, 0.2)));
+        effect.resolved_config = Some(ResolvedConfig {
+            channels: 1,
+            container_path: None,
+            impulse_spec: None,
+            tail_db: -60.0,
+        });
+
+        let mut context = EffectContext::new(8_000, 1, None, None, -60.0).unwrap();
+        context.set_parameter_ramp_ms(1.0);
+
+        let _ = effect.process(&[0.5_f32; 8], &context, false);
+        effect.dry_wet = 0.8;
+        let _ = effect.process(&[0.5_f32; 4], &context, false);
+
+        let smoother = effect
+            .dry_wet_smoother
+            .as_ref()
+            .expect("convolution reverb smoother should exist");
+        assert!(smoother.current() > 0.2);
+        assert!(smoother.current() < 0.8);
     }
 }

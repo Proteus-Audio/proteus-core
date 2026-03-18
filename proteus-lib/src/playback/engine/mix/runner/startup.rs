@@ -41,7 +41,7 @@ pub(super) fn setup_mix_state(
 ) -> Option<MixLoopState> {
     info!("mix startup trace: thread start");
 
-    let startup = prepare_runtime_startup(&args.prot, args.start_time);
+    let startup = prepare_runtime_startup(&args.prot, &args.buffer_settings, args.start_time);
     info!(
         "mix startup trace: runtime plan built in {}ms (instances={})",
         startup_trace.elapsed().as_millis(),
@@ -103,6 +103,7 @@ struct RuntimeStartup {
 
 fn prepare_runtime_startup(
     prot: &Arc<std::sync::Mutex<crate::container::prot::Prot>>,
+    buffer_settings: &Arc<std::sync::Mutex<crate::playback::engine::PlaybackBufferSettings>>,
     start_time: f64,
 ) -> RuntimeStartup {
     let p = lock_invariant(
@@ -110,17 +111,25 @@ fn prepare_runtime_startup(
         "mix startup prot",
         "startup planning requires a coherent container model",
     );
+    let parameter_ramp_ms = lock_recoverable(
+        buffer_settings,
+        "mix startup buffer settings",
+        "buffer settings are runtime configuration snapshots",
+    )
+    .parameter_ramp_ms;
+    let mut effect_context = EffectContext::new(
+        p.info.sample_rate,
+        p.info.channels as usize,
+        p.get_container_path(),
+        p.get_impulse_response_spec(),
+        p.get_impulse_response_tail_db().unwrap_or(-60.0),
+    )
+    .expect("prot info must have valid sample rate and channel count");
+    effect_context.set_parameter_ramp_ms(parameter_ramp_ms);
     RuntimeStartup {
         instance_plan: p.build_runtime_instance_plan(start_time),
         container_path: p.get_container_path(),
-        effect_context: EffectContext::new(
-            p.info.sample_rate,
-            p.info.channels as usize,
-            p.get_container_path(),
-            p.get_impulse_response_spec(),
-            p.get_impulse_response_tail_db().unwrap_or(-60.0),
-        )
-        .expect("prot info must have valid sample rate and channel count"),
+        effect_context,
         track_mix_settings_by_slot: p.get_track_mix_settings(),
     }
 }

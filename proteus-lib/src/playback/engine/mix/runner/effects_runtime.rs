@@ -14,9 +14,9 @@ use crate::dsp::effects::EffectContext;
 #[cfg(feature = "debug")]
 use crate::logging::pivot_buffer_trace::pivot_buffer;
 
-use super::super::effects::run_effect_chain;
+use super::super::effects::{audio_effect_enabled, run_effect_chain, EffectEnableFade};
 use super::super::output_stage;
-use super::super::types::EffectSettingsCommand;
+use super::super::types::{EffectParameter, EffectSettingsCommand};
 use super::loop_body::{
     DRAIN_SILENCE_EPSILON, DRAIN_SILENT_PASSES_TO_STOP, MAX_EFFECT_DRAIN_PASSES,
 };
@@ -95,6 +95,7 @@ fn process_effects(samples: &[f32], state: &mut MixLoopState) {
             false,
             &mut state.effect_scratch_a,
             &mut state.effect_scratch_b,
+            None,
         );
         // During a transition we need both outputs simultaneously, so we save
         // old_out in a temporary Vec. Transitions are non-steady-state so this
@@ -109,6 +110,7 @@ fn process_effects(samples: &[f32], state: &mut MixLoopState) {
             false,
             &mut state.effect_scratch_a,
             &mut state.effect_scratch_b,
+            None,
         );
 
         let len = old_out.len().max(state.effect_scratch_a.len());
@@ -141,6 +143,7 @@ fn process_effects(samples: &[f32], state: &mut MixLoopState) {
             false,
             &mut state.effect_scratch_a,
             &mut state.effect_scratch_b,
+            Some(&mut state.effect_enable_fades),
         );
     }
 
@@ -154,6 +157,7 @@ fn process_effects(samples: &[f32], state: &mut MixLoopState) {
             let completed = transition.new_effects;
             *state.lock_effects_recoverable() = completed.clone();
             state.local_effects = completed;
+            state.effect_enable_fades = vec![None; state.local_effects.len()];
         }
     }
 }
@@ -253,6 +257,8 @@ pub(super) fn drain_effect_tail(state: &mut MixLoopState) -> bool {
 }
 
 pub(super) fn apply_effect_runtime_updates(state: &mut MixLoopState) {
+    sync_effect_context_from_buffer_settings(state);
+
     // Drain incremental settings commands from the control path.
     drain_effect_settings_commands(state);
 
@@ -264,9 +270,10 @@ pub(super) fn apply_effect_runtime_updates(state: &mut MixLoopState) {
         for effect in state.local_effects.iter_mut() {
             effect.reset_state();
         }
+        state.effect_enable_fades = vec![None; state.local_effects.len()];
         state.active_inline_transition = None;
         state.lock_inline_effects_update_recoverable().take();
-        state.effect_context = rebuild_effect_context(&state.prot);
+        state.effect_context = rebuild_effect_context(&state.prot, &state.buffer_settings);
         state.last_effects_reset = current_reset;
     }
 
@@ -286,6 +293,7 @@ pub(super) fn apply_effect_runtime_updates(state: &mut MixLoopState) {
                 effect.warm_up(&state.effect_context);
             }
             *state.lock_effects_recoverable() = state.local_effects.clone();
+            state.effect_enable_fades = vec![None; state.local_effects.len()];
             state.active_inline_transition = None;
         } else {
             // Crossfade transition: snapshot local chain as old, warm up new.
@@ -315,6 +323,7 @@ fn drain_effect_chains(state: &mut MixLoopState) {
             true,
             &mut state.effect_scratch_a,
             &mut state.effect_scratch_b,
+            None,
         );
         let old_out: Vec<f32> = state.effect_scratch_a.clone();
 
@@ -325,6 +334,7 @@ fn drain_effect_chains(state: &mut MixLoopState) {
             true,
             &mut state.effect_scratch_a,
             &mut state.effect_scratch_b,
+            None,
         );
 
         let len = old_out.len().max(state.effect_scratch_a.len());
@@ -346,6 +356,7 @@ fn drain_effect_chains(state: &mut MixLoopState) {
             true,
             &mut state.effect_scratch_a,
             &mut state.effect_scratch_b,
+            Some(&mut state.effect_enable_fades),
         );
     }
 }
@@ -362,13 +373,17 @@ fn drain_effect_settings_commands(state: &mut MixLoopState) {
     for command in commands {
         match command {
             EffectSettingsCommand::SetReverbEnabled(enabled) => {
-                for effect in state.local_effects.iter_mut() {
-                    if let Some(e) = effect.as_convolution_reverb_mut() {
-                        e.enabled = enabled;
+                let mut indices = Vec::new();
+                for (index, effect) in state.local_effects.iter().enumerate() {
+                    if effect.as_convolution_reverb().is_some()
+                        || effect.as_delay_reverb().is_some()
+                        || effect.as_diffusion_reverb().is_some()
+                    {
+                        indices.push(index);
                     }
-                    if let Some(e) = effect.as_delay_reverb_mut() {
-                        e.enabled = enabled;
-                    }
+                }
+                for index in indices {
+                    schedule_effect_enable_fade(state, index, enabled);
                 }
             }
             EffectSettingsCommand::SetReverbMix(dry_wet) => {
@@ -385,24 +400,218 @@ fn drain_effect_settings_commands(state: &mut MixLoopState) {
                     }
                 }
             }
+            EffectSettingsCommand::SetEffectParameter {
+                effect_index,
+                parameter,
+            } => {
+                if let Some(effect) = state.local_effects.get_mut(effect_index) {
+                    apply_effect_parameter(effect, parameter);
+                }
+            }
+            EffectSettingsCommand::SetEffectEnabled {
+                effect_index,
+                enabled,
+            } => {
+                schedule_effect_enable_fade(state, effect_index, enabled);
+            }
         }
+    }
+}
+
+fn schedule_effect_enable_fade(state: &mut MixLoopState, effect_index: usize, enabled: bool) {
+    let Some(effect) = state.local_effects.get_mut(effect_index) else {
+        return;
+    };
+
+    let current_mix = state
+        .effect_enable_fades
+        .get(effect_index)
+        .and_then(Option::as_ref)
+        .map_or_else(
+            || if audio_effect_enabled(effect) { 1.0 } else { 0.0 },
+            EffectEnableFade::current_mix,
+        );
+    let target_mix = if enabled { 1.0 } else { 0.0 };
+    if (current_mix - target_mix).abs() < f32::EPSILON {
+        if !enabled {
+            effect.reset_state();
+        }
+        set_effect_enabled(effect, enabled);
+        if let Some(slot) = state.effect_enable_fades.get_mut(effect_index) {
+            *slot = None;
+        }
+        return;
+    }
+
+    if enabled && !audio_effect_enabled(effect) && current_mix <= f32::EPSILON {
+        effect.reset_state();
+        set_effect_enabled(effect, true);
+    }
+
+    let ramp_frames = state.effect_context.parameter_ramp_samples();
+    if ramp_frames == 0 {
+        if !enabled {
+            effect.reset_state();
+        }
+        set_effect_enabled(effect, enabled);
+        state.effect_enable_fades[effect_index] = None;
+        return;
+    }
+
+    state.effect_enable_fades[effect_index] =
+        Some(EffectEnableFade::new(current_mix, enabled, ramp_frames));
+}
+
+fn apply_effect_parameter(
+    effect: &mut crate::dsp::effects::AudioEffect,
+    param: EffectParameter,
+) {
+    use crate::dsp::effects::AudioEffect;
+    match param {
+        EffectParameter::Gain(v) => {
+            if let AudioEffect::Gain(e) = effect {
+                e.settings.gain = v;
+            }
+        }
+        EffectParameter::Pan(v) => {
+            if let AudioEffect::Pan(e) = effect {
+                e.settings.pan = v;
+            }
+        }
+        EffectParameter::ReverbMix(v) => {
+            let clamped = v.clamp(0.0, 1.0);
+            match effect {
+                AudioEffect::ConvolutionReverb(e) => e.dry_wet = clamped,
+                AudioEffect::DelayReverb(e) => e.mix = clamped,
+                AudioEffect::DiffusionReverb(e) => e.mix = clamped,
+                _ => {}
+            }
+        }
+        EffectParameter::DistortionGain(v) => {
+            if let AudioEffect::Distortion(e) = effect {
+                e.settings.gain = v;
+            }
+        }
+        EffectParameter::DistortionThreshold(v) => {
+            if let AudioEffect::Distortion(e) = effect {
+                e.settings.threshold = v;
+            }
+        }
+        EffectParameter::LowPassFreqHz(v) => {
+            if let AudioEffect::LowPassFilter(e) = effect {
+                e.settings.freq_hz = v;
+            }
+        }
+        EffectParameter::LowPassQ(v) => {
+            if let AudioEffect::LowPassFilter(e) = effect {
+                e.settings.q = v;
+            }
+        }
+        EffectParameter::HighPassFreqHz(v) => {
+            if let AudioEffect::HighPassFilter(e) = effect {
+                e.settings.freq_hz = v;
+            }
+        }
+        EffectParameter::HighPassQ(v) => {
+            if let AudioEffect::HighPassFilter(e) = effect {
+                e.settings.q = v;
+            }
+        }
+        EffectParameter::CompressorThresholdDb(v) => {
+            if let AudioEffect::Compressor(e) = effect {
+                e.settings.threshold_db = v;
+            }
+        }
+        EffectParameter::CompressorRatio(v) => {
+            if let AudioEffect::Compressor(e) = effect {
+                e.settings.ratio = v;
+            }
+        }
+        EffectParameter::CompressorAttackMs(v) => {
+            if let AudioEffect::Compressor(e) = effect {
+                e.settings.attack_ms = v;
+            }
+        }
+        EffectParameter::CompressorReleaseMs(v) => {
+            if let AudioEffect::Compressor(e) = effect {
+                e.settings.release_ms = v;
+            }
+        }
+        EffectParameter::CompressorMakeupDb(v) => {
+            if let AudioEffect::Compressor(e) = effect {
+                e.settings.makeup_gain_db = v;
+            }
+        }
+        EffectParameter::LimiterThresholdDb(v) => {
+            if let AudioEffect::Limiter(e) = effect {
+                e.settings.threshold_db = v;
+            }
+        }
+        EffectParameter::LimiterKneeWidthDb(v) => {
+            if let AudioEffect::Limiter(e) = effect {
+                e.settings.knee_width_db = v;
+            }
+        }
+        EffectParameter::LimiterAttackMs(v) => {
+            if let AudioEffect::Limiter(e) = effect {
+                e.settings.attack_ms = v;
+            }
+        }
+        EffectParameter::LimiterReleaseMs(v) => {
+            if let AudioEffect::Limiter(e) = effect {
+                e.settings.release_ms = v;
+            }
+        }
+    }
+}
+
+fn set_effect_enabled(effect: &mut crate::dsp::effects::AudioEffect, enabled: bool) {
+    use crate::dsp::effects::AudioEffect;
+    match effect {
+        AudioEffect::Gain(e) => e.enabled = enabled,
+        AudioEffect::Pan(e) => e.enabled = enabled,
+        AudioEffect::Distortion(e) => e.enabled = enabled,
+        AudioEffect::DelayReverb(e) => e.enabled = enabled,
+        AudioEffect::DiffusionReverb(e) => e.enabled = enabled,
+        AudioEffect::ConvolutionReverb(e) => e.enabled = enabled,
+        AudioEffect::LowPassFilter(e) => e.enabled = enabled,
+        AudioEffect::HighPassFilter(e) => e.enabled = enabled,
+        AudioEffect::Compressor(e) => e.enabled = enabled,
+        AudioEffect::Limiter(e) => e.enabled = enabled,
+        AudioEffect::MultibandEq(e) => e.enabled = enabled,
     }
 }
 
 fn rebuild_effect_context(
     prot_locked: &std::sync::Arc<std::sync::Mutex<crate::container::prot::Prot>>,
+    buffer_settings: &std::sync::Arc<
+        std::sync::Mutex<crate::playback::engine::PlaybackBufferSettings>,
+    >,
 ) -> EffectContext {
     let prot = crate::playback::mutex_policy::lock_invariant(
         prot_locked,
         "mix runtime prot",
         "effect context rebuilds require coherent container metadata",
     );
-    EffectContext::new(
+    let parameter_ramp_ms = crate::playback::mutex_policy::lock_recoverable(
+        buffer_settings,
+        "mix runtime buffer settings",
+        "buffer settings are runtime configuration snapshots",
+    )
+    .parameter_ramp_ms;
+    let mut context = EffectContext::new(
         prot.info.sample_rate,
         prot.info.channels as usize,
         prot.get_container_path(),
         prot.get_impulse_response_spec(),
         prot.get_impulse_response_tail_db().unwrap_or(-60.0),
     )
-    .expect("prot info must have valid sample rate and channel count")
+    .expect("prot info must have valid sample rate and channel count");
+    context.set_parameter_ramp_ms(parameter_ramp_ms);
+    context
+}
+
+fn sync_effect_context_from_buffer_settings(state: &mut MixLoopState) {
+    let parameter_ramp_ms = state.lock_buffer_settings_recoverable().parameter_ramp_ms;
+    state.effect_context.set_parameter_ramp_ms(parameter_ramp_ms);
 }

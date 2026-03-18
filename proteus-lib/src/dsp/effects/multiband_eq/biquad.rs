@@ -106,6 +106,12 @@ impl MultibandEqState {
         }
     }
 
+    /// Check whether structural parameters match (allows coefficient smoothing).
+    pub(super) fn matches_structure(&self, sample_rate: u32, channels: usize) -> bool {
+        self.sample_rate == sample_rate && self.channels == channels
+    }
+
+    /// Full parameter match (including all point/edge params).
     pub(super) fn matches(
         &self,
         sample_rate: u32,
@@ -121,6 +127,72 @@ impl MultibandEqState {
             && high_edge_params_equal(self.high_edge_params, *high_edge_params)
     }
 
+    /// Smoothly update band parameters without rebuilding state.
+    pub(super) fn update_parameters(
+        &mut self,
+        points_params: Vec<EqPointParams>,
+        low_edge_params: Option<LowEdgeParams>,
+        high_edge_params: Option<HighEdgeParams>,
+        ramp_samples: usize,
+    ) {
+        // Update point biquads: ramp existing ones, add/remove as needed.
+        for (i, params) in points_params.iter().enumerate() {
+            if i < self.points.len() {
+                let design = BiquadDesign::Peaking {
+                    freq_hz: params.freq_hz,
+                    q: params.q,
+                    gain_db: params.gain_db,
+                };
+                self.points[i].update_design(design, ramp_samples);
+            } else {
+                self.points.push(Biquad::new(
+                    self.sample_rate,
+                    self.channels,
+                    BiquadDesign::Peaking {
+                        freq_hz: params.freq_hz,
+                        q: params.q,
+                        gain_db: params.gain_db,
+                    },
+                ));
+            }
+        }
+        self.points.truncate(points_params.len());
+        self.points_params = points_params;
+
+        // Update edge filters.
+        update_edge_biquad(
+            &mut self.low_edge,
+            low_edge_params.map(|p| match p {
+                LowEdgeParams::HighPass { freq_hz, q } => {
+                    BiquadDesign::HighPass { freq_hz, q }
+                }
+                LowEdgeParams::LowShelf { freq_hz, q, gain_db } => {
+                    BiquadDesign::LowShelf { freq_hz, q, gain_db }
+                }
+            }),
+            self.sample_rate,
+            self.channels,
+            ramp_samples,
+        );
+        self.low_edge_params = low_edge_params;
+
+        update_edge_biquad(
+            &mut self.high_edge,
+            high_edge_params.map(|p| match p {
+                HighEdgeParams::LowPass { freq_hz, q } => {
+                    BiquadDesign::LowPass { freq_hz, q }
+                }
+                HighEdgeParams::HighShelf { freq_hz, q, gain_db } => {
+                    BiquadDesign::HighShelf { freq_hz, q, gain_db }
+                }
+            }),
+            self.sample_rate,
+            self.channels,
+            ramp_samples,
+        );
+        self.high_edge_params = high_edge_params;
+    }
+
     pub(super) fn reset(&mut self) {
         for point in &mut self.points {
             point.reset();
@@ -134,6 +206,9 @@ impl MultibandEqState {
     }
 }
 
+/// Default number of samples over which biquad coefficients are ramped.
+const DEFAULT_COEFF_RAMP_SAMPLES: usize = 240;
+
 #[derive(Clone, Copy, Debug)]
 struct BiquadCoefficients {
     b0: f32,
@@ -141,6 +216,15 @@ struct BiquadCoefficients {
     b2: f32,
     a1: f32,
     a2: f32,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct CoefficientDeltas {
+    d_b0: f32,
+    d_b1: f32,
+    d_b2: f32,
+    d_a1: f32,
+    d_a2: f32,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -154,7 +238,12 @@ enum BiquadDesign {
 
 #[derive(Clone, Debug)]
 pub(super) struct Biquad {
+    sample_rate: u32,
+    design: BiquadDesign,
     coeffs: BiquadCoefficients,
+    target_coeffs: Option<BiquadCoefficients>,
+    coeff_deltas: Option<CoefficientDeltas>,
+    ramp_remaining: usize,
     x_n1: Vec<f32>,
     x_n2: Vec<f32>,
     y_n1: Vec<f32>,
@@ -165,11 +254,57 @@ impl Biquad {
     fn new(sample_rate: u32, channels: usize, design: BiquadDesign) -> Self {
         let channels = channels.max(1);
         Self {
+            sample_rate,
+            design,
             coeffs: coefficients(sample_rate, design),
+            target_coeffs: None,
+            coeff_deltas: None,
+            ramp_remaining: 0,
             x_n1: vec![0.0; channels],
             x_n2: vec![0.0; channels],
             y_n1: vec![0.0; channels],
             y_n2: vec![0.0; channels],
+        }
+    }
+
+    /// Smoothly transition to a new design, preserving the delay line.
+    fn update_design(&mut self, design: BiquadDesign, ramp_samples: usize) {
+        self.design = design;
+        let target = coefficients(self.sample_rate, design);
+        let ramp = if ramp_samples == 0 {
+            DEFAULT_COEFF_RAMP_SAMPLES
+        } else {
+            ramp_samples
+        };
+        let inv = 1.0 / ramp as f32;
+        self.target_coeffs = Some(target);
+        self.coeff_deltas = Some(CoefficientDeltas {
+            d_b0: (target.b0 - self.coeffs.b0) * inv,
+            d_b1: (target.b1 - self.coeffs.b1) * inv,
+            d_b2: (target.b2 - self.coeffs.b2) * inv,
+            d_a1: (target.a1 - self.coeffs.a1) * inv,
+            d_a2: (target.a2 - self.coeffs.a2) * inv,
+        });
+        self.ramp_remaining = ramp;
+    }
+
+    #[inline]
+    fn advance_coefficients(&mut self) {
+        if self.ramp_remaining == 0 {
+            return;
+        }
+        self.ramp_remaining -= 1;
+        if self.ramp_remaining == 0 {
+            if let Some(target) = self.target_coeffs.take() {
+                self.coeffs = target;
+            }
+            self.coeff_deltas = None;
+        } else if let Some(d) = &self.coeff_deltas {
+            self.coeffs.b0 += d.d_b0;
+            self.coeffs.b1 += d.d_b1;
+            self.coeffs.b2 += d.d_b2;
+            self.coeffs.a1 += d.d_a1;
+            self.coeffs.a2 += d.d_a2;
         }
     }
 
@@ -185,6 +320,11 @@ impl Biquad {
         self.y_n2[channel] = self.y_n1[channel];
         self.y_n1[channel] = y;
 
+        // Advance coefficient ramp once per frame (at last channel).
+        if channel == self.x_n1.len() - 1 {
+            self.advance_coefficients();
+        }
+
         y
     }
 
@@ -193,6 +333,9 @@ impl Biquad {
         self.x_n2.fill(0.0);
         self.y_n1.fill(0.0);
         self.y_n2.fill(0.0);
+        self.target_coeffs = None;
+        self.coeff_deltas = None;
+        self.ramp_remaining = 0;
     }
 }
 
@@ -331,6 +474,27 @@ fn normalized_coefficients(
         b2: b2 / a0,
         a1: a1 / a0,
         a2: a2 / a0,
+    }
+}
+
+fn update_edge_biquad(
+    slot: &mut Option<Biquad>,
+    design: Option<BiquadDesign>,
+    sample_rate: u32,
+    channels: usize,
+    ramp_samples: usize,
+) {
+    match (slot.as_mut(), design) {
+        (Some(biquad), Some(design)) => {
+            biquad.update_design(design, ramp_samples);
+        }
+        (None, Some(design)) => {
+            *slot = Some(Biquad::new(sample_rate, channels, design));
+        }
+        (Some(_), None) => {
+            *slot = None;
+        }
+        (None, None) => {}
     }
 }
 

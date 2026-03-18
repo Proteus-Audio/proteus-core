@@ -9,10 +9,13 @@ use crate::container::info::Info;
 use crate::container::prot::Prot;
 use crate::dsp::effects::{AudioEffect, EffectContext};
 use crate::playback::engine::premix::PremixBuffer;
-use crate::playback::engine::{DspChainMetrics, InlineEffectsUpdate, InlineTrackMixUpdate};
+use crate::playback::engine::{
+    DspChainMetrics, InlineEffectsUpdate, InlineTrackMixUpdate, PlaybackBufferSettings,
+};
 use crate::playback::mutex_policy::lock_recoverable;
 
 use super::super::buffer_mixer::{BufferMixer, DecodeBackpressure};
+use super::super::effects::EffectEnableFade;
 use super::super::decoder_events::DecodeWorkerEvent;
 use super::super::types::{ActiveInlineTransition, EffectSettingsCommand, MixThreadArgs};
 use super::decode::DecodeWorkerJoinGuard;
@@ -43,6 +46,7 @@ pub(super) struct MixLoopState {
     pub(super) sender: mpsc::SyncSender<(SamplesBuffer, f64)>,
     pub(super) buffer_notify: Arc<Condvar>,
     pub(super) audio_info: Info,
+    pub(super) buffer_settings: Arc<Mutex<PlaybackBufferSettings>>,
     pub(super) dsp_metrics: Arc<Mutex<DspChainMetrics>>,
     pub(super) inline_track_mix_updates: Arc<Mutex<Vec<InlineTrackMixUpdate>>>,
     pub(super) inline_effects_update: Arc<Mutex<Option<InlineEffectsUpdate>>>,
@@ -56,6 +60,7 @@ pub(super) struct MixLoopState {
     pub(super) last_effects_reset: u64,
     pub(super) active_inline_transition: Option<ActiveInlineTransition>,
     pub(super) pending_mix_samples: PremixBuffer,
+    pub(super) effect_enable_fades: Vec<Option<EffectEnableFade>>,
     pub(super) effect_scratch_a: Vec<f32>,
     pub(super) effect_scratch_b: Vec<f32>,
     pub(super) effect_drain_passes: usize,
@@ -98,6 +103,7 @@ impl MixLoopState {
             "the effect chain is hot-swappable runtime state",
         )
         .clone();
+        let effect_count = local_effects.len();
         Self {
             abort: args.abort,
             packet_rx: decode_handle.packet_rx,
@@ -110,6 +116,7 @@ impl MixLoopState {
             sender,
             buffer_notify: args.buffer_notify,
             audio_info: args.audio_info,
+            buffer_settings: args.buffer_settings,
             dsp_metrics: args.dsp_metrics,
             inline_track_mix_updates: args.inline_track_mix_updates,
             inline_effects_update: args.inline_effects_update,
@@ -123,6 +130,7 @@ impl MixLoopState {
             last_effects_reset,
             active_inline_transition: None,
             pending_mix_samples: PremixBuffer::new(),
+            effect_enable_fades: vec![None; effect_count],
             effect_scratch_a: Vec::new(),
             effect_scratch_b: Vec::new(),
             effect_drain_passes: 0,
@@ -164,6 +172,17 @@ impl MixLoopState {
             &self.dsp_metrics,
             "mix runtime DSP metrics",
             "DSP metrics are derived telemetry that can be rebuilt",
+        )
+    }
+
+    /// Recoverable poison policy: buffer settings are runtime configuration snapshots.
+    pub(super) fn lock_buffer_settings_recoverable(
+        &self,
+    ) -> MutexGuard<'_, PlaybackBufferSettings> {
+        lock_recoverable(
+            &self.buffer_settings,
+            "mix runtime buffer settings",
+            "buffer settings are runtime configuration snapshots",
         )
     }
 

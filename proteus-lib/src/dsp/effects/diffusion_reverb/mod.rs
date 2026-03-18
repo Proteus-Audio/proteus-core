@@ -21,6 +21,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use super::core::smoother::ParamSmoother;
 use super::EffectContext;
 use crate::dsp::guardrails::sanitize_channels;
 
@@ -143,6 +144,8 @@ pub struct DiffusionReverbEffect {
     // not receive an endless sequence of synthetic tail chunks.
     #[serde(skip)]
     tail_drained: bool,
+    #[serde(skip)]
+    mix_smoother: Option<ParamSmoother>,
 }
 
 impl Default for DiffusionReverbEffect {
@@ -153,6 +156,7 @@ impl Default for DiffusionReverbEffect {
             settings: DiffusionReverbSettings::default(),
             state: None,
             tail_drained: false,
+            mix_smoother: None,
         }
     }
 }
@@ -170,7 +174,17 @@ impl std::fmt::Debug for DiffusionReverbEffect {
 impl crate::dsp::effects::core::DspEffect for DiffusionReverbEffect {
     fn process(&mut self, samples: &[f32], context: &EffectContext, drain: bool) -> Vec<f32> {
         self.ensure_state(context);
-        if !self.enabled || self.mix <= 0.0 {
+        if !self.enabled {
+            return samples.to_vec();
+        }
+
+        self.update_mix_smoother(context);
+        let current_mix = self.mix_smoother.as_ref().map_or(0.0, ParamSmoother::current);
+        let mix_settled = self
+            .mix_smoother
+            .as_ref()
+            .is_none_or(ParamSmoother::is_settled);
+        if mix_settled && current_mix <= 0.0 {
             return samples.to_vec();
         }
 
@@ -180,9 +194,6 @@ impl crate::dsp::effects::core::DspEffect for DiffusionReverbEffect {
 
         if samples.is_empty() {
             if drain {
-                // Drain is a one-shot flush. The mix runtime may poll drain
-                // repeatedly after sources finish, so subsequent calls must be
-                // empty once the internal tail has been emitted.
                 if self.tail_drained {
                     return Vec::new();
                 }
@@ -196,20 +207,32 @@ impl crate::dsp::effects::core::DspEffect for DiffusionReverbEffect {
             return Vec::new();
         }
 
-        // Any real input means the effect is active again; allow a future tail
-        // flush when playback ends.
         self.tail_drained = false;
 
-        let mix = self.mix.clamp(0.0, 1.0);
         let mut output = Vec::with_capacity(samples.len());
-        state.process_samples(
-            samples,
-            mix,
-            self.settings.decay(),
-            self.settings.damping(),
-            self.settings.diffusion(),
-            &mut output,
-        );
+        if mix_settled {
+            state.process_samples(
+                samples,
+                current_mix,
+                self.settings.decay(),
+                self.settings.damping(),
+                self.settings.diffusion(),
+                &mut output,
+            );
+        } else {
+            let mix_smoother = self
+                .mix_smoother
+                .as_mut()
+                .expect("diffusion reverb mix smoother must be initialized");
+            state.process_samples_smoothed(
+                samples,
+                mix_smoother,
+                self.settings.decay(),
+                self.settings.damping(),
+                self.settings.diffusion(),
+                &mut output,
+            );
+        }
         output
     }
 
@@ -221,10 +244,21 @@ impl crate::dsp::effects::core::DspEffect for DiffusionReverbEffect {
         drain: bool,
     ) {
         self.ensure_state(context);
-        if !self.enabled || self.mix <= 0.0 {
+        if !self.enabled {
             output.extend_from_slice(input);
             return;
         }
+        self.update_mix_smoother(context);
+        let current_mix = self.mix_smoother.as_ref().map_or(0.0, ParamSmoother::current);
+        let mix_settled = self
+            .mix_smoother
+            .as_ref()
+            .is_none_or(ParamSmoother::is_settled);
+        if mix_settled && current_mix <= 0.0 {
+            output.extend_from_slice(input);
+            return;
+        }
+
         let Some(state) = self.state.as_mut() else {
             output.extend_from_slice(input);
             return;
@@ -245,15 +279,29 @@ impl crate::dsp::effects::core::DspEffect for DiffusionReverbEffect {
             return;
         }
         self.tail_drained = false;
-        let mix = self.mix.clamp(0.0, 1.0);
-        state.process_samples(
-            input,
-            mix,
-            self.settings.decay(),
-            self.settings.damping(),
-            self.settings.diffusion(),
-            output,
-        );
+        if mix_settled {
+            state.process_samples(
+                input,
+                current_mix,
+                self.settings.decay(),
+                self.settings.damping(),
+                self.settings.diffusion(),
+                output,
+            );
+        } else {
+            let mix_smoother = self
+                .mix_smoother
+                .as_mut()
+                .expect("diffusion reverb mix smoother must be initialized");
+            state.process_samples_smoothed(
+                input,
+                mix_smoother,
+                self.settings.decay(),
+                self.settings.damping(),
+                self.settings.diffusion(),
+                output,
+            );
+        }
     }
 
     fn reset_state(&mut self) {
@@ -262,6 +310,7 @@ impl crate::dsp::effects::core::DspEffect for DiffusionReverbEffect {
         }
         self.state = None;
         self.tail_drained = false;
+        self.mix_smoother = None;
     }
 }
 
@@ -286,6 +335,16 @@ impl DiffusionReverbEffect {
     /// the internal state to be rebuilt on the next `process` call.
     pub fn settings_mut(&mut self) -> &mut DiffusionReverbSettings {
         &mut self.settings
+    }
+
+    fn update_mix_smoother(&mut self, context: &EffectContext) {
+        let target = self.mix.clamp(0.0, 1.0);
+        let smoother = self
+            .mix_smoother
+            .get_or_insert_with(|| ParamSmoother::new(target));
+        if (smoother.target() - target).abs() > f32::EPSILON {
+            smoother.set_target(target, context.parameter_ramp_samples());
+        }
     }
 
     fn ensure_state(&mut self, context: &EffectContext) {
@@ -431,5 +490,25 @@ mod tests {
         let input = vec![0.1_f32, -0.1, 0.2, -0.2];
         let output = effect.process(&input, &context(), false);
         assert_eq!(output.len(), input.len());
+    }
+
+    #[test]
+    fn diffusion_reverb_mix_uses_smoother() {
+        let mut effect = DiffusionReverbEffect::new(0.2);
+        effect.enabled = true;
+
+        let mut context = EffectContext::new(8_000, 1, None, None, -60.0).unwrap();
+        context.set_parameter_ramp_ms(1.0);
+
+        let _ = effect.process(&[0.5_f32; 8], &context, false);
+        effect.mix = 0.8;
+        let _ = effect.process(&[0.5_f32; 4], &context, false);
+
+        let smoother = effect
+            .mix_smoother
+            .as_ref()
+            .expect("diffusion reverb mix smoother should exist");
+        assert!(smoother.current() > 0.2);
+        assert!(smoother.current() < 0.8);
     }
 }

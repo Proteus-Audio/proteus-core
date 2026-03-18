@@ -20,7 +20,7 @@ mod state;
 
 pub use state::{DspChainMetrics, PlaybackBufferSettings};
 
-pub use mix::EffectSettingsCommand;
+pub use mix::{EffectParameter, EffectSettingsCommand};
 
 use mix::{spawn_mix_thread, MixThreadArgs};
 

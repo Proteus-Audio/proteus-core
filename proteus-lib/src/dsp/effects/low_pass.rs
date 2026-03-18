@@ -101,29 +101,28 @@ impl super::core::DspEffect for LowPassFilterEffect {
 
 impl LowPassFilterEffect {
     fn ensure_state(&mut self, context: &EffectContext) {
-        let needs_reset = self
-            .state
-            .as_ref()
-            .map(|state| {
-                !state.matches(
-                    BiquadKind::LowPass,
-                    context.sample_rate(),
-                    context.channels(),
+        if let Some(state) = self.state.as_mut() {
+            if state.matches_structure(BiquadKind::LowPass, context.sample_rate(), context.channels())
+            {
+                // Structure unchanged — smoothly ramp to new coefficients if
+                // freq/Q have changed, preserving the delay line.
+                state.update_coefficients(
                     self.settings.freq_hz,
                     self.settings.q,
-                )
-            })
-            .unwrap_or(true);
-
-        if needs_reset {
-            self.state = Some(BiquadState::new(
-                BiquadKind::LowPass,
-                context.sample_rate(),
-                context.channels(),
-                self.settings.freq_hz,
-                self.settings.q,
-            ));
+                    context.parameter_ramp_samples(),
+                );
+                return;
+            }
         }
+
+        // Full reconstruction needed (first call, or sample_rate/channels changed).
+        self.state = Some(BiquadState::new(
+            BiquadKind::LowPass,
+            context.sample_rate(),
+            context.channels(),
+            self.settings.freq_hz,
+            self.settings.q,
+        ));
     }
 }
 
@@ -168,5 +167,31 @@ mod tests {
         effect.enabled = false;
         let output = effect.process(&samples, &context(), false);
         assert_eq!(output, samples);
+    }
+
+    #[test]
+    fn low_pass_cutoff_change_stays_continuous() {
+        let mut effect = LowPassFilterEffect::default();
+        effect.enabled = true;
+        effect.settings.freq_hz = 300;
+
+        let mut context = context();
+        context.set_parameter_ramp_ms(5.0);
+
+        let signal = (0..512)
+            .map(|index| {
+                let phase = 2.0 * std::f32::consts::PI * 1_000.0 * index as f32 / 48_000.0;
+                phase.sin()
+            })
+            .flat_map(|sample| [sample, sample])
+            .collect::<Vec<_>>();
+
+        let first = effect.process(&signal[..256], &context, false);
+        let previous = *first.last().unwrap();
+        effect.settings.freq_hz = 4_000;
+        let second = effect.process(&signal[256..], &context, false);
+
+        assert!((second[0] - previous).abs() < 0.2);
+        assert!(second.iter().all(|sample| sample.is_finite()));
     }
 }

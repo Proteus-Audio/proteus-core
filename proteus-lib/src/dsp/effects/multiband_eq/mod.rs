@@ -286,30 +286,34 @@ impl MultibandEqEffect {
             .as_ref()
             .map(|edge| sanitize_high_edge(edge, context.sample_rate()));
 
-        let needs_reset = self
-            .state
-            .as_ref()
-            .map(|state| {
-                state.matches(
+        if let Some(state) = self.state.as_mut() {
+            if state.matches_structure(context.sample_rate(), channels) {
+                // Structure unchanged — smoothly ramp biquad coefficients.
+                if !state.matches(
                     context.sample_rate(),
                     channels,
                     &points,
                     &low_edge,
                     &high_edge,
-                )
-            })
-            .map(|matches| !matches)
-            .unwrap_or(true);
-
-        if needs_reset {
-            self.state = Some(MultibandEqState::new(
-                context.sample_rate(),
-                channels,
-                points,
-                low_edge,
-                high_edge,
-            ));
+                ) {
+                    state.update_parameters(
+                        points,
+                        low_edge,
+                        high_edge,
+                        context.parameter_ramp_samples(),
+                    );
+                }
+                return;
+            }
         }
+
+        self.state = Some(MultibandEqState::new(
+            context.sample_rate(),
+            channels,
+            points,
+            low_edge,
+            high_edge,
+        ));
     }
 }
 
@@ -420,5 +424,47 @@ mod tests {
             effect.settings.high_edge,
             Some(HighEdgeFilterSettings::LowPass { .. })
         ));
+    }
+
+    #[test]
+    fn multiband_eq_band_change_stays_continuous() {
+        let mut effect = MultibandEqEffect::default();
+        effect.enabled = true;
+
+        let mut context = context();
+        context.set_parameter_ramp_ms(5.0);
+
+        let signal = (0..512)
+            .map(|index| {
+                let phase = 2.0 * std::f32::consts::PI * 1_000.0 * index as f32 / 48_000.0;
+                phase.sin()
+            })
+            .flat_map(|sample| [sample, sample])
+            .collect::<Vec<_>>();
+
+        let first = effect.process(&signal[..256], &context, false);
+        let previous = *first.last().unwrap();
+        effect.settings.points[1].gain_db = 12.0;
+        let second = effect.process(&signal[256..], &context, false);
+
+        assert!((second[0] - previous).abs() < 0.25);
+        assert!(second.iter().all(|sample| sample.is_finite()));
+    }
+
+    #[test]
+    fn multiband_eq_fast_adjustments_remain_stable() {
+        let mut effect = MultibandEqEffect::default();
+        effect.enabled = true;
+
+        let mut context = context();
+        context.set_parameter_ramp_ms(0.5);
+
+        let input = vec![0.25_f32; 128];
+        for step in 0..32 {
+            effect.settings.points[0].gain_db = -12.0 + step as f32 * 0.75;
+            effect.settings.points[1].q = 0.4 + step as f32 * 0.05;
+            let output = effect.process(&input, &context, false);
+            assert!(output.iter().all(|sample| sample.is_finite()));
+        }
     }
 }

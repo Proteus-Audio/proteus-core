@@ -2,6 +2,7 @@
 
 pub(crate) mod biquad;
 pub(crate) mod level;
+pub(crate) mod smoother;
 
 use super::EffectContext;
 
@@ -90,13 +91,7 @@ mod tests {
     #[test]
     fn process_into_appends_to_output() {
         let mut effect = DummyEffect::default();
-        let context = super::EffectContext {
-            sample_rate: 48_000,
-            channels: 2,
-            container_path: None,
-            impulse_response_spec: None,
-            impulse_response_tail_db: -60.0,
-        };
+        let context = super::EffectContext::new(48_000, 2, None, None, -60.0).unwrap();
         let mut output = Vec::new();
         effect.process_into(&[0.1, 0.2, 0.3, 0.4], &mut output, &context, false);
         assert_eq!(output, vec![0.1, 0.2, 0.3, 0.4]);

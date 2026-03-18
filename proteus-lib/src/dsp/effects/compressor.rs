@@ -195,15 +195,14 @@ impl CompressorEffect {
             release_ms,
             makeup_gain_db,
         };
-        let needs_reset = self
-            .state
-            .as_ref()
-            .map(|state| !state.matches(&params))
-            .unwrap_or(true);
-
-        if needs_reset {
-            self.state = Some(CompressorState::new(&params));
+        if let Some(state) = self.state.as_mut() {
+            if state.matches_structure(&params) {
+                state.update_parameters(&params);
+                return;
+            }
         }
+
+        self.state = Some(CompressorState::new(&params));
     }
 }
 
@@ -246,16 +245,16 @@ impl CompressorState {
         }
     }
 
-    fn matches(&self, params: &CompressorParams) -> bool {
-        self.sample_rate == params.sample_rate
-            && self.channels == params.channels
-            && (self.threshold_db - params.threshold_db).abs() < f32::EPSILON
-            && (self.ratio - params.ratio).abs() < f32::EPSILON
-            && (self.attack_coeff - time_to_coeff(params.attack_ms, params.sample_rate)).abs()
-                < f32::EPSILON
-            && (self.release_coeff - time_to_coeff(params.release_ms, params.sample_rate)).abs()
-                < f32::EPSILON
-            && (self.makeup_gain_db - params.makeup_gain_db).abs() < f32::EPSILON
+    fn matches_structure(&self, params: &CompressorParams) -> bool {
+        self.sample_rate == params.sample_rate && self.channels == params.channels
+    }
+
+    fn update_parameters(&mut self, params: &CompressorParams) {
+        self.threshold_db = params.threshold_db;
+        self.ratio = params.ratio;
+        self.attack_coeff = time_to_coeff(params.attack_ms, params.sample_rate);
+        self.release_coeff = time_to_coeff(params.release_ms, params.sample_rate);
+        self.makeup_gain_db = params.makeup_gain_db;
     }
 
     fn update_gain(&mut self, target_gain_db: f32) {
@@ -363,5 +362,74 @@ mod tests {
 
         let err = serde_json::from_str::<CompressorEffect>(json).expect_err("invalid compressor");
         assert!(err.to_string().contains("invalid gain value"));
+    }
+
+    #[test]
+    fn threshold_change_preserves_gain_envelope() {
+        let mut effect = CompressorEffect::default();
+        effect.enabled = true;
+        effect.settings.threshold_db = -24.0;
+        effect.settings.ratio = 4.0;
+        effect.settings.attack_ms = 0.0;
+        effect.settings.release_ms = 100.0;
+
+        let loud_frame = [1.0_f32, 1.0];
+        let _ = effect.process(&loud_frame, &context(2), false);
+        let before = effect
+            .state
+            .as_ref()
+            .expect("compressor state should exist")
+            .current_gain_db;
+        assert!(before < 0.0);
+
+        effect.settings.threshold_db = -6.0;
+        effect.ensure_state(&context(2));
+        let after_ensure = effect
+            .state
+            .as_ref()
+            .expect("compressor state should exist")
+            .current_gain_db;
+        assert!((after_ensure - before).abs() < 1e-6);
+
+        let _ = effect.process(&loud_frame, &context(2), false);
+        let after_process = effect
+            .state
+            .as_ref()
+            .expect("compressor state should exist")
+            .current_gain_db;
+        assert!(after_process < 0.0);
+    }
+
+    #[test]
+    fn attack_and_release_changes_recompute_coefficients_without_gain_jump() {
+        let mut effect = CompressorEffect::default();
+        effect.enabled = true;
+        effect.settings.threshold_db = -18.0;
+        effect.settings.ratio = 4.0;
+        effect.settings.attack_ms = 10.0;
+        effect.settings.release_ms = 100.0;
+
+        let loud_frame = [1.0_f32, 1.0];
+        let _ = effect.process(&loud_frame, &context(2), false);
+
+        let state = effect
+            .state
+            .as_ref()
+            .expect("compressor state should exist");
+        let gain_before = state.current_gain_db;
+        let attack_before = state.attack_coeff;
+        let release_before = state.release_coeff;
+
+        effect.settings.attack_ms = 25.0;
+        effect.settings.release_ms = 250.0;
+        effect.ensure_state(&context(2));
+
+        let state = effect
+            .state
+            .as_ref()
+            .expect("compressor state should exist");
+        assert!((state.current_gain_db - gain_before).abs() < 1e-6);
+        assert!((state.attack_coeff - attack_before).abs() > 1e-6);
+        assert!((state.release_coeff - release_before).abs() > 1e-6);
     }
 }

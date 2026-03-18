@@ -3,6 +3,7 @@
 use serde::{Deserialize, Serialize};
 
 use super::core::level::deserialize_linear_gain;
+use super::core::smoother::ParamSmoother;
 use super::EffectContext;
 use crate::dsp::guardrails::sanitize_finite;
 
@@ -39,6 +40,8 @@ pub struct GainEffect {
     /// Gain parameter (linear multiplier).
     #[serde(flatten)]
     pub settings: GainSettings,
+    #[serde(skip)]
+    smoother: Option<ParamSmoother>,
 }
 
 impl std::fmt::Debug for GainEffect {
@@ -51,21 +54,32 @@ impl std::fmt::Debug for GainEffect {
 }
 
 impl super::core::DspEffect for GainEffect {
-    fn process(&mut self, samples: &[f32], _context: &EffectContext, _drain: bool) -> Vec<f32> {
+    fn process(&mut self, samples: &[f32], context: &EffectContext, _drain: bool) -> Vec<f32> {
         if !self.enabled {
             return samples.to_vec();
         }
-
-        let gain = sanitize_finite(self.settings.gain, DEFAULT_GAIN);
         if samples.is_empty() {
             return Vec::new();
         }
 
-        let mut out = Vec::with_capacity(samples.len());
-        for &sample in samples {
-            out.push(sample * gain);
-        }
+        let target = sanitize_finite(self.settings.gain, DEFAULT_GAIN);
+        let smoother = self.ensure_smoother(target, context);
+        let channels = context.channels().max(1);
 
+        let mut out = Vec::with_capacity(samples.len());
+        if smoother.is_settled() {
+            let gain = smoother.current();
+            for &sample in samples {
+                out.push(sample * gain);
+            }
+        } else {
+            for frame in samples.chunks(channels) {
+                let gain = smoother.next();
+                for &sample in frame {
+                    out.push(sample * gain);
+                }
+            }
+        }
         out
     }
 
@@ -73,20 +87,48 @@ impl super::core::DspEffect for GainEffect {
         &mut self,
         input: &[f32],
         output: &mut Vec<f32>,
-        _context: &EffectContext,
+        context: &EffectContext,
         _drain: bool,
     ) {
         if !self.enabled {
             output.extend_from_slice(input);
             return;
         }
-        let gain = sanitize_finite(self.settings.gain, DEFAULT_GAIN);
-        for &sample in input {
-            output.push(sample * gain);
+
+        let target = sanitize_finite(self.settings.gain, DEFAULT_GAIN);
+        let smoother = self.ensure_smoother(target, context);
+        let channels = context.channels().max(1);
+
+        if smoother.is_settled() {
+            let gain = smoother.current();
+            for &sample in input {
+                output.push(sample * gain);
+            }
+        } else {
+            for frame in input.chunks(channels) {
+                let gain = smoother.next();
+                for &sample in frame {
+                    output.push(sample * gain);
+                }
+            }
         }
     }
 
-    fn reset_state(&mut self) {}
+    fn reset_state(&mut self) {
+        self.smoother = None;
+    }
+}
+
+impl GainEffect {
+    fn ensure_smoother(&mut self, target: f32, context: &EffectContext) -> &mut ParamSmoother {
+        let smoother = self
+            .smoother
+            .get_or_insert_with(|| ParamSmoother::new(target));
+        if (smoother.target() - target).abs() > f32::EPSILON {
+            smoother.set_target(target, context.parameter_ramp_samples());
+        }
+        smoother
+    }
 }
 
 #[cfg(test)]
@@ -131,5 +173,35 @@ mod tests {
         let effect: GainEffect = serde_json::from_str(json).expect("deserialize gain");
         let expected = db_to_linear(-2.0);
         assert!((effect.settings.gain - expected).abs() < 1e-6);
+    }
+
+    #[test]
+    fn gain_sweep_stays_continuous_on_sine_wave() {
+        let mut effect = GainEffect::default();
+        effect.enabled = true;
+        effect.settings.gain = 0.8;
+
+        let mut context = EffectContext::new(48_000, 1, None, None, -60.0).unwrap();
+        context.set_parameter_ramp_ms(5.0);
+
+        let signal = (0..444)
+            .map(|index| {
+                let phase = 2.0 * std::f32::consts::PI * 1_000.0 * index as f32 / 48_000.0;
+                phase.sin()
+            })
+            .collect::<Vec<_>>();
+
+        let first = effect.process(&signal[..204], &context, false);
+        effect.settings.gain = 1.2;
+        let second = effect.process(&signal[204..], &context, false);
+
+        let mut combined = first;
+        combined.extend(second);
+
+        let largest_delta = combined
+            .windows(2)
+            .map(|pair| (pair[1] - pair[0]).abs())
+            .fold(0.0_f32, f32::max);
+        assert!(largest_delta < 0.25);
     }
 }

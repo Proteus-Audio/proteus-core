@@ -345,29 +345,29 @@ All smoothing state lives on the mix thread's local copy. No new locks, no new a
 ## Acceptance criteria
 
 ### Phase 1
-- [ ] `ParamSmoother` primitive exists with tests for ramp accuracy and settling
-- [ ] Gain effect uses `ParamSmoother`; sweeping gain produces no clicks on a sine wave test signal
-- [ ] Pan effect uses `ParamSmoother`
-- [ ] Reverb mix parameters use `ParamSmoother` (all three reverb variants)
-- [ ] `set_effect_parameter()` API works for gain, pan, and reverb mix
-- [ ] `parameter_ramp_ms` is configurable via `PlaybackBufferSettings`
-- [ ] No new allocations in the steady-state mix loop
-- [ ] Existing tests pass
+- [x] `ParamSmoother` primitive exists with tests for ramp accuracy and settling
+- [x] Gain effect uses `ParamSmoother`; sweeping gain produces no clicks on a sine wave test signal
+- [x] Pan effect uses `ParamSmoother`
+- [x] Reverb mix parameters use `ParamSmoother` (all three reverb variants)
+- [x] `set_effect_parameter()` API works for gain, pan, and reverb mix
+- [x] `parameter_ramp_ms` is configurable via `PlaybackBufferSettings`
+- [x] No new allocations in the steady-state mix loop
+- [x] Existing tests pass
 
 ### Phase 2
-- [ ] LPF/HPF cutoff and Q sweeps produce no clicks on test signals
-- [ ] Biquad delay line state is preserved across coefficient changes
-- [ ] Multiband EQ band adjustments produce no clicks
-- [ ] Filter response remains stable during fast parameter sweeps
+- [x] LPF/HPF cutoff and Q sweeps produce no clicks on test signals
+- [x] Biquad delay line state is preserved across coefficient changes
+- [x] Multiband EQ band adjustments produce no clicks
+- [x] Filter response remains stable during fast parameter sweeps
 
 ### Phase 3
-- [ ] Compressor threshold/ratio changes do not reset gain envelope
-- [ ] Compressor attack/release changes recompute coefficients without gain jump
-- [ ] Toggling any effect's `enabled` flag crossfades over ~5 ms
-- [ ] Unit tests verify enable/disable fade produces no discontinuity above threshold
+- [x] Compressor threshold/ratio changes do not reset gain envelope
+- [x] Compressor attack/release changes recompute coefficients without gain jump
+- [x] Toggling any effect's `enabled` flag crossfades over ~5 ms
+- [x] Unit tests verify enable/disable fade produces no discontinuity above threshold
 
 ---
 
 ## Status
 
-Open.
+Complete.
