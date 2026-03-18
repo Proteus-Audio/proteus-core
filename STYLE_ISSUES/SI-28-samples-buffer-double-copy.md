@@ -36,10 +36,10 @@ still be tightened so it is explicit about paying exactly one necessary duplicat
 
 ### Acceptance criteria
 
-- [ ] `clone_samples_buffer` performs only the minimum required duplication to return two owned buffers
-- [ ] Existing metadata/sample-preservation tests still pass
-- [ ] The implementation clearly documents the unavoidable copy boundary
+- [x] `clone_samples_buffer` performs only the minimum required duplication to return two owned buffers
+- [x] Existing metadata/sample-preservation tests still pass
+- [x] The implementation clearly documents the unavoidable copy boundary
 
 ## Status
 
-Open.
+Complete.

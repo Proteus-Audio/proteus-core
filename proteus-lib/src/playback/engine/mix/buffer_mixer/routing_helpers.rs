@@ -6,6 +6,8 @@ use crate::logging::log;
 
 #[cfg(feature = "buffer-map")]
 use super::routing_time::samples_to_ms;
+#[cfg(feature = "buffer-map")]
+use super::BufferInstance;
 use super::AlignedSampleBuffer;
 
 /// Source identifier used by decode workers.

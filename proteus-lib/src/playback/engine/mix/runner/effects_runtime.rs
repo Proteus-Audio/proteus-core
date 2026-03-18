@@ -217,47 +217,7 @@ pub(super) fn drain_effect_tail(state: &mut MixLoopState) -> bool {
         return false;
     }
 
-    if let Some(transition) = state.active_inline_transition.as_mut() {
-        run_effect_chain(
-            &mut transition.old_effects,
-            &[],
-            &state.effect_context,
-            true,
-            &mut state.effect_scratch_a,
-            &mut state.effect_scratch_b,
-        );
-        let old_out: Vec<f32> = state.effect_scratch_a.clone();
-
-        run_effect_chain(
-            &mut transition.new_effects,
-            &[],
-            &state.effect_context,
-            true,
-            &mut state.effect_scratch_a,
-            &mut state.effect_scratch_b,
-        );
-
-        let len = old_out.len().max(state.effect_scratch_a.len());
-        state.effect_scratch_b.clear();
-        for i in 0..len {
-            state.effect_scratch_b.push(
-                (old_out.get(i).copied().unwrap_or(0.0)
-                    + state.effect_scratch_a.get(i).copied().unwrap_or(0.0))
-                    * 0.5,
-            );
-        }
-        std::mem::swap(&mut state.effect_scratch_a, &mut state.effect_scratch_b);
-    } else {
-        // Drain runs on the local chain — no mutex held.
-        run_effect_chain(
-            &mut state.local_effects,
-            &[],
-            &state.effect_context,
-            true,
-            &mut state.effect_scratch_a,
-            &mut state.effect_scratch_b,
-        );
-    }
+    drain_effect_chains(state);
 
     if state.effect_scratch_a.is_empty() {
         return false;
@@ -343,6 +303,50 @@ pub(super) fn apply_effect_runtime_updates(state: &mut MixLoopState) {
                 },
             );
         }
+    }
+}
+
+fn drain_effect_chains(state: &mut MixLoopState) {
+    if let Some(transition) = state.active_inline_transition.as_mut() {
+        run_effect_chain(
+            &mut transition.old_effects,
+            &[],
+            &state.effect_context,
+            true,
+            &mut state.effect_scratch_a,
+            &mut state.effect_scratch_b,
+        );
+        let old_out: Vec<f32> = state.effect_scratch_a.clone();
+
+        run_effect_chain(
+            &mut transition.new_effects,
+            &[],
+            &state.effect_context,
+            true,
+            &mut state.effect_scratch_a,
+            &mut state.effect_scratch_b,
+        );
+
+        let len = old_out.len().max(state.effect_scratch_a.len());
+        state.effect_scratch_b.clear();
+        for i in 0..len {
+            state.effect_scratch_b.push(
+                (old_out.get(i).copied().unwrap_or(0.0)
+                    + state.effect_scratch_a.get(i).copied().unwrap_or(0.0))
+                    * 0.5,
+            );
+        }
+        std::mem::swap(&mut state.effect_scratch_a, &mut state.effect_scratch_b);
+    } else {
+        // Drain runs on the local chain — no mutex held.
+        run_effect_chain(
+            &mut state.local_effects,
+            &[],
+            &state.effect_context,
+            true,
+            &mut state.effect_scratch_a,
+            &mut state.effect_scratch_b,
+        );
     }
 }
 

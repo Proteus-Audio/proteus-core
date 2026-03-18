@@ -17,7 +17,7 @@ pub(crate) use legacy::{PlaySettingsLegacy, PlaySettingsLegacyFile};
 #[derive(Debug, Clone)]
 pub enum EffectSettings {
     /// A recognized effect entry with typed settings.
-    Known(AudioEffect),
+    Known(Box<AudioEffect>),
     /// An unrecognized or caller-provided raw effect payload.
     Raw(serde_json::Value),
 }
@@ -26,7 +26,7 @@ impl EffectSettings {
     /// Return the typed effect when this entry is already known.
     pub fn as_audio_effect(&self) -> Option<&AudioEffect> {
         match self {
-            Self::Known(effect) => Some(effect),
+            Self::Known(effect) => Some(effect.as_ref()),
             Self::Raw(_) => None,
         }
     }
@@ -34,7 +34,7 @@ impl EffectSettings {
     /// Decode this entry into a typed [`AudioEffect`].
     pub fn decode_audio_effect(&self) -> serde_json::Result<AudioEffect> {
         match self {
-            Self::Known(effect) => Ok(effect.clone()),
+            Self::Known(effect) => Ok(effect.as_ref().clone()),
             Self::Raw(raw) => serde_json::from_value(raw.clone()),
         }
     }
@@ -54,14 +54,14 @@ impl EffectSettings {
 
 impl From<AudioEffect> for EffectSettings {
     fn from(effect: AudioEffect) -> Self {
-        Self::Known(effect)
+        Self::Known(Box::new(effect))
     }
 }
 
 impl From<serde_json::Value> for EffectSettings {
     fn from(value: serde_json::Value) -> Self {
         match serde_json::from_value::<AudioEffect>(value.clone()) {
-            Ok(effect) => Self::Known(effect),
+            Ok(effect) => Self::Known(Box::new(effect)),
             Err(_) => Self::Raw(value),
         }
     }
@@ -235,9 +235,12 @@ fn first_convolution_reverb_settings(
 ) -> Option<ConvolutionReverbSettingsView<'_>> {
     let effects = effects(play_settings)?;
     effects.iter().find_map(|effect| match effect {
-        EffectSettings::Known(AudioEffect::ConvolutionReverb(effect)) => {
-            Some(ConvolutionReverbSettingsView::Typed(effect.settings()))
-        }
+        EffectSettings::Known(boxed) => match boxed.as_ref() {
+            AudioEffect::ConvolutionReverb(effect) => {
+                Some(ConvolutionReverbSettingsView::Typed(effect.settings()))
+            }
+            _ => None,
+        },
         _ => effect
             .raw_wrapper_object("ConvolutionReverbSettings")
             .map(ConvolutionReverbSettingsView::Raw),
