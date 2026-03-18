@@ -149,14 +149,22 @@ pub(super) fn resume_sink(ctx: &ThreadContext, sink: &Sink, fade_seconds: f32) {
     }
 }
 
-// Block append path until sink queue depth is below configured maximum.
+// Block append path until sink queue depth is below configured limits.
+//
+// Enforces both chunk-count and time-based backpressure. The two controls
+// are orthogonal: either, both, or neither may be active. When both are
+// active the stricter effective cap wins (both must pass).
 pub(super) fn wait_for_sink_capacity(
     ctx: &ThreadContext,
     loop_state: &mut LoopState,
     playback_id: u64,
 ) -> bool {
-    let max_sink_chunks = ctx.lock_buffer_settings_recoverable().max_sink_chunks;
-    if max_sink_chunks == 0 {
+    let settings = ctx.lock_buffer_settings_recoverable();
+    let max_sink_chunks = settings.max_sink_chunks;
+    let max_sink_latency_ms = settings.max_sink_latency_ms;
+    drop(settings);
+
+    if max_sink_chunks == 0 && max_sink_latency_ms.is_none() {
         return true;
     }
 
@@ -168,16 +176,30 @@ pub(super) fn wait_for_sink_capacity(
             return false;
         }
 
-        if ctx.lock_sink_recoverable().len() < max_sink_chunks {
+        update_chunk_lengths(ctx, loop_state);
+
+        let chunk_ok = max_sink_chunks == 0 || ctx.lock_sink_recoverable().len() < max_sink_chunks;
+        let latency_ok = max_sink_latency_ms
+            .is_none_or(|budget_ms| queued_sink_ms(loop_state) < budget_ms as f64);
+
+        if chunk_ok && latency_ok {
             return true;
         }
 
-        update_chunk_lengths(ctx, loop_state);
         if !check_runtime_state(ctx, loop_state) {
             return false;
         }
         ctx.worker_notify.wait_timeout(Duration::from_millis(20));
     }
+}
+
+// Sum the durations of all queued (not yet played) chunks in milliseconds.
+fn queued_sink_ms(loop_state: &LoopState) -> f64 {
+    loop_state
+        .lock_chunk_lengths_recoverable()
+        .iter()
+        .sum::<f64>()
+        * 1000.0
 }
 
 // Append one chunk to the sink and update runtime telemetry/state.
@@ -243,6 +265,14 @@ pub(super) fn update_sink(
 
     update_chunk_lengths(ctx, loop_state);
     check_runtime_state(ctx, loop_state);
+
+    // Publish queued-output diagnostics for the editor.
+    {
+        let q_ms = queued_sink_ms(loop_state);
+        let mut metrics = ctx.lock_dsp_metrics_recoverable();
+        metrics.queued_sink_ms = q_ms;
+        metrics.output_chunk_ms = length_in_seconds * 1000.0;
+    }
 }
 
 #[cfg(test)]

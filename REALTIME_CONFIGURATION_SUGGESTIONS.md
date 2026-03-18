@@ -57,10 +57,12 @@ Interpretation:
 - `startup_fade_ms` / `seek_fade_*_ms`: these affect transport responsiveness, not continuous knob latency, but shorter values make editing workflows feel less sluggish
 - `parameter_ramp_ms = 5`: keep click suppression without making knob turns feel sluggish
 - `append_jitter_log_ms = 8`: temporary tuning aid only; leave it at `0` in normal operation
+- `max_sink_latency_ms = 60`: time-based sink budget in milliseconds; keeps queued output under a fixed latency target regardless of chunk size
+- `output_slice_ms = 30`: post-DSP output is sliced into ~30 ms chunks before sending to the worker, so convolution-heavy chains get the same sink granularity as non-convolution chains
 
-For non-convolution chains, `max_sink_chunks = 2` usually means roughly a few tens of milliseconds of Proteus-managed sink backlog, not seconds of buffered audio. End-to-end control latency will still include the current in-flight chunk plus device/OS buffering.
+For non-convolution chains, `max_sink_chunks = 2` usually means roughly a few tens of milliseconds of Proteus-managed sink backlog, not seconds of buffered audio. The `max_sink_latency_ms = 60` budget provides a more reliable cap. End-to-end control latency will still include the current in-flight chunk plus device/OS buffering.
 
-For convolution-heavy chains, try `max_sink_chunks = 1` first. Because each chunk is convolution-batch aligned (currently ~171 ms at stereo 48 kHz), even `max_sink_chunks = 1` allows up to ~171 ms of queued audio in the sink plus up to one more chunk in the mix-to-worker channel — roughly 340 ms of library-side latency before the audio device adds its own buffering. Chunk-count-based backpressure is fundamentally the wrong unit here: it cannot distinguish between one 30 ms chunk and one 171 ms chunk. Configuration alone will only get you so far until the library adds a time-based cap and smaller sink-facing output slices (`FR-03`).
+For convolution-heavy chains, the combination of `output_slice_ms = 30` and `max_sink_latency_ms = 60` now provides bounded latency. Output slicing breaks the large convolution batch (~171 ms at stereo 48 kHz) into ~30 ms slices before they reach the sink, and the time-based budget prevents the sink from accumulating more than 60 ms of queued audio. Without output slicing, chunk-count-based backpressure is too coarse: even `max_sink_chunks = 1` allows up to ~171 ms of queued audio in the sink plus up to one more chunk in the mix-to-worker channel.
 
 ## API Usage Recommendations
 
@@ -83,7 +85,7 @@ While tuning your editor profile, monitor:
 - `get_dsp_metrics()`: watch `late_append_count`, `late_append_active`, `underrun_count`, and `overrun`
 - `append_jitter_log_ms`: enable this temporarily to see when the worker is missing append timing targets
 
-Today, `sink_len` is only a proxy. It is much less informative when convolution is active because one queued chunk may already represent well over 100 ms. Once `FR-03` lands, prefer queued milliseconds over chunk count.
+Today, `sink_len` is only a proxy. It is much less informative when convolution is active because one queued chunk may already represent well over 100 ms. With `FR-03` landed, prefer `queued_sink_ms` and `output_chunk_ms` from `get_dsp_metrics()` over chunk count.
 
 If you still hear very large delay while `sink_len` stays low, the next suspect is outside Proteus:
 
@@ -102,12 +104,12 @@ Treat authoring mode as an application mode or explicit configuration choice, no
 
 If the editor currently always runs with `max_sink_chunks = 0`, fixing that should be your first change. That is the most likely reason you still hear control changes 1-2 seconds late.
 
-## What Configuration Alone Cannot Fix
+## What FR-03 Added
 
-There is still a library-side gap:
+The following library-side gaps have been addressed:
 
-- sink backpressure is controlled by chunk count, not by actual queued milliseconds
-- output chunk size can become large when mix scheduling aligns to convolution batching
-- the public API does not expose a direct "estimated audible control latency" value
+- **Time-based sink backpressure** (`max_sink_latency_ms`): the playback worker now blocks the producer when queued output exceeds a millisecond budget, orthogonal to the chunk-count limit
+- **Output slicing** (`output_slice_ms`): post-DSP output can be sliced into smaller chunks before being sent to the worker thread, decoupling internal convolution batch size from sink append granularity
+- **Queued-output diagnostics** (`queued_sink_ms`, `output_chunk_ms`): available through `get_dsp_metrics()` in normal builds
 
-That is why this repository should also track a follow-up feature request for bounded audible control latency during live editing.
+The `live_authoring()` profile now sets `max_sink_latency_ms = 60 ms` and `output_slice_ms = 30 ms` by default. These settings can also be configured individually via `set_max_sink_latency_ms()` and `set_output_slice_ms()`.

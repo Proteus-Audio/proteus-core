@@ -27,6 +27,22 @@ pub struct PlaybackBufferSettings {
     pub effect_boundary_log: bool,
     /// Duration in milliseconds for per-parameter smoothing ramps (default: 5.0).
     pub parameter_ramp_ms: f32,
+    /// Maximum queued audio in the sink, in milliseconds (`None` = disabled).
+    ///
+    /// When set, the playback worker blocks the producer once queued output
+    /// exceeds this budget. This control is orthogonal to `max_sink_chunks`:
+    /// either, both, or neither may be active. When both are active the
+    /// stricter effective cap wins.
+    pub max_sink_latency_ms: Option<f32>,
+    /// Target output slice duration (ms) for sink appends (`None` = full batch).
+    ///
+    /// When set, post-DSP output is sliced into chunks of approximately this
+    /// duration before being sent to the worker thread. This decouples
+    /// internal DSP batch size (which may be large for convolution efficiency)
+    /// from the granularity of sink appends, giving the time-based latency
+    /// budget finer control. Disabled by default to avoid extra overhead in
+    /// stability-first playback modes.
+    pub output_slice_ms: Option<f32>,
 }
 
 impl PlaybackBufferSettings {
@@ -45,6 +61,8 @@ impl PlaybackBufferSettings {
             append_jitter_log_ms: 0.0,
             effect_boundary_log: false,
             parameter_ramp_ms: 5.0,
+            max_sink_latency_ms: None,
+            output_slice_ms: None,
         }
     }
 
@@ -69,6 +87,8 @@ impl PlaybackBufferSettings {
             append_jitter_log_ms: 0.0,
             effect_boundary_log: false,
             parameter_ramp_ms: 5.0,
+            max_sink_latency_ms: Some(60.0),
+            output_slice_ms: Some(30.0),
         }
     }
 }
@@ -112,6 +132,14 @@ pub struct DspChainMetrics {
     pub late_append_count: u64,
     /// Whether a late-append condition is currently active.
     pub late_append_active: bool,
+    /// Estimated queued audio in the output sink, in milliseconds.
+    ///
+    /// After played chunks are drained, this is the sum of remaining
+    /// chunk durations. Slightly overestimates because the currently-playing
+    /// chunk is counted at its full duration.
+    pub queued_sink_ms: f64,
+    /// Duration of the most recently appended output chunk, in milliseconds.
+    pub output_chunk_ms: f64,
 }
 
 #[cfg(test)]
@@ -135,6 +163,8 @@ mod tests {
         assert_eq!(settings.seek_fade_out_ms, 30.0);
         assert_eq!(settings.seek_fade_in_ms, 80.0);
         assert!(!settings.effect_boundary_log);
+        assert!(settings.max_sink_latency_ms.is_none());
+        assert!(settings.output_slice_ms.is_none());
     }
 
     #[test]
@@ -149,6 +179,8 @@ mod tests {
         assert_eq!(settings.inline_effects_transition_ms, 15.0);
         assert_eq!(settings.append_jitter_log_ms, 0.0);
         assert_eq!(settings.parameter_ramp_ms, 5.0);
+        assert_eq!(settings.max_sink_latency_ms, Some(60.0));
+        assert_eq!(settings.output_slice_ms, Some(30.0));
     }
 
     #[test]
@@ -164,5 +196,7 @@ mod tests {
         assert_eq!(metrics.nan_count, 0);
         assert_eq!(metrics.late_append_count, 0);
         assert!(!metrics.late_append_active);
+        assert_eq!(metrics.queued_sink_ms, 0.0);
+        assert_eq!(metrics.output_chunk_ms, 0.0);
     }
 }

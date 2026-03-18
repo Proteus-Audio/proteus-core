@@ -55,11 +55,13 @@ pub(super) fn process_and_send_samples(
         audio_time_ms,
         state.effect_scratch_a.len(),
     );
+    let slice_samples = output_slice_samples(state);
     match output_stage::send_samples(
         &state.sender,
         state.audio_info.channels as u16,
         state.audio_info.sample_rate,
         &state.effect_scratch_a,
+        slice_samples,
     ) {
         output_stage::SendStatus::Sent => {
             if !state.logged_first_output_send {
@@ -241,11 +243,13 @@ pub(super) fn drain_effect_tail(state: &mut MixLoopState) -> bool {
         return false;
     }
 
+    let slice_samples = output_slice_samples(state);
     match output_stage::send_samples(
         &state.sender,
         state.audio_info.channels as u16,
         state.audio_info.sample_rate,
         &state.effect_scratch_a,
+        slice_samples,
     ) {
         output_stage::SendStatus::Sent => true,
         output_stage::SendStatus::Empty => false,
@@ -612,6 +616,17 @@ fn rebuild_effect_context(
     .expect("prot info must have valid sample rate and channel count");
     context.set_parameter_ramp_ms(parameter_ramp_ms);
     context
+}
+
+fn output_slice_samples(state: &MixLoopState) -> Option<usize> {
+    state
+        .lock_buffer_settings_recoverable()
+        .output_slice_ms
+        .map(|ms| {
+            let channels = state.audio_info.channels.max(1) as usize;
+            let frames = (state.audio_info.sample_rate as f32 * ms / 1000.0).ceil() as usize;
+            (frames * channels).max(channels)
+        })
 }
 
 fn sync_effect_context_from_buffer_settings(state: &mut MixLoopState) {

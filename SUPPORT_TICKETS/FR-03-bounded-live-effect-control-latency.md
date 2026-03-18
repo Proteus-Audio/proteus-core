@@ -156,14 +156,14 @@ This is harder than passive backpressure because already-appended audio cannot b
 
 ## Acceptance Criteria
 
-- [ ] The library exposes an opt-in time-based queued-output limit suitable for live authoring
-- [ ] The editor can query queued output latency in milliseconds through the public API without relying on debug-only plumbing
-- [ ] If both chunk-count and time-based sink limits are configured, the stricter cap wins
-- [ ] Inline `set_effect_parameter()` / `set_effect_enabled()` changes become audible within the configured output-latency budget on non-convolution chains, absent device/OS buffering outside Proteus
-- [ ] Convolution-enabled chains can opt into smaller sink append slices without forcing that behavior on stability-first playback modes
-- [ ] `configure_for_live_authoring()` / `PlaybackBufferSettings::live_authoring()` sets a default `max_sink_latency_ms` and enables output slicing, so the editor gets a bounded latency contract from a single call
-- [ ] Existing default behavior remains the default for higher-buffer, stability-first playback modes
+- [x] The library exposes an opt-in time-based queued-output limit suitable for live authoring
+- [x] The editor can query queued output latency in milliseconds through the public API without relying on debug-only plumbing
+- [x] If both chunk-count and time-based sink limits are configured, the stricter cap wins
+- [x] Inline `set_effect_parameter()` / `set_effect_enabled()` changes become audible within the configured output-latency budget on non-convolution chains, absent device/OS buffering outside Proteus
+- [x] Convolution-enabled chains can opt into smaller sink append slices without forcing that behavior on stability-first playback modes
+- [x] `configure_for_live_authoring()` / `PlaybackBufferSettings::live_authoring()` sets a default `max_sink_latency_ms` and enables output slicing, so the editor gets a bounded latency contract from a single call
+- [x] Existing default behavior remains the default for higher-buffer, stability-first playback modes
 
 ## Status
 
-Open.
+Done.

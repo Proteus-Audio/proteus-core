@@ -144,6 +144,39 @@ impl Player {
         });
     }
 
+    /// Configure the time-based queued-output limit for the sink.
+    ///
+    /// When set, the playback worker blocks the producer once queued output
+    /// exceeds this budget. Set to `None` to disable. This is orthogonal to
+    /// the chunk-count limit (`set_max_sink_chunks`); when both are active
+    /// the stricter effective cap wins.
+    ///
+    /// # Arguments
+    ///
+    /// * `ms` - Maximum queued output in milliseconds, or `None` to disable.
+    pub fn set_max_sink_latency_ms(&self, ms: Option<f32>) {
+        self.update_buffer_settings(|settings| {
+            settings.max_sink_latency_ms = ms.map(|v| v.max(0.0));
+        });
+    }
+
+    /// Configure the target output slice duration for sink appends.
+    ///
+    /// When set, post-DSP output is sliced into chunks of approximately this
+    /// duration before being sent to the worker thread. This decouples
+    /// internal DSP batch size from sink append granularity, which is
+    /// important for convolution-heavy chains in authoring mode. Set to
+    /// `None` to disable (full batches are sent as single chunks).
+    ///
+    /// # Arguments
+    ///
+    /// * `ms` - Target slice duration in milliseconds, or `None` to disable.
+    pub fn set_output_slice_ms(&self, ms: Option<f32>) {
+        self.update_buffer_settings(|settings| {
+            settings.output_slice_ms = ms.map(|v| v.max(0.0));
+        });
+    }
+
     /// Update per-slot track level/pan without restarting playback.
     ///
     /// This mutates the underlying track model and queues an inline update for
@@ -250,6 +283,64 @@ mod tests {
         assert_eq!(settings.seek_fade_in_ms, 50.0);
         assert_eq!(settings.inline_effects_transition_ms, 15.0);
         assert_eq!(settings.parameter_ramp_ms, 5.0);
+        assert_eq!(settings.max_sink_latency_ms, Some(60.0));
+        assert_eq!(settings.output_slice_ms, Some(30.0));
+    }
+
+    #[test]
+    fn set_max_sink_latency_ms_updates_buffer_settings() {
+        let player = test_player();
+        player.set_max_sink_latency_ms(Some(80.0));
+        assert_eq!(
+            player
+                .lock_buffer_settings_recoverable()
+                .max_sink_latency_ms,
+            Some(80.0)
+        );
+    }
+
+    #[test]
+    fn set_max_sink_latency_ms_none_disables() {
+        let player = test_player();
+        player.set_max_sink_latency_ms(Some(50.0));
+        player.set_max_sink_latency_ms(None);
+        assert!(player
+            .lock_buffer_settings_recoverable()
+            .max_sink_latency_ms
+            .is_none());
+    }
+
+    #[test]
+    fn set_max_sink_latency_ms_clamps_negative() {
+        let player = test_player();
+        player.set_max_sink_latency_ms(Some(-10.0));
+        assert_eq!(
+            player
+                .lock_buffer_settings_recoverable()
+                .max_sink_latency_ms,
+            Some(0.0)
+        );
+    }
+
+    #[test]
+    fn set_output_slice_ms_updates_buffer_settings() {
+        let player = test_player();
+        player.set_output_slice_ms(Some(30.0));
+        assert_eq!(
+            player.lock_buffer_settings_recoverable().output_slice_ms,
+            Some(30.0)
+        );
+    }
+
+    #[test]
+    fn set_output_slice_ms_none_disables() {
+        let player = test_player();
+        player.set_output_slice_ms(Some(30.0));
+        player.set_output_slice_ms(None);
+        assert!(player
+            .lock_buffer_settings_recoverable()
+            .output_slice_ms
+            .is_none());
     }
 
     fn test_player() -> Player {
