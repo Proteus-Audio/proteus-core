@@ -29,6 +29,7 @@ use crate::audio::buffer::TrackBufferMap;
 use crate::audio::decode::process_channel;
 
 use super::buffer::{add_samples_to_buffer_map, mark_track_as_finished};
+use super::context::DecodeContext;
 
 /// Arguments required to buffer multiple tracks from a shared container stream.
 pub struct ContainerTrackArgs {
@@ -127,23 +128,26 @@ pub fn buffer_container_tracks(args: ContainerTrackArgs, abort: Arc<AtomicBool>)
         {
             warn!("container seek failed, starting from beginning");
         }
+        let ctx = DecodeContext {
+            buffer_map,
+            buffer_notify,
+            abort,
+            finished_tracks,
+            channels,
+        };
         let eos_seconds = (track_eos_ms.max(0.0) / 1000.0) as f64;
         let finished_ids = run_container_decode_loop(
             &mut *format,
             &mut track_decoders,
-            channels,
             eos_seconds,
-            &buffer_map,
-            buffer_notify.as_ref(),
-            &abort,
-            &finished_tracks,
+            &ctx,
         );
         for td in &track_decoders {
             if !finished_ids.contains(&td.track_id) {
                 for &key in &td.track_keys {
-                    mark_track_as_finished(&mut finished_tracks.clone(), key);
+                    mark_track_as_finished(&mut ctx.finished_tracks.clone(), key);
                 }
-                if let Some(notify) = buffer_notify.as_ref() {
+                if let Some(notify) = ctx.buffer_notify.as_ref() {
                     notify.notify_all();
                 }
             }
@@ -235,15 +239,13 @@ fn interleave_to_stereo(decoded: AudioBufferRef<'_>, channels: u8) -> Vec<f32> {
     ch1.into_iter().zip(ch2).flat_map(|(l, r)| [l, r]).collect()
 }
 
-#[allow(clippy::too_many_arguments)]
 fn check_eos_skew(
     track_decoders: &[TrackDecoder],
     finished_ids: &mut Vec<u32>,
     last_seen: &HashMap<u32, f64>,
     max_seen: f64,
     eos_seconds: f64,
-    finished_tracks: &Arc<Mutex<Vec<u16>>>,
-    buffer_notify: Option<&Arc<Condvar>>,
+    ctx: &DecodeContext,
 ) {
     if eos_seconds <= 0.0 || max_seen <= 0.0 {
         return;
@@ -257,57 +259,48 @@ fn check_eos_skew(
         };
         if max_seen - last >= eos_seconds {
             finished_ids.push(td.track_id);
-            mark_track_as_finished(&mut finished_tracks.clone(), td.primary_key());
-            if let Some(notify) = buffer_notify {
+            mark_track_as_finished(&mut ctx.finished_tracks.clone(), td.primary_key());
+            if let Some(notify) = ctx.buffer_notify.as_ref() {
                 notify.notify_all();
             }
         }
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 fn push_decoded_container_packet(
     track_id: u32,
     decoded: AudioBufferRef<'_>,
     primary_key: u16,
-    channels: u8,
-    buffer_map: &TrackBufferMap,
-    buffer_notify: Option<&Arc<Condvar>>,
-    abort: &Arc<AtomicBool>,
+    ctx: &DecodeContext,
     logged_formats: &mut HashMap<u32, bool>,
 ) {
     logged_formats.entry(track_id).or_insert_with(|| {
         info!("decoded track {} buffer ready", track_id);
         true
     });
-    let stereo = interleave_to_stereo(decoded, channels);
+    let stereo = interleave_to_stereo(decoded, ctx.channels);
     if !stereo.is_empty() {
         add_samples_to_buffer_map(
-            &mut buffer_map.clone(),
+            &mut ctx.buffer_map.clone(),
             primary_key,
             stereo,
-            abort,
-            buffer_notify,
+            &ctx.abort,
+            ctx.buffer_notify.as_ref(),
         );
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 fn run_container_decode_loop(
     format: &mut dyn FormatReader,
     track_decoders: &mut [TrackDecoder],
-    channels: u8,
     eos_seconds: f64,
-    buffer_map: &TrackBufferMap,
-    buffer_notify: Option<&Arc<Condvar>>,
-    abort: &Arc<AtomicBool>,
-    finished_tracks: &Arc<Mutex<Vec<u16>>>,
+    ctx: &DecodeContext,
 ) -> Vec<u32> {
     let mut finished_ids: Vec<u32> = Vec::new();
     let mut last_seen: HashMap<u32, f64> = HashMap::new();
     let (mut max_seen, mut logged_formats) = (0.0f64, HashMap::<u32, bool>::new());
     let result: Result<bool, Error> = loop {
-        if abort.load(Ordering::Relaxed) {
+        if ctx.abort.load(Ordering::Relaxed) {
             break Ok(true);
         }
         let packet = match format.next_packet() {
@@ -326,7 +319,7 @@ fn run_container_decode_loop(
         if td.is_past_end(&packet) {
             if !finished_ids.contains(&tid) {
                 finished_ids.push(tid);
-                mark_track_as_finished(&mut finished_tracks.clone(), pkey);
+                mark_track_as_finished(&mut ctx.finished_tracks.clone(), pkey);
             }
             if finished_ids.len() == track_decoders.len() {
                 break Ok(true);
@@ -340,8 +333,7 @@ fn run_container_decode_loop(
             &last_seen,
             max_seen,
             eos_seconds,
-            finished_tracks,
-            buffer_notify,
+            ctx,
         );
         // The decoder for `tid` was found at the top of this iteration;
         // `check_eos_skew` does not remove decoders, so it must still be present.
@@ -357,10 +349,7 @@ fn run_container_decode_loop(
                 tid_for_log,
                 decoded,
                 pkey,
-                channels,
-                buffer_map,
-                buffer_notify,
-                abort,
+                ctx,
                 &mut logged_formats,
             ),
             Err(Error::DecodeError(e)) => warn!("decode error: {}", e),

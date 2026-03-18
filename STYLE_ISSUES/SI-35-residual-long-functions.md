@@ -43,11 +43,11 @@ Additionally, 4 `#[allow(clippy::too_many_arguments)]` suppressions remain from 
 
 ### Acceptance criteria
 
-- [ ] All three functions are ≤ 80 lines
-- [ ] All 4 `#[allow(clippy::too_many_arguments)]` suppressions in `track/` are removed
-- [ ] Tests continue to pass
-- [ ] No new `#[allow(...)]` suppressions introduced
+- [x] All three functions are ≤ 80 lines
+- [x] All 4 `#[allow(clippy::too_many_arguments)]` suppressions in `track/` are removed
+- [x] Tests continue to pass
+- [x] No new `#[allow(...)]` suppressions introduced
 
 ## Status
 
-Open.
+Complete.

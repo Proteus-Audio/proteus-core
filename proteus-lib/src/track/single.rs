@@ -22,6 +22,7 @@ use crate::audio::decode::process_channel;
 use crate::tools::decode::open_file;
 
 use super::buffer::{add_samples_to_buffer_map, mark_track_as_finished};
+use super::context::DecodeContext;
 
 /// Outcome of a single-track decode worker run.
 ///
@@ -139,51 +140,71 @@ pub fn buffer_track(args: TrackArgs, abort: Arc<AtomicBool>) -> JoinHandle<Track
                 TrackDecodeOutcome::Failed(format!("seek failed: {}", err)),
             );
         }
-        let mut logged_format = false;
-        let result: Result<bool, Error> = loop {
-            if abort.load(Ordering::Relaxed) {
-                break Ok(true);
-            }
-            let packet = match format.next_packet() {
-                Ok(p) => p,
-                Err(e) => break Err(e),
-            };
-            if packet.track_id() != track_id {
-                continue;
-            }
-            if dur.is_some_and(|d| packet.ts() >= d) {
-                break Ok(true);
-            }
-            match decoder.decode(&packet) {
-                Ok(decoded) => process_decoded_packet(
-                    decoded,
-                    track_id,
-                    track_key,
-                    channels,
-                    &buffer_map,
-                    buffer_notify.as_ref(),
-                    &abort,
-                    &mut logged_format,
-                ),
-                Err(Error::DecodeError(e)) => {
-                    warn!("decode error for '{}': {}", file_path, e);
-                }
-                Err(e) => break Err(e),
-            }
+        let ctx = DecodeContext {
+            buffer_map,
+            buffer_notify,
+            abort,
+            finished_tracks,
+            channels,
         };
-        let outcome = if abort.load(Ordering::Relaxed) {
-            TrackDecodeOutcome::Aborted
-        } else {
-            match result {
-                Ok(_) => TrackDecodeOutcome::Completed,
-                Err(e) => {
-                    warn!("decode loop ended with error for '{}': {}", file_path, e);
-                    TrackDecodeOutcome::Failed(e.to_string())
-                }
-            }
-        };
-        finish(&finished_tracks, track_key, buffer_notify.as_ref(), outcome)
+        let result = run_single_decode_loop(
+            &mut *format, &mut *decoder, track_id, track_key, dur, &ctx,
+        );
+        let outcome = resolve_decode_outcome(result, &ctx.abort, &file_path);
+        finish(&ctx.finished_tracks, track_key, ctx.buffer_notify.as_ref(), outcome)
     })
+}
+
+fn run_single_decode_loop(
+    format: &mut dyn FormatReader,
+    decoder: &mut dyn symphonia::core::codecs::Decoder,
+    track_id: u32,
+    track_key: u16,
+    dur: Option<u64>,
+    ctx: &DecodeContext,
+) -> Result<bool, Error> {
+    let mut logged_format = false;
+    loop {
+        if ctx.abort.load(Ordering::Relaxed) {
+            break Ok(true);
+        }
+        let packet = match format.next_packet() {
+            Ok(p) => p,
+            Err(e) => break Err(e),
+        };
+        if packet.track_id() != track_id {
+            continue;
+        }
+        if dur.is_some_and(|d| packet.ts() >= d) {
+            break Ok(true);
+        }
+        match decoder.decode(&packet) {
+            Ok(decoded) => {
+                process_decoded_packet(decoded, track_id, track_key, ctx, &mut logged_format);
+            }
+            Err(Error::DecodeError(e)) => {
+                warn!("decode error for track {}: {}", track_id, e);
+            }
+            Err(e) => break Err(e),
+        }
+    }
+}
+
+fn resolve_decode_outcome(
+    result: Result<bool, Error>,
+    abort: &AtomicBool,
+    file_path: &str,
+) -> TrackDecodeOutcome {
+    if abort.load(Ordering::Relaxed) {
+        return TrackDecodeOutcome::Aborted;
+    }
+    match result {
+        Ok(_) => TrackDecodeOutcome::Completed,
+        Err(e) => {
+            warn!("decode loop ended with error for '{}': {}", file_path, e);
+            TrackDecodeOutcome::Failed(e.to_string())
+        }
+    }
 }
 
 /// Common exit path: mark finished, notify waiters, return the outcome.
@@ -234,29 +255,25 @@ fn interleave_to_stereo(decoded: AudioBufferRef<'_>, channels: u8) -> Vec<f32> {
     ch1.into_iter().zip(ch2).flat_map(|(l, r)| [l, r]).collect()
 }
 
-#[allow(clippy::too_many_arguments)]
 fn process_decoded_packet(
     decoded: AudioBufferRef<'_>,
     track_id: u32,
     track_key: u16,
-    channels: u8,
-    buffer_map: &TrackBufferMap,
-    buffer_notify: Option<&Arc<Condvar>>,
-    abort: &Arc<AtomicBool>,
+    ctx: &DecodeContext,
     logged_format: &mut bool,
 ) {
     if !*logged_format {
         info!("decoded track {} buffer ready", track_id);
         *logged_format = true;
     }
-    let stereo = interleave_to_stereo(decoded, channels);
+    let stereo = interleave_to_stereo(decoded, ctx.channels);
     if !stereo.is_empty() {
         add_samples_to_buffer_map(
-            &mut buffer_map.clone(),
+            &mut ctx.buffer_map.clone(),
             track_key,
             stereo,
-            abort,
-            buffer_notify,
+            &ctx.abort,
+            ctx.buffer_notify.as_ref(),
         );
     }
 }

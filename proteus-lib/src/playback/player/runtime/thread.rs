@@ -9,6 +9,8 @@ use std::thread;
 
 use log::debug;
 
+use rodio::mixer::Mixer;
+
 use super::super::Player;
 use super::now_ms;
 use super::worker::{open_output_stream_with_retry, run_playback_thread, ThreadContext};
@@ -84,7 +86,24 @@ impl Player {
             }
         }
 
-        let context = ThreadContext {
+        let context = self.build_thread_context(output_mixer);
+        let handle = thread::spawn(move || run_playback_thread(context, playback_id, ts));
+        *self.lock_playback_thread_handle_invariant() = Some(handle);
+        if let Some(elapsed_ms) = trace_elapsed(trace_ms, now_ms()) {
+            debug!(
+                "play trace: initialize_thread spawned playback_id={} +{}ms",
+                playback_id, elapsed_ms
+            );
+        } else {
+            debug!(
+                "play trace: initialize_thread spawned playback_id={}",
+                playback_id
+            );
+        }
+    }
+
+    fn build_thread_context(&self, output_mixer: Mixer) -> ThreadContext {
+        ThreadContext {
             play_state: self.state.clone(),
             abort: self.abort.clone(),
             playback_thread_exists: self.playback_thread_exists.clone(),
@@ -112,20 +131,6 @@ impl Player {
             last_chunk_ms: self.last_chunk_ms.clone(),
             last_time_update_ms: self.last_time_update_ms.clone(),
             worker_notify: self.worker_notify.clone(),
-        };
-
-        let handle = thread::spawn(move || run_playback_thread(context, playback_id, ts));
-        *self.lock_playback_thread_handle_invariant() = Some(handle);
-        if let Some(elapsed_ms) = trace_elapsed(trace_ms, now_ms()) {
-            debug!(
-                "play trace: initialize_thread spawned playback_id={} +{}ms",
-                playback_id, elapsed_ms
-            );
-        } else {
-            debug!(
-                "play trace: initialize_thread spawned playback_id={}",
-                playback_id
-            );
         }
     }
 }
