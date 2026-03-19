@@ -2,77 +2,163 @@
 
 ## Summary
 
-Add optional per-effect input and output level metering to the DSP chain, along with per-band spectral analysis for frequency-shaping effects (multiband EQ, lowpass, highpass). This enables GUI applications to display real-time visual feedback for each effect — input/output bars, gain reduction indicators, and frequency response curves — without penalizing headless or CLI consumers.
+Add three optional GUI-facing inspection capabilities for the DSP chain:
+
+1. **Per-effect input/output level metering** for every effect in the active chain
+2. **Analytical frequency-response curves** for filter-based effects
+3. **Optional FFT-based spectral analysis** for frequency-shaping effects
+
+This should be implemented so that:
+
+- the feature is **compile-time opt-in**
+- the public API remains **additive** across feature sets
+- the hot mix path does **no extra steady-state work unless metering is enabled at runtime**
+- the mix thread never blocks or allocates in the metering fast path
+
+The current mix architecture already gives us the right hook point: `run_effect_chain()` processes the mix thread's **local** effect chain using pre-allocated ping-pong scratch buffers. Metering should attach there, not inside individual effects.
 
 ---
 
 ## Motivation
 
-Currently the only metering in the system is the `OutputMeter` at the final output stage (`playback/output_meter.rs`). There is no way for a consumer to inspect signal levels at each point in the DSP chain. GUI applications need:
+Today the only exported metering is the final `OutputMeter` in [`playback/output_meter.rs`](../proteus-lib/src/playback/output_meter.rs). There is no way for a GUI to inspect what is happening at each effect boundary.
 
-- **Per-effect I/O levels**: input and output peak/RMS for every effect in the chain, enabling visual gain staging feedback
-- **Per-band levels for EQ/filter effects**: spectral energy breakdown by configured EQ band, so a GUI can visualize the frequency-domain impact of each filter point
-- **Filter response curves**: the magnitude response of biquad-based effects (multiband EQ, lowpass, highpass), enabling overlay of the analytical filter shape
+GUI/editor consumers need three different views:
+
+- **Per-effect I/O levels**: input peak/RMS and output peak/RMS so users can see gain staging through the chain
+- **Analytical filter curves**: the theoretical response of LPF/HPF/EQ sections for static overlay rendering
+- **Optional spectral analysis**: animated frequency-domain energy views when an EQ/filter editor is open
+
+These use cases have very different cost profiles. They should not be forced through one always-on implementation.
 
 ---
 
-## Feature gating
+## Compile-Time And Runtime Gating
 
-Gate all metering behind a new **`effect-meter`** feature flag, following the `output-meter` precedent:
+### Compile-time gating
+
+Use a new feature family that is **off by default**:
 
 ```toml
 # proteus-lib/Cargo.toml
 [features]
 effect-meter = []
+effect-meter-spectral = ["effect-meter", "real-fft"]
 
 # proteus-cli/Cargo.toml
 [features]
 effect-meter = ["proteus-lib/effect-meter"]
+effect-meter-spectral = ["proteus-lib/effect-meter-spectral"]
 ```
 
-When disabled, all metering types compile to zero-cost no-ops. The feature is **off by default** — only applications that need it (GUI frontends) pay the cost.
+Recommended split:
+
+- `effect-meter`: Tier 1 and Tier 2
+- `effect-meter-spectral`: Tier 3 only
+
+This keeps the cheap time-domain and analytical pieces available without forcing FFT support when a consumer does not want it.
+
+### Public API rule
+
+Per [`STYLE_GUIDE.md`](../STYLE_GUIDE.md), feature flags must be additive and must not change the public API surface. That means:
+
+- public metering types should exist regardless of feature flags
+- `Player` metering methods should exist regardless of feature flags
+- disabled builds should return `None`, empty no-op snapshots, or ignore setters rather than removing methods with `#[cfg]`
+
+This should follow the same pattern as [`playback/output_meter.rs`](../proteus-lib/src/playback/output_meter.rs): enabled and disabled implementations behind a stable API.
+
+### Runtime gating
+
+Compile-time gating alone is not enough. Background metering work should be runtime-disabled by default and only perform real work while a consumer explicitly wants it.
+
+Recommended runtime API:
+
+```rust
+impl Player {
+    pub fn set_effect_level_metering_enabled(&self, enabled: bool) { ... }
+    pub fn set_effect_level_meter_refresh_hz(&self, hz: f32) { ... }
+
+    pub fn set_spectral_analysis_enabled(&self, enabled: bool) { ... }
+    pub fn set_spectral_analysis_refresh_hz(&self, hz: f32) { ... }
+}
+```
+
+Rules:
+
+- **Tier 1**: disabled by default at runtime
+- **Tier 2**: on-demand only, so no background runtime gate is needed
+- **Tier 3**: disabled by default at runtime
+- when a tier is runtime-disabled, the mix thread should do no tier-specific work beyond a cheap gate check
 
 ---
 
 ## Design: three tiers
 
-Split the work into three tiers of increasing computational cost. Each tier builds on the previous one but can be implemented independently. All three tiers live behind the single `effect-meter` feature flag, with the expensive tier (spectral FFT) additionally gated by a runtime configuration flag so consumers can enable/disable it dynamically.
+### Tier 1: Time-domain peak/RMS levels
 
-### Tier 1 — Time-domain peak/RMS levels (near-zero cost)
+**What it provides**
 
-**What it provides:** Per-effect input peak, input RMS, output peak, and output RMS, per channel.
+Per-effect input peak, input RMS, output peak, and output RMS, per channel.
 
-**Where it hooks in:** `run_effect_chain()` in `playback/engine/mix/effects.rs`. This is the only call site — individual effects do not need modification.
+**Correct hook point**
 
-**How it works:**
+Hook this at [`run_effect_chain()`](../proteus-lib/src/playback/engine/mix/effects.rs), not inside each effect. That keeps individual effects unchanged and avoids per-effect branching.
 
-```
+**How it works**
+
+```text
 for each effect in chain:
-    if metering_due:
-        measure scratch_a → input_levels[effect_index]
+    if level_metering_due:
+        measure scratch_a -> input_levels[effect_index]
+
     effect.process_into(scratch_a, scratch_b, ...)
-    swap(scratch_a, scratch_b)
-    if metering_due:
-        measure scratch_a → output_levels[effect_index]
+    swap/crossfade as normal
+
+    if level_metering_due:
+        measure post-effect buffer -> output_levels[effect_index]
 ```
 
-The measurement pass iterates the interleaved samples once, tracking per-channel peak (`abs().max()`) and sum-of-squares for RMS. This is the same work the compressor already does internally for its own gain computation — it's essentially free relative to the DSP processing itself.
+For normal stages, the post-effect buffer is `scratch_a` after the swap.
 
-**Decimation:** Metering does not need to run on every chunk. Add a frame counter and only measure every `N` chunks, where `N` is derived from a configurable refresh rate (e.g., 30 Hz at 48 kHz / 1024-sample chunks ≈ every ~1.5 chunks). This keeps the overhead proportional to the display refresh rate, not the audio sample rate.
+For `EffectEnableFade`, the post-effect buffer is the **crossfaded** result in `scratch_a`, not raw `scratch_b`. The meter must reflect what the listener actually hears.
 
-**Data structure:**
+**Measurement**
+
+The level pass iterates the interleaved samples once and tracks:
+
+- peak: `abs(sample).max(...)`
+- RMS: `sum(sample * sample)` followed by `sqrt(sum / frames_per_channel)`
+
+This is cheap, but not free. It still scales with:
+
+- number of effects
+- number of measured boundaries
+- refresh rate
+
+That is why runtime gating and decimation are required.
+
+**Refresh scheduling**
+
+Do not schedule by “every N chunks”. Chunk sizes already vary with convolution batching, slicing, and drain paths.
+
+Instead, schedule by **accumulated sample frames per channel**, the same way the existing output meter tracks time. Example:
+
+- store `level_frame_samples_per_channel`
+- accumulate processed frames per channel
+- publish a new snapshot whenever the accumulated count crosses that threshold
+
+This makes refresh cadence stable regardless of chunk size.
+
+**Data structures**
 
 ```rust
-/// Per-channel peak and RMS snapshot for one measurement point.
 #[derive(Debug, Clone, Default)]
 pub struct LevelSnapshot {
-    /// Per-channel peak values (linear).
     pub peak: Vec<f32>,
-    /// Per-channel RMS values (linear).
     pub rms: Vec<f32>,
 }
 
-/// Input and output levels for a single effect.
 #[derive(Debug, Clone, Default)]
 pub struct EffectLevelSnapshot {
     pub input: LevelSnapshot,
@@ -80,44 +166,111 @@ pub struct EffectLevelSnapshot {
 }
 ```
 
-**Exposing to consumers:** Store snapshots in a pre-allocated `Vec<EffectLevelSnapshot>` inside `MixLoopState`. After each metering pass, publish the snapshot to a shared structure readable by the player API thread — either via an `Arc<Mutex<_>>` (matching the existing effects pattern) or, preferably, a lock-free single-producer/single-consumer mechanism like a `std::sync::atomic`-backed swap buffer to avoid any lock contention on the mix thread.
+**Publishing to the control thread**
 
-A simple approach that avoids new dependencies: use a double-buffer behind an `AtomicBool` flag. The mix thread writes to the back buffer and flips the flag; the reader thread reads from the front buffer. This is the same pattern used by many real-time audio metering systems.
+The current architecture matters here:
 
-**Player API surface:**
+- the mix thread processes `local_effects`
+- it does **not** hold the shared `effects` mutex during DSP anymore
+
+So the metering data must **not** piggyback on the shared effects mutex.
+
+Recommended initial transport:
+
+- keep a dedicated shared metering store on the `Player`
+- the mix thread publishes only on decimated metering ticks
+- publication must be **non-blocking**
+
+Practical v1 recommendation:
+
+- store the latest snapshot behind a dedicated `Arc<Mutex<_>>`
+- on the mix thread, publish with `try_lock()`
+- if the lock is contended, drop that publication and keep running
+
+That preserves the “no blocking in the hot path” rule while staying simple and dependency-free. A lock-free double-buffer is also acceptable, but it is not required for v1.
+
+**Player API**
 
 ```rust
 impl Player {
-    /// Returns the most recent per-effect level snapshots, or an empty vec
-    /// if `effect-meter` is disabled or no data is available yet.
-    pub fn effect_levels(&self) -> Vec<EffectLevelSnapshot> { ... }
+    /// Returns `None` when the feature is not compiled in or when runtime
+    /// level metering is disabled.
+    pub fn effect_levels(&self) -> Option<Vec<EffectLevelSnapshot>> { ... }
 }
 ```
 
-**Estimated cost:** ~1 `abs()` + 1 multiply + 2 comparisons per sample per metered boundary, only at display refresh rate. Negligible.
+Using `Option` is clearer than returning an empty `Vec`, which would otherwise conflate:
+
+- no effects in the chain
+- runtime metering disabled
+- feature not compiled
+
+**Inline-transition semantics**
+
+During `set_effects_inline` the engine may run **two chains in parallel** and crossfade between them. Per-effect metering is ambiguous during that window.
+
+Define v1 behavior explicitly:
+
+- keep the last stable per-effect snapshot during a full-chain inline transition
+- resume publishing once the new local chain becomes active
+
+Do not try to meter both chains in v1.
+
+**Estimated steady-state cost**
+
+- zero when the feature is not compiled
+- effectively zero beyond a gate check when compiled but runtime-disabled
+- one extra measurement pass at the configured refresh cadence when runtime-enabled
 
 ---
 
-### Tier 2 — Analytical filter response curves (cheap, no FFT)
+### Tier 2: Analytical frequency-response curves
 
-**What it provides:** The magnitude response of biquad-based effects (multiband EQ, lowpass, highpass) as a set of (frequency, gain_dB) points. This is the classic EQ curve overlay in DAW plugin UIs.
+**What it provides**
 
-**Where it hooks in:** Each biquad-based effect exposes its current filter coefficients. A new method on the relevant effects computes the analytical frequency response.
+Static filter-response curves for:
 
-**How it works:**
+- `LowPassFilterEffect`
+- `HighPassFilterEffect`
+- `MultibandEqEffect`
 
-Biquad transfer function magnitude at frequency `f` given coefficients `(b0, b1, b2, a0, a1, a2)`:
+This is the classic EQ-curve overlay shown in editors.
 
+**Important correction**
+
+This should be computed from **effect settings**, not from the mix thread's mutable DSP state.
+
+Reasons:
+
+- the response is analytical, not sample-history-dependent
+- the control-path copy of the effect chain already carries the latest settings
+- biquad coefficient smoothing in the mix thread should not leak into UI queries
+- computing from settings naturally shows the **target** curve during parameter ramps
+
+Because of that, this does **not** need to be a `DspEffect` runtime hook. A plain `&self` path on `AudioEffect` or effect-specific helper methods is the better fit.
+
+**How it works**
+
+For a normalized biquad with coefficients `(b0, b1, b2, a1, a2)`:
+
+```text
+H(e^jw) = (b0 + b1 e^-jw + b2 e^-j2w) / (1 + a1 e^-jw + a2 e^-j2w)
 ```
-H(e^{jω}) where ω = 2π * f / sample_rate
 
-|H(ω)|² = (b0² + b1² + b2² + 2(b0*b1 + b1*b2)*cos(ω) + 2*b0*b2*cos(2ω))
-         / (a0² + a1² + a2² + 2(a0*a1 + a1*a2)*cos(ω) + 2*a0*a2*cos(2ω))
-```
+Evaluate `|H(e^jw)|` at `N` log-spaced points, for example 128 points from 20 Hz to Nyquist.
 
-Evaluate at N log-spaced frequency points (e.g., 128 points from 20 Hz to 20 kHz). For the multiband EQ, multiply the per-band responses to get the composite curve. This is pure arithmetic — no signal processing, no FFT.
+For multiband EQ:
 
-**Data structure:**
+- compute one curve per configured section
+- multiply linear magnitudes to get the composite response
+
+“Per-band” here should mean **per configured filter section**:
+
+- optional low edge
+- each parametric point
+- optional high edge
+
+**Data structures**
 
 ```rust
 /// A single point on a frequency response curve.
@@ -138,84 +291,84 @@ pub struct FilterResponseCurve {
 }
 ```
 
-**Where to add the method:**
-
-Add a trait method with a default no-op to `DspEffect`:
-
-```rust
-/// Return the analytical frequency response curve, if applicable.
-///
-/// Only meaningful for biquad-based filter effects. The default
-/// returns `None`.
-fn frequency_response(&self, _sample_rate: u32, _num_points: usize) -> Option<FilterResponseCurve> {
-    None
-}
-```
-
-Override in `MultibandEqEffect`, `LowPassFilterEffect`, and `HighPassFilterEffect`. Dispatch through `AudioEffect` to the player API.
-
-**When to compute:** Only on demand (when the player API method is called), not on every process cycle. The coefficients change rarely (only when settings change), so the curve can be cached and invalidated on settings mutation. This makes the cost essentially zero during steady-state playback.
-
-**Player API surface:**
+**Player API**
 
 ```rust
 impl Player {
-    /// Returns analytical frequency response curves for each filter-type
-    /// effect in the chain. Non-filter effects return `None` in their slot.
-    pub fn effect_frequency_responses(&self) -> Vec<Option<FilterResponseCurve>> { ... }
+    /// Non-filter effects return `None` in their slot.
+    pub fn effect_frequency_responses(
+        &self,
+        num_points: usize,
+    ) -> Vec<Option<FilterResponseCurve>> { ... }
 }
 ```
 
-**Estimated cost:** ~128 * num_bands * 10 floating-point ops, only when the UI requests it and settings have changed. Negligible.
+**When to compute**
+
+On demand only. No mix-thread work, no background cache required for v1.
+
+The calculation is cheap enough that caching is optional. If later profiling shows repeated UI polling overhead, cache by settings mutation generation on the control-path copy of the chain.
 
 ---
 
-### Tier 3 — Spectral analysis via FFT (moderate cost, runtime-gated)
+### Tier 3: FFT-based spectral analysis
 
-**What it provides:** Per-band spectral energy levels for the input and output of frequency-shaping effects, enabling a GUI to show "how much energy is in each EQ band" as animated bars.
+**What it provides**
 
-**Why FFT is needed:** Tier 1 gives broadband levels; Tier 2 gives the filter's theoretical shape. But to show *actual signal energy per frequency band*, you need to decompose the signal into the frequency domain.
+Animated, runtime-optional spectral energy views for frequency-shaping effects.
 
-**Runtime gating:** Even within the `effect-meter` feature flag, spectral analysis should be toggled via a runtime setting (default off). This lets a GUI app enable it only when the EQ editor panel is open:
+This is the expensive tier and should only exist when:
 
-```rust
-impl Player {
-    /// Enable or disable per-band spectral analysis for filter effects.
-    /// When disabled, `effect_band_levels()` returns empty results.
-    pub fn set_spectral_analysis_enabled(&self, enabled: bool) { ... }
-}
-```
+- `effect-meter-spectral` is compiled
+- runtime spectral analysis is explicitly enabled
 
-**How it works:**
+**What it is not**
 
-1. **Accumulate a window of input samples** before each filter-type effect in the chain. Use a ring buffer per metering point (pre-allocated at engine startup), sized to the FFT window (e.g., 2048 samples per channel).
+It is not the same thing as Tier 2.
 
-2. **At display refresh rate** (not every chunk), run a windowed FFT:
-   - Apply a Hann window to the accumulated samples
-   - Compute the real FFT using the existing `realfft` crate (already a dependency for convolution reverb)
-   - Partition FFT bins into the configured EQ band ranges
-   - Sum magnitudes per band to produce per-band energy levels
+- Tier 2 shows the filter's **theoretical response**
+- Tier 3 shows the **actual signal energy** in the audio passing through that effect
 
-3. **Repeat for the output** of the same effect to show the "after" state.
+**How it works**
 
-4. **Publish** per-band input/output levels via the same double-buffer mechanism as Tier 1.
+1. Identify the effect slots that need spectral analysis:
+   - low-pass
+   - high-pass
+   - multiband EQ
+2. While runtime spectral analysis is enabled:
+   - accumulate input and output samples for those slots into pre-allocated analysis buffers
+   - only do this accumulation when the runtime gate is on
+3. At the configured spectral refresh cadence:
+   - apply a Hann window
+   - run a real FFT using `realfft`
+   - reduce bins into UI-facing analysis buckets
+   - publish the latest per-effect snapshots
 
-**FFT reuse:** The `realfft` crate is already available behind the `real-fft` feature (on by default). The `effect-meter` feature should depend on `real-fft` for this tier, or the spectral tier could be a sub-feature (`effect-meter-spectral = ["effect-meter", "real-fft"]`). Recommended: keep it simple — `effect-meter` implies `real-fft` availability since it's already the default.
+**Channel policy**
 
-**Band partitioning for multiband EQ:**
+Tier 3 should be explicit about channel handling. Recommended v1 behavior:
 
-Map FFT bins to EQ bands using the configured `EqPointSettings` frequencies as crossover points. For `N` EQ points at frequencies `f1, f2, ..., fN`, create `N+1` bands:
+- accumulate **channel-aggregated power** for the analysis view
+- expose one spectral snapshot per effect, not one per channel
 
-```
-Band 0: [0, f1)
-Band 1: [f1, f2)
-...
-Band N: [fN, Nyquist]
-```
+This keeps the output compact and matches typical EQ-editor UI expectations.
 
-If edge filters are configured (lowpass/highpass), use their cutoff frequencies as additional band boundaries.
+**Bucket semantics**
 
-**Data structure:**
+The original “one band per configured EQ point” wording is too loose. For a parametric EQ, bands overlap and Q matters, so there is no single perfect non-overlapping partition.
+
+Define v1 as a UI-friendly heuristic:
+
+- for LPF/HPF, split the spectrum into two buckets at the cutoff frequency
+- for multiband EQ, derive bucket boundaries from the sorted control frequencies:
+  - midpoint between adjacent point frequencies
+  - optional edge-filter cutoffs included as outer boundaries
+
+This produces stable editor bars, but it should be documented as **analysis buckets aligned to the visible controls**, not exact isolated per-filter contributions.
+
+If exact per-section contribution is needed later, that is a separate, more expensive feature.
+
+**Data structures**
 
 ```rust
 /// Per-band spectral energy for a single measurement direction.
@@ -235,159 +388,203 @@ pub struct EffectBandSnapshot {
 }
 ```
 
-**Player API surface:**
+**Player API**
 
 ```rust
 impl Player {
-    /// Returns per-band spectral levels for each filter-type effect.
-    /// Returns empty results for non-filter effects or when spectral
-    /// analysis is disabled.
-    pub fn effect_band_levels(&self) -> Vec<Option<EffectBandSnapshot>> { ... }
+    /// Returns `None` when spectral support is not compiled in or when it is
+    /// runtime-disabled.
+    pub fn effect_band_levels(&self) -> Option<Vec<Option<EffectBandSnapshot>>> { ... }
 }
 ```
 
-**Estimated cost:**
+**Runtime gating requirements**
 
-At 48 kHz stereo with a 2048-point FFT at 30 Hz refresh:
-- FFT: ~2048 * log2(2048) ≈ 22,528 multiplies per transform, twice per metering point (input + output), per filter effect
-- At 30 Hz refresh with 2 filter effects: ~2.7M multiplies/second
-- Modern CPUs handle this comfortably, but it's non-trivial — hence the runtime gate
+When runtime spectral analysis is off:
 
-For comparison, the convolution reverb already runs continuous FFTs on every chunk, so this is far less than what the system already supports under the `real-fft` feature.
+- do not maintain per-effect ring buffers
+- do not run FFTs
+- do not compute band reductions
+- do not publish spectral snapshots
+
+Only a cheap gate check should remain.
+
+To keep the disabled path cold, lazily initialize FFT plans and spectral buffers on first enable or first post-enable chain rebuild.
+
+**Inline-transition semantics**
+
+Same as Tier 1:
+
+- freeze the last stable spectral snapshot during a full-chain inline transition
+- rebuild analyzers when the new chain becomes active
+
+**Estimated cost**
+
+Reasonable for modern CPUs when enabled, but not negligible. That is why this tier needs both compile-time and runtime gating.
 
 ---
 
-## Implementation plan
+## Implementation Plan
 
 ### Phase 1: Infrastructure and Tier 1
 
-**Files to create:**
+**Files to create**
 
-| File | Purpose |
-|---|---|
-| `proteus-lib/src/dsp/meter/mod.rs` | `LevelSnapshot`, `EffectLevelSnapshot`, measurement helpers |
-| `proteus-lib/src/dsp/meter/level.rs` | `measure_peak_rms(samples, channels) -> LevelSnapshot` |
+| File                                       | Purpose                                                         |
+| ------------------------------------------ | --------------------------------------------------------------- |
+| `proteus-lib/src/dsp/meter/mod.rs`         | Stable public metering types re-exported regardless of features |
+| `proteus-lib/src/dsp/meter/level.rs`       | Peak/RMS measurement helpers                                    |
+| `proteus-lib/src/playback/effect_meter.rs` | Enabled/disabled runtime store and publication helpers          |
 
-**Files to modify:**
+**Files to modify**
 
-| File | Change |
-|---|---|
-| `proteus-lib/src/dsp/mod.rs` | Add `pub mod meter;` (gated on `effect-meter`) |
-| `proteus-lib/src/playback/engine/mix/effects.rs` | Add metering capture around each effect in `run_effect_chain` |
-| `proteus-lib/src/playback/engine/mix/runner/state.rs` | Add `Vec<EffectLevelSnapshot>` and frame counter to `MixLoopState` |
-| `proteus-lib/src/playback/player/mod.rs` | Add `effect_levels()` public accessor |
-| `proteus-lib/src/playback/player/effects.rs` | Wire metering state through player shared state |
-| `proteus-lib/Cargo.toml` | Add `effect-meter = []` feature |
-| `proteus-cli/Cargo.toml` | Add `effect-meter = ["proteus-lib/effect-meter"]` feature |
+| File                                                            | Change                                                         |
+| --------------------------------------------------------------- | -------------------------------------------------------------- |
+| `proteus-lib/src/dsp/mod.rs`                                    | Export `meter` unconditionally                                 |
+| `proteus-lib/src/playback/mod.rs`                               | Add internal `effect_meter` module                             |
+| `proteus-lib/src/playback/player/mod.rs`                        | Add shared effect-meter state to `Player`                      |
+| `proteus-lib/src/playback/player/builder.rs`                    | Initialize effect-meter state                                  |
+| `proteus-lib/src/playback/player/locks.rs`                      | Add recoverable lock accessor if a mutex-backed store is used  |
+| `proteus-lib/src/playback/player/lifecycle.rs`                  | Reset effect-meter state on teardown                           |
+| `proteus-lib/src/playback/player/effects.rs`                    | Add runtime gating setters and `effect_levels()` accessor      |
+| `proteus-lib/src/playback/engine/mod.rs`                        | Thread-plumb shared effect-meter state into the mix engine     |
+| `proteus-lib/src/playback/engine/mix/types.rs`                  | Extend `MixThreadArgs` with shared effect-meter handles/config |
+| `proteus-lib/src/playback/engine/mix/runner/state.rs`           | Add local metering scratch/state and refresh accounting        |
+| `proteus-lib/src/playback/engine/mix/runner/effects_runtime.rs` | Drive metering publication around effect processing            |
+| `proteus-lib/src/playback/engine/mix/effects.rs`                | Accept a metering hook/context around each effect boundary     |
+| `proteus-lib/Cargo.toml`                                        | Add `effect-meter` feature                                     |
+| `proteus-cli/Cargo.toml`                                        | Forward the feature without enabling it by default             |
 
-**Key decision — transport mechanism for metering data:**
+### Phase 2: Tier 2 analytical curves
 
-The mix thread must not block on publishing metering data. Two options:
+**Files to create**
 
-1. **Double-buffer with `AtomicBool`** (no new dependencies): Pre-allocate two `Vec<EffectLevelSnapshot>`s. Mix thread writes to back buffer, flips atomic flag. Reader reads front buffer. Simple, zero-allocation steady state, no lock.
+| File                                              | Purpose                                         |
+| ------------------------------------------------- | ----------------------------------------------- |
+| `proteus-lib/src/dsp/meter/frequency_response.rs` | Pure helpers for analytical response generation |
 
-2. **Reuse existing effects `Mutex` pattern**: Wrap metering data in the same `Arc<Mutex<_>>` that already guards the effects chain. The lock is already held during the chain run, so writing metering data adds no new contention. Reader contention is bounded by display refresh rate.
+**Files to modify**
 
-Option 2 is simpler and the contention is acceptable for metering (dropped frames are fine — the UI just shows the last available data). **Recommend option 2 for initial implementation**, with a note that a lock-free upgrade is possible if profiling reveals contention.
+| File                                                 | Change                                                      |
+| ---------------------------------------------------- | ----------------------------------------------------------- |
+| `proteus-lib/src/dsp/effects/core/biquad.rs`         | Add pure magnitude-response helper for LPF/HPF coefficients |
+| `proteus-lib/src/dsp/effects/multiband_eq/biquad.rs` | Add pure response helpers for peaking/shelf sections        |
+| `proteus-lib/src/dsp/effects/mod.rs`                 | Add immutable `AudioEffect` dispatch for response queries   |
+| `proteus-lib/src/dsp/effects/low_pass.rs`            | Expose analytical curve computation from settings           |
+| `proteus-lib/src/dsp/effects/high_pass.rs`           | Expose analytical curve computation from settings           |
+| `proteus-lib/src/dsp/effects/multiband_eq/mod.rs`    | Expose per-section and composite response computation       |
+| `proteus-lib/src/playback/player/effects.rs`         | Add `effect_frequency_responses()`                          |
 
-### Phase 2: Tier 2 — Analytical response curves
+### Phase 3: Tier 3 spectral analysis
 
-**Files to create:**
+**Files to create**
 
-| File | Purpose |
-|---|---|
-| `proteus-lib/src/dsp/meter/frequency_response.rs` | `FilterResponseCurve`, analytical biquad magnitude computation |
+| File                                    | Purpose                                                          |
+| --------------------------------------- | ---------------------------------------------------------------- |
+| `proteus-lib/src/dsp/meter/spectral.rs` | FFT planner wrapper, windowing, bucket reduction, snapshot types |
 
-**Files to modify:**
+**Files to modify**
 
-| File | Change |
-|---|---|
-| `proteus-lib/src/dsp/effects/core/mod.rs` | Add `frequency_response()` default method to `DspEffect` |
-| `proteus-lib/src/dsp/effects/core/biquad.rs` | Add `magnitude_at(freq, sample_rate) -> f32` to `BiquadState` |
-| `proteus-lib/src/dsp/effects/multiband_eq/mod.rs` | Override `frequency_response()` — compute per-band and composite |
-| `proteus-lib/src/dsp/effects/multiband_eq/biquad.rs` | Expose coefficient access for analytical evaluation |
-| `proteus-lib/src/dsp/effects/low_pass.rs` | Override `frequency_response()` |
-| `proteus-lib/src/dsp/effects/high_pass.rs` | Override `frequency_response()` |
-| `proteus-lib/src/dsp/effects/mod.rs` | Dispatch `frequency_response()` through `AudioEffect` enum |
-| `proteus-lib/src/playback/player/effects.rs` | Add `effect_frequency_responses()` accessor |
-
-### Phase 3: Tier 3 — Spectral band analysis
-
-**Files to create:**
-
-| File | Purpose |
-|---|---|
-| `proteus-lib/src/dsp/meter/spectral.rs` | FFT-based spectral analysis, band partitioning, `EffectBandSnapshot` |
-| `proteus-lib/src/dsp/meter/window.rs` | Hann window generation and sample accumulation ring buffer |
-
-**Files to modify:**
-
-| File | Change |
-|---|---|
-| `proteus-lib/src/playback/engine/mix/effects.rs` | Add sample accumulation for spectral points, trigger FFT at refresh rate |
-| `proteus-lib/src/playback/engine/mix/runner/state.rs` | Add spectral ring buffers and FFT planner to `MixLoopState` |
-| `proteus-lib/src/playback/player/effects.rs` | Add `effect_band_levels()` and `set_spectral_analysis_enabled()` |
-| `proteus-lib/Cargo.toml` | `effect-meter` should include `realfft` dependency (or make spectral a sub-feature) |
+| File                                                            | Change                                                          |
+| --------------------------------------------------------------- | --------------------------------------------------------------- |
+| `proteus-lib/src/playback/effect_meter.rs`                      | Add runtime spectral configuration and shared snapshot storage  |
+| `proteus-lib/src/playback/player/effects.rs`                    | Add spectral enable/refresh setters and `effect_band_levels()`  |
+| `proteus-lib/src/playback/engine/mix/runner/state.rs`           | Add per-effect spectral accumulators and lazy FFT state         |
+| `proteus-lib/src/playback/engine/mix/runner/effects_runtime.rs` | Feed accumulation buffers and publish decimated spectral frames |
+| `proteus-lib/Cargo.toml`                                        | Add `effect-meter-spectral = ["effect-meter", "real-fft"]`      |
+| `proteus-cli/Cargo.toml`                                        | Forward `effect-meter-spectral` without enabling it by default  |
 
 ---
 
-## Integration with existing systems
+## Integration Notes
 
-### Interaction with SI-13 (effect chain allocations)
+### ST-13 hot-path allocations
 
-The `run_effect_chain` ping-pong scratch buffer architecture is ideal for metering — `scratch_a` holds the input before each effect, `scratch_b` receives the output. Metering reads these buffers without modifying them. No new allocations needed in steady state (pre-allocate level accumulators at engine startup).
+This feature should preserve the existing scratch-buffer design introduced by [`ST-13`](./ST-13-effect-chain-hot-path-allocations.md).
 
-### Interaction with SI-24 (effects mutex handoff)
+Implications:
 
-Metering data publication happens while the effects mutex is already held (during `run_effect_chain`). If SI-24's recommendations are implemented (snapshot-based handoff), metering data should travel with the snapshot rather than requiring its own synchronization.
+- read from `scratch_a` / `scratch_b`
+- pre-allocate level/spectral scratch storage
+- no per-tick heap allocation in the mix loop
 
-### Interaction with FR-02 (inline parameter smoothing)
+### ST-24 effects mutex handoff
 
-FR-02 introduces per-parameter smoothing (gain ramps, biquad coefficient interpolation) inside individual effects. Two interactions to be aware of:
+[`ST-24`](./ST-24-effects-mutex-handoff.md) is already resolved. The mix thread owns `local_effects` and does not process under the shared effects mutex anymore.
 
-**Tier 2 analytical curves and mid-ramp coefficients.** When FR-02's biquad coefficient smoothing is active, the filter's *current* coefficients are mid-ramp values that don't represent a coherent filter shape. `frequency_response()` must evaluate against the *target* coefficients, not the in-progress ramp values, so the UI curve shows the destination shape rather than wobbling during a 5 ms transition. If FR-02 uses `SmoothedBiquadState`, expose a `target_coefficients()` accessor and use that in `frequency_response()`.
+Implication:
 
-**Enable/disable crossfade and metering hook point.** FR-02 Phase 3 proposes an enable/disable crossfade at the `AudioEffect` dispatch level (inside `process_into`). This is the correct boundary for FR-01 compatibility: Tier 1 metering wraps `process_into` from outside in `run_effect_chain`, so it naturally captures the post-fade output without additional coordination. If the enable/disable fade is instead lifted to `run_effect_chain` level, it must be placed *inside* the metering measurement brackets so meters reflect what the listener actually hears.
+- do **not** publish metering data through the shared effects mutex
 
-### Effect chain changes at runtime
+### FR-02 parameter smoothing
 
-When effects are added/removed via `set_effects()` or `set_effects_inline()`, the metering `Vec` must be resized to match. Handle this in the same code path that resizes scratch buffers.
+[`FR-02`](./FR-02-inline-effect-parameter-smoothing.md) already introduced coefficient and parameter smoothing.
+
+Implications:
+
+- Tier 1 measures the actual post-fade/post-smoothing audio because it wraps `run_effect_chain()`
+- Tier 2 should read from effect **settings**, so the UI curve reflects the target control state during ramps
+- Tier 3 measures the actual signal energy after smoothing because it observes the processed audio path
+
+### Effect-chain changes at runtime
+
+When the effect chain changes structurally:
+
+- resize or rebuild all per-effect metering state
+- zero newly created snapshots before publishing
+- rebuild spectral analyzers only for relevant effect slots
+
+During a full-chain inline transition:
+
+- freeze the last stable Tier 1 / Tier 3 snapshot
+- resume publication after the new chain becomes active
 
 ---
 
-## Optimization notes
+## Optimization Notes
 
-- **Pre-allocate everything** at engine startup or when the effect chain changes. No allocations in the metering hot path.
-- **Decimation is critical.** At 48 kHz stereo with 1024-sample chunks, the mix loop runs ~94 times/second. Display refresh is 10–30 Hz. Skip metering on ~70–90% of chunks.
-- **Tier 3 FFT planner reuse.** `realfft::RealFftPlanner` caches plans. Create the planner once in `MixLoopState` and reuse across all metering points.
-- **Avoid per-sample branching in effects.** Metering wraps effects from outside (`run_effect_chain`), not inside each effect's `process_into`. Individual effects remain unchanged and branch-free.
-- **Tier 2 caching.** Analytical curves only change when filter settings change. Cache the result and invalidate on settings mutation (add a generation counter to settings structs, or simply recompute when the player API is called — the cost is so low that caching may be unnecessary).
+- **No hidden always-on work.** If a runtime gate is off, that tier should be cold.
+- **Refresh by sample frames, not chunk count.** Chunk sizes already vary.
+- **Do not block the mix thread.** Use `try_lock()` or an atomic handoff; never wait for the reader.
+- **Pre-allocate hot-path buffers.** Resize on chain or channel-count changes, not per publication.
+- **Tier 2 should stay pure.** Keep it out of the mix thread and compute from settings on demand.
+- **Spectral state can be lazy.** Create FFT plans and analysis buffers when the tier is first enabled.
 
 ---
 
-## Acceptance criteria
+## Acceptance Criteria
 
 ### Tier 1
-- [ ] `effect-meter` feature flag compiles to zero-cost no-ops when disabled
-- [ ] Per-effect input/output peak and RMS levels are available through the `Player` API
-- [ ] Metering decimation is configurable and defaults to ~30 Hz
-- [ ] No new heap allocations in the steady-state mix loop
-- [ ] Existing tests pass; metering does not alter audio output
-- [ ] Unit tests for `measure_peak_rms` with known signals
+
+- [ ] `effect-meter` is off by default
+- [ ] public metering types and `Player` methods remain available when the feature is off
+- [ ] `effect_levels()` returns `None` when the feature is not compiled or runtime metering is disabled
+- [ ] runtime level metering is disabled by default
+- [ ] enabling runtime level metering adds no steady-state allocations and no blocking on the mix thread
+- [ ] refresh cadence is based on sample frames, not chunk count
+- [ ] enable-fade output metering reflects the crossfaded signal actually heard
+- [ ] full-chain inline transitions freeze the last stable snapshot instead of publishing ambiguous data
+- [ ] unit tests verify `measure_peak_rms()` with known signals
+- [ ] existing playback tests still pass and metering does not alter audio output
 
 ### Tier 2
-- [ ] `frequency_response()` returns analytical curves for multiband EQ, lowpass, and highpass
-- [ ] Composite and per-band curves are available for multiband EQ
-- [ ] Curves update when settings change
-- [ ] Unit tests verify known biquad responses (e.g., lowpass at cutoff = −3 dB)
+
+- [ ] analytical curves are available for LPF, HPF, and multiband EQ
+- [ ] multiband EQ exposes both composite and per-section curves
+- [ ] response computation reads from effect settings, not mutable DSP state
+- [ ] on-demand queries add no mix-thread work
+- [ ] unit tests verify known response points (for example LPF at cutoff is near -3 dB for Butterworth-like settings)
 
 ### Tier 3
-- [ ] Spectral analysis is disabled by default and togglable at runtime
-- [ ] Per-band input/output energy levels are available through the `Player` API
-- [ ] FFT uses the existing `realfft` crate; planner is shared and reused
-- [ ] Band boundaries match the configured EQ point frequencies
-- [ ] Spectral analysis adds no overhead when disabled at runtime
-- [ ] Unit tests verify band energy with known single-frequency test signals
+
+- [ ] `effect-meter-spectral` is off by default
+- [ ] runtime spectral analysis is disabled by default
+- [ ] when runtime spectral analysis is off, no spectral accumulation or FFT work is performed
+- [ ] low-pass and high-pass spectral buckets split at cutoff frequency
+- [ ] multiband EQ spectral buckets are documented as control-aligned analysis buckets, not exact per-filter isolation
+- [ ] full-chain inline transitions freeze the last stable spectral snapshot
+- [ ] FFT plans are reused across refreshes
+- [ ] unit tests verify bucket energy with known single-tone inputs
 
 ---
 
