@@ -14,6 +14,37 @@ use proteus_lib::dsp::effects::{
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone)]
+pub struct ProjectFilesError(String);
+
+impl ProjectFilesError {
+    fn new(message: impl Into<String>) -> Self {
+        Self(message.into())
+    }
+}
+
+impl std::fmt::Display for ProjectFilesError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for ProjectFilesError {}
+
+impl From<String> for ProjectFilesError {
+    fn from(value: String) -> Self {
+        Self(value)
+    }
+}
+
+impl From<io::Error> for ProjectFilesError {
+    fn from(value: io::Error) -> Self {
+        Self::new(value.to_string())
+    }
+}
+
+type ProjectFilesResult<T> = std::result::Result<T, ProjectFilesError>;
+
+#[derive(Debug, Clone)]
 pub struct DirectoryPlaybackConfig {
     pub tracks: Vec<PathsTrack>,
     pub effects_json_path: Option<PathBuf>,
@@ -47,9 +78,7 @@ fn default_selections_count() -> u32 {
     1
 }
 
-pub fn load_directory_playback_config(
-    root: &Path,
-) -> std::result::Result<DirectoryPlaybackConfig, String> {
+pub fn load_directory_playback_config(root: &Path) -> ProjectFilesResult<DirectoryPlaybackConfig> {
     let shuffle_path = root.join("shuffle_schedule.json");
     let effects_path = root.join("effects_chain.json");
 
@@ -60,10 +89,10 @@ pub fn load_directory_playback_config(
     };
 
     if tracks.is_empty() {
-        return Err(format!(
+        return Err(ProjectFilesError::new(format!(
             "No audio files found under directory: {}",
             root.display()
-        ));
+        )));
     }
 
     Ok(DirectoryPlaybackConfig {
@@ -72,23 +101,27 @@ pub fn load_directory_playback_config(
     })
 }
 
-pub fn load_effects_json(path: &str) -> std::result::Result<Vec<AudioEffect>, String> {
+pub fn load_effects_json(path: &str) -> ProjectFilesResult<Vec<AudioEffect>> {
     let raw =
         fs::read_to_string(path).map_err(|err| format!("failed to read {}: {}", path, err))?;
-    serde_json::from_str(&raw).map_err(|err| format!("failed to parse json: {}", err))
+    serde_json::from_str(&raw)
+        .map_err(|err| ProjectFilesError::new(format!("failed to parse json: {}", err)))
 }
 
-pub fn write_init_files(root: &Path) -> std::result::Result<(), String> {
+pub fn write_init_files(root: &Path) -> ProjectFilesResult<()> {
     if !root.is_dir() {
-        return Err(format!("Not a directory: {}", root.display()));
+        return Err(ProjectFilesError::new(format!(
+            "Not a directory: {}",
+            root.display()
+        )));
     }
 
     let shuffle_tracks = discover_paths_tracks_json_from_directory(root)?;
     if shuffle_tracks.is_empty() {
-        return Err(format!(
+        return Err(ProjectFilesError::new(format!(
             "No audio files found under directory: {}",
             root.display()
-        ));
+        )));
     }
 
     let shuffle_path = root.join("shuffle_schedule.json");
@@ -137,8 +170,6 @@ pub fn default_effects_chain_disabled() -> Vec<AudioEffect> {
 fn disable_effect(mut effect: AudioEffect) -> AudioEffect {
     match &mut effect {
         AudioEffect::DelayReverb(e) => e.enabled = false,
-        #[allow(deprecated)]
-        AudioEffect::BasicReverb(e) => e.enabled = false,
         AudioEffect::DiffusionReverb(e) => e.enabled = false,
         AudioEffect::ConvolutionReverb(e) => e.enabled = false,
         AudioEffect::LowPassFilter(e) => e.enabled = false,
@@ -153,10 +184,7 @@ fn disable_effect(mut effect: AudioEffect) -> AudioEffect {
     effect
 }
 
-fn load_paths_tracks_json(
-    root: &Path,
-    path: &Path,
-) -> std::result::Result<Vec<PathsTrack>, String> {
+fn load_paths_tracks_json(root: &Path, path: &Path) -> ProjectFilesResult<Vec<PathsTrack>> {
     let raw = fs::read_to_string(path)
         .map_err(|err| format!("failed to read {}: {}", path.display(), err))?;
     let parsed: ShuffleScheduleFile = serde_json::from_str(&raw)
@@ -177,10 +205,10 @@ fn load_paths_tracks_json(
                 root.join(candidate)
             };
             if !resolved_path.is_file() {
-                return Err(format!(
+                return Err(ProjectFilesError::new(format!(
                     "shuffle_schedule.json references missing file: {}",
                     resolved_path.display()
-                ));
+                )));
             }
             resolved.push(resolved_path.to_string_lossy().to_string());
         }
@@ -198,7 +226,7 @@ fn load_paths_tracks_json(
 
 fn discover_paths_tracks_json_from_directory(
     root: &Path,
-) -> std::result::Result<Vec<JsonPathsTrack>, String> {
+) -> ProjectFilesResult<Vec<JsonPathsTrack>> {
     let grouped = discover_audio_groups(root)?;
     let mut tracks = Vec::new();
     for (_group, files) in grouped {
@@ -221,9 +249,7 @@ fn discover_paths_tracks_json_from_directory(
     Ok(tracks)
 }
 
-fn discover_paths_tracks_from_directory(
-    root: &Path,
-) -> std::result::Result<Vec<PathsTrack>, String> {
+fn discover_paths_tracks_from_directory(root: &Path) -> ProjectFilesResult<Vec<PathsTrack>> {
     let grouped = discover_audio_groups(root)?;
     let mut tracks = Vec::new();
     for (_group, files) in grouped {
@@ -238,9 +264,7 @@ fn discover_paths_tracks_from_directory(
     Ok(tracks)
 }
 
-fn discover_audio_groups(
-    root: &Path,
-) -> std::result::Result<BTreeMap<String, Vec<PathBuf>>, String> {
+fn discover_audio_groups(root: &Path) -> ProjectFilesResult<BTreeMap<String, Vec<PathBuf>>> {
     let mut grouped: BTreeMap<String, Vec<PathBuf>> = BTreeMap::new();
     collect_audio_files_recursive(root, root, &mut grouped)
         .map_err(|err| format!("failed to scan {}: {}", root.display(), err))?;

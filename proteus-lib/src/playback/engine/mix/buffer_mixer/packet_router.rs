@@ -1,0 +1,404 @@
+//! Packet routing and instance buffer write methods for [`BufferMixer`].
+
+use log::{debug, info, warn};
+
+use crate::dsp::utils::fade_interleaved_per_frame;
+use crate::playback::engine::mix::cover_map::{map_cover, Cover, TransitionDirection};
+
+use super::backpressure::DecodeBackpressure;
+use super::routing_helpers::{packet_overlap_samples, push_owned_slice, push_slice, push_zeros};
+use super::routing_time::{instance_past_window_ts, samples_to_ms};
+use super::{BufferInstance, BufferMixer, RouteDecision, SectionWriteResult, SourceKey};
+
+struct PacketCtx<'a> {
+    samples: &'a [f32],
+    source: &'a SourceKey,
+    packet_ts: f64,
+    frame_count: usize,
+}
+
+struct MixerParams {
+    sample_rate: u32,
+    channels: usize,
+    crossfade_ms: usize,
+}
+
+#[derive(Clone, Copy)]
+struct TransitionCtx {
+    cover_transition: usize,
+    sample_rate: u32,
+    channels: usize,
+}
+
+struct TransitionWindow {
+    direction: TransitionDirection,
+    start_sample: usize,
+    end_sample: usize,
+}
+
+#[derive(Clone, Copy)]
+struct InstanceRouteCtx<'a> {
+    instance_index: usize,
+    decode_backpressure: &'a DecodeBackpressure,
+}
+
+impl BufferMixer {
+    /// Route one decoded packet into schedule-owned instance buffers.
+    pub(crate) fn route_packet(
+        &mut self,
+        samples: &[f32],
+        source: SourceKey,
+        packet_ts: f64,
+    ) -> RouteDecision {
+        if samples.is_empty() {
+            return RouteDecision {
+                ignored: true,
+                ..RouteDecision::default()
+            };
+        }
+
+        let frame_count = samples.len() / self.channels;
+        if frame_count == 0 {
+            return RouteDecision {
+                ignored: true,
+                ..RouteDecision::default()
+            };
+        }
+
+        let mut decision = RouteDecision::default();
+        let params = MixerParams {
+            sample_rate: self.sample_rate,
+            channels: self.channels,
+            crossfade_ms: self.crossfade_ms,
+        };
+        let decode_backpressure = self.decode_backpressure.as_ref();
+        for (instance_index, instance) in self.instances.iter_mut().enumerate() {
+            let packet = PacketCtx {
+                samples,
+                source: &source,
+                packet_ts,
+                frame_count,
+            };
+            let result = route_packet_to_instance(
+                instance,
+                &packet,
+                &params,
+                InstanceRouteCtx {
+                    instance_index,
+                    decode_backpressure,
+                },
+            );
+            if result.wrote_real {
+                decision
+                    .sample_targets_written
+                    .push(instance.meta.instance_id);
+            }
+            if result.wrote_zero {
+                decision
+                    .zero_fill_targets_written
+                    .push(instance.meta.instance_id);
+            }
+        }
+
+        decision.ignored = decision.sample_targets_written.is_empty()
+            && decision.zero_fill_targets_written.is_empty();
+        decision
+    }
+
+    fn route_cover_section(
+        section: Cover,
+        samples: &[f32],
+        packet_ts: f64,
+        ctx: TransitionCtx,
+        decode_backpressure: &DecodeBackpressure,
+        instance_index: usize,
+        instance: &mut BufferInstance,
+    ) -> SectionWriteResult {
+        match section {
+            Cover::Overlap((start_sample, end_sample)) => Self::write_overlap(
+                samples,
+                start_sample,
+                end_sample,
+                decode_backpressure,
+                instance_index,
+                instance,
+            ),
+            Cover::Underlay((start_sample, end_sample)) => Self::write_underlay(
+                start_sample,
+                end_sample,
+                decode_backpressure,
+                instance_index,
+                instance,
+            ),
+            Cover::Transition((direction, (start_sample, end_sample))) => Self::write_transition(
+                samples,
+                packet_ts,
+                ctx,
+                decode_backpressure,
+                TransitionWindow {
+                    direction,
+                    start_sample,
+                    end_sample,
+                },
+                instance_index,
+                instance,
+            ),
+        }
+    }
+
+    fn write_overlap(
+        samples: &[f32],
+        start_sample: usize,
+        end_sample: usize,
+        decode_backpressure: &DecodeBackpressure,
+        instance_index: usize,
+        instance: &mut BufferInstance,
+    ) -> SectionWriteResult {
+        if start_sample >= end_sample || end_sample > samples.len() {
+            return SectionWriteResult::default();
+        }
+
+        let push = push_slice(
+            &mut instance.buffer,
+            instance.buffer_capacity_samples,
+            &samples[start_sample..end_sample],
+            &mut instance.full,
+        );
+        decode_backpressure.on_samples_pushed(
+            instance_index,
+            end_sample - start_sample,
+            push.written_samples,
+            instance.full,
+        );
+        if push.written_samples < (end_sample - start_sample) {
+            warn!(
+                "Partial overlap write for i{}: wrote {} / {} samples",
+                instance.meta.instance_id,
+                push.written_samples,
+                end_sample - start_sample
+            );
+        }
+        instance.produced_samples = instance
+            .produced_samples
+            .saturating_add(push.written_samples as u64);
+        SectionWriteResult {
+            wrote_real: push.wrote_any,
+            wrote_zero: false,
+        }
+    }
+
+    fn write_underlay(
+        start_sample: usize,
+        end_sample: usize,
+        decode_backpressure: &DecodeBackpressure,
+        instance_index: usize,
+        instance: &mut BufferInstance,
+    ) -> SectionWriteResult {
+        let length = end_sample.saturating_sub(start_sample);
+        if length == 0 {
+            return SectionWriteResult::default();
+        }
+
+        let push = push_zeros(
+            &mut instance.buffer,
+            instance.buffer_capacity_samples,
+            length,
+            &mut instance.full,
+        );
+        decode_backpressure.on_samples_pushed(
+            instance_index,
+            length,
+            push.written_samples,
+            instance.full,
+        );
+        if push.written_samples < length {
+            warn!(
+                "Partial underlay write for i{}: wrote {} / {} samples",
+                instance.meta.instance_id, push.written_samples, length
+            );
+        }
+        instance.zero_filled_samples = instance
+            .zero_filled_samples
+            .saturating_add(push.written_samples as u64);
+        SectionWriteResult {
+            wrote_real: false,
+            wrote_zero: push.wrote_any,
+        }
+    }
+
+    fn write_transition(
+        samples: &[f32],
+        packet_ts: f64,
+        ctx: TransitionCtx,
+        decode_backpressure: &DecodeBackpressure,
+        window: TransitionWindow,
+        instance_index: usize,
+        instance: &mut BufferInstance,
+    ) -> SectionWriteResult {
+        let TransitionWindow {
+            direction,
+            start_sample,
+            end_sample,
+        } = window;
+        if start_sample >= end_sample || end_sample > samples.len() {
+            return SectionWriteResult::default();
+        }
+
+        let slice_length = end_sample - start_sample;
+        info!(
+            "Transition starting at: {}",
+            packet_ts
+                + (samples_to_ms(start_sample, ctx.sample_rate, ctx.channels) as f64 / 1000.0)
+        );
+
+        let (ramp_start, ramp_end) = match direction {
+            TransitionDirection::Up => {
+                let starting_val = (ctx.cover_transition as f32 - slice_length as f32)
+                    / ctx.cover_transition as f32;
+                (starting_val, 1.0)
+            }
+            TransitionDirection::Down => {
+                let ending_val = (ctx.cover_transition as f32 - slice_length as f32)
+                    / ctx.cover_transition as f32;
+                (1.0, ending_val)
+            }
+        };
+        info!("ramp: {:?}", (ramp_start, ramp_end));
+
+        let mut slice = samples[start_sample..end_sample].to_vec();
+        fade_interleaved_per_frame(&mut slice, ctx.channels, ramp_start, ramp_end);
+
+        let push = push_owned_slice(
+            &mut instance.buffer,
+            instance.buffer_capacity_samples,
+            slice,
+            &mut instance.full,
+        );
+        decode_backpressure.on_samples_pushed(
+            instance_index,
+            slice_length,
+            push.written_samples,
+            instance.full,
+        );
+        if push.written_samples < slice_length {
+            warn!(
+                "Partial transition write for i{}: wrote {} / {} samples",
+                instance.meta.instance_id, push.written_samples, slice_length
+            );
+        }
+        instance.produced_samples = instance
+            .produced_samples
+            .saturating_add(push.written_samples as u64);
+        SectionWriteResult {
+            wrote_real: push.wrote_any,
+            wrote_zero: false,
+        }
+    }
+
+    /// Mark all instances for `source_key` as finished.
+    pub(crate) fn signal_finish(&mut self, source_key: &SourceKey) {
+        let eof_ms = samples_to_ms(self.consumed_samples, self.sample_rate, self.channels);
+        for (instance_index, instance) in self.instances.iter_mut().enumerate() {
+            if SourceKey::from(&instance.meta.source_key) != *source_key {
+                continue;
+            }
+            if !instance.finished {
+                instance.finished = true;
+                instance.eof_reached_ms = Some(eof_ms);
+                self.decode_backpressure.on_finished(instance_index);
+            }
+        }
+    }
+
+    /// Mark all instances as finished.
+    pub(crate) fn signal_finish_all(&mut self) {
+        let eof_ms = samples_to_ms(self.consumed_samples, self.sample_rate, self.channels);
+        for (instance_index, instance) in self.instances.iter_mut().enumerate() {
+            if !instance.finished {
+                instance.finished = true;
+                instance.eof_reached_ms = Some(eof_ms);
+                self.decode_backpressure.on_finished(instance_index);
+            }
+        }
+    }
+}
+
+fn route_packet_to_instance(
+    instance: &mut BufferInstance,
+    packet: &PacketCtx<'_>,
+    params: &MixerParams,
+    route: InstanceRouteCtx<'_>,
+) -> SectionWriteResult {
+    if instance.finished || SourceKey::from(&instance.meta.source_key) != *packet.source {
+        return SectionWriteResult::default();
+    }
+
+    if finish_instance_if_past_window(
+        route.instance_index,
+        instance,
+        packet.packet_ts,
+        route.decode_backpressure,
+    ) {
+        return SectionWriteResult::default();
+    }
+
+    let overlap = packet_overlap_samples(
+        packet.packet_ts,
+        packet.frame_count,
+        params.sample_rate,
+        params.channels,
+        &instance.meta.active_windows,
+    );
+    let cover_transition = params.crossfade_ms * params.sample_rate as usize / 1000;
+    let cover = map_cover(&overlap, packet.samples.len(), Some(cover_transition));
+
+    debug!(
+        "Instance {} / Track {} / Time {} / Overlap {:?} / Cover {:?}",
+        instance.meta.instance_id,
+        instance.meta.logical_track_index,
+        packet.packet_ts,
+        overlap,
+        cover,
+    );
+
+    let mut write_result = SectionWriteResult::default();
+    let transition = TransitionCtx {
+        cover_transition,
+        sample_rate: params.sample_rate,
+        channels: params.channels,
+    };
+    for section in cover {
+        let result = BufferMixer::route_cover_section(
+            section,
+            packet.samples,
+            packet.packet_ts,
+            transition,
+            route.decode_backpressure,
+            route.instance_index,
+            instance,
+        );
+        write_result.wrote_real |= result.wrote_real;
+        write_result.wrote_zero |= result.wrote_zero;
+    }
+
+    write_result
+}
+
+fn finish_instance_if_past_window(
+    instance_index: usize,
+    instance: &mut BufferInstance,
+    packet_ts: f64,
+    decode_backpressure: &DecodeBackpressure,
+) -> bool {
+    if !instance_past_window_ts(instance, &packet_ts) {
+        return false;
+    }
+
+    debug!(
+        "Instance {} (Track {}) is finished!!",
+        instance.meta.instance_id, instance.meta.logical_track_index
+    );
+    instance.finished = true;
+    decode_backpressure.on_finished(instance_index);
+    true
+}

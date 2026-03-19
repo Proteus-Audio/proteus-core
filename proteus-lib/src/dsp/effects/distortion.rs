@@ -2,8 +2,10 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::level::deserialize_linear_gain;
+use super::core::level::deserialize_linear_gain;
+use super::core::smoother::ParamSmoother;
 use super::EffectContext;
+use crate::dsp::guardrails::sanitize_finite;
 
 const DEFAULT_GAIN: f32 = 1.0;
 const DEFAULT_THRESHOLD: f32 = 1.0;
@@ -12,8 +14,10 @@ const DEFAULT_THRESHOLD: f32 = 1.0;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct DistortionSettings {
+    /// Pre-distortion gain multiplier applied before hard clipping.
     #[serde(deserialize_with = "deserialize_linear_gain")]
     pub gain: f32,
+    /// Clipping threshold; samples with absolute value above this are hard-clipped.
     #[serde(deserialize_with = "deserialize_linear_gain")]
     pub threshold: f32,
 }
@@ -35,12 +39,18 @@ impl Default for DistortionSettings {
 }
 
 /// Configured distortion effect.
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct DistortionEffect {
+    /// Whether the distortion is active; when `false` samples pass through unmodified.
     pub enabled: bool,
+    /// Distortion parameters such as pre-gain and clipping threshold.
     #[serde(flatten)]
     pub settings: DistortionSettings,
+    #[serde(skip)]
+    gain_smoother: Option<ParamSmoother>,
+    #[serde(skip)]
+    threshold_smoother: Option<ParamSmoother>,
 }
 
 impl std::fmt::Debug for DistortionEffect {
@@ -52,61 +62,108 @@ impl std::fmt::Debug for DistortionEffect {
     }
 }
 
-impl Default for DistortionEffect {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            settings: DistortionSettings::default(),
-        }
-    }
-}
-
-impl DistortionEffect {
-    /// Process interleaved samples through the distortion effect.
-    ///
-    /// # Arguments
-    /// - `samples`: Interleaved input samples.
-    /// - `context`: Environment details (unused for this effect).
-    /// - `drain`: Unused for this effect.
-    ///
-    /// # Returns
-    /// Processed interleaved samples.
-    pub fn process(&mut self, samples: &[f32], _context: &EffectContext, _drain: bool) -> Vec<f32> {
+impl super::core::DspEffect for DistortionEffect {
+    fn process(&mut self, samples: &[f32], context: &EffectContext, _drain: bool) -> Vec<f32> {
         if !self.enabled {
             return samples.to_vec();
         }
-
-        let gain = sanitize_gain(self.settings.gain);
-        let threshold = sanitize_threshold(self.settings.threshold);
         if samples.is_empty() {
             return Vec::new();
         }
 
-        let mut out = Vec::with_capacity(samples.len());
-        for &sample in samples {
-            let v = sample * gain;
-            out.push(v.clamp(-threshold, threshold));
-        }
+        self.update_smoothers(context);
+        let gs = self.gain_smoother.as_mut().unwrap();
+        let ts = self.threshold_smoother.as_mut().unwrap();
+        let channels = context.channels().max(1);
 
+        let mut out = Vec::with_capacity(samples.len());
+        if gs.is_settled() && ts.is_settled() {
+            let gain = gs.current();
+            let threshold = ts.current();
+            for &sample in samples {
+                out.push((sample * gain).clamp(-threshold, threshold));
+            }
+        } else {
+            for frame in samples.chunks(channels) {
+                let gain = gs.next();
+                let threshold = ts.next();
+                for &sample in frame {
+                    out.push((sample * gain).clamp(-threshold, threshold));
+                }
+            }
+        }
         out
     }
 
-    /// Reset any internal state (none for distortion).
-    pub fn reset_state(&mut self) {}
+    fn process_into(
+        &mut self,
+        input: &[f32],
+        output: &mut Vec<f32>,
+        context: &EffectContext,
+        _drain: bool,
+    ) {
+        if !self.enabled {
+            output.extend_from_slice(input);
+            return;
+        }
+
+        self.update_smoothers(context);
+        let gs = self.gain_smoother.as_mut().unwrap();
+        let ts = self.threshold_smoother.as_mut().unwrap();
+        let channels = context.channels().max(1);
+
+        if gs.is_settled() && ts.is_settled() {
+            let gain = gs.current();
+            let threshold = ts.current();
+            for &sample in input {
+                output.push((sample * gain).clamp(-threshold, threshold));
+            }
+        } else {
+            for frame in input.chunks(channels) {
+                let gain = gs.next();
+                let threshold = ts.next();
+                for &sample in frame {
+                    output.push((sample * gain).clamp(-threshold, threshold));
+                }
+            }
+        }
+    }
+
+    fn reset_state(&mut self) {
+        self.gain_smoother = None;
+        self.threshold_smoother = None;
+    }
+}
+
+impl DistortionEffect {
+    fn update_smoothers(&mut self, context: &EffectContext) {
+        let target_gain = sanitize_finite(self.settings.gain, DEFAULT_GAIN);
+        let target_threshold = sanitize_threshold(self.settings.threshold);
+        let ramp = context.parameter_ramp_samples();
+
+        let gs = self
+            .gain_smoother
+            .get_or_insert_with(|| ParamSmoother::new(target_gain));
+        if (gs.target() - target_gain).abs() > f32::EPSILON {
+            gs.set_target(target_gain, ramp);
+        }
+
+        let ts = self
+            .threshold_smoother
+            .get_or_insert_with(|| ParamSmoother::new(target_threshold));
+        if (ts.target() - target_threshold).abs() > f32::EPSILON {
+            ts.set_target(target_threshold, ramp);
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
+    use super::super::core::DspEffect;
     use super::*;
 
     fn context() -> EffectContext {
-        EffectContext {
-            sample_rate: 44_100,
-            channels: 1,
-            container_path: None,
-            impulse_response_spec: None,
-            impulse_response_tail_db: -60.0,
-        }
+        EffectContext::new(44_100, 1, None, None, -60.0).unwrap()
     }
 
     #[test]
@@ -141,19 +198,9 @@ mod tests {
     }
 }
 
-fn sanitize_gain(gain: f32) -> f32 {
-    if gain.is_finite() {
-        gain
-    } else {
-        DEFAULT_GAIN
-    }
-}
-
 fn sanitize_threshold(threshold: f32) -> f32 {
-    if !threshold.is_finite() {
-        return DEFAULT_THRESHOLD;
-    }
-    let t = threshold.abs();
+    let value = sanitize_finite(threshold, DEFAULT_THRESHOLD);
+    let t = value.abs();
     if t <= f32::EPSILON {
         DEFAULT_THRESHOLD
     } else {

@@ -20,3 +20,15 @@ pub(super) fn now_ms() -> u64 {
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::now_ms;
+
+    #[test]
+    fn now_ms_is_monotonic_enough_for_runtime_markers() {
+        let first = now_ms();
+        let second = now_ms();
+        assert!(second >= first);
+    }
+}

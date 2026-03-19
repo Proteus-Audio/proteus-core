@@ -7,6 +7,8 @@ mod enabled {
     use rodio::buffer::SamplesBuffer;
     use rodio::Source;
 
+    use crate::dsp::guardrails::{sanitize_channels, sanitize_sample_rate};
+
     #[derive(Debug)]
     struct Frame {
         peak: Vec<f32>,
@@ -29,8 +31,8 @@ mod enabled {
 
     impl OutputMeter {
         pub fn new(channels: usize, sample_rate: u32, refresh_hz: f32) -> Self {
-            let channels = channels.max(1);
-            let sample_rate = sample_rate.max(1);
+            let channels = sanitize_channels(channels);
+            let sample_rate = sanitize_sample_rate(sample_rate);
             let refresh_hz = refresh_hz.max(1.0);
             Self {
                 sample_rate,
@@ -168,30 +170,38 @@ mod enabled {
 mod disabled {
     use rodio::buffer::SamplesBuffer;
 
+    /// No-op output level meter used when the `output-meter` feature is disabled.
     #[derive(Debug)]
     pub struct OutputMeter {
         channels: usize,
     }
 
     impl OutputMeter {
+        /// Create a no-op meter that always returns zero levels for `channels` channels.
         pub fn new(channels: usize, _sample_rate: u32, _refresh_hz: f32) -> Self {
             Self {
                 channels: channels.max(1),
             }
         }
 
+        /// No-op reset; state is never accumulated in this implementation.
         pub fn reset(&mut self) {}
 
+        /// No-op refresh-rate update; has no effect in this implementation.
         pub fn set_refresh_hz(&mut self, _refresh_hz: f32) {}
 
+        /// No-op sample push; samples are not analysed in this implementation.
         pub fn push_samples(&mut self, _buffer: &SamplesBuffer) {}
 
+        /// No-op time advance; the meter does not track elapsed time.
         pub fn advance(&mut self, _elapsed_seconds: f64) {}
 
+        /// Returns zero-filled peak levels for each channel.
         pub fn levels(&self) -> Vec<f32> {
             vec![0.0; self.channels]
         }
 
+        /// Returns zero-filled average levels for each channel.
         pub fn averages(&self) -> Vec<f32> {
             vec![0.0; self.channels]
         }

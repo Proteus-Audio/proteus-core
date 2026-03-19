@@ -5,20 +5,29 @@
 //! - `types`: argument and transition structs.
 //! - `effects`: effect-chain processing helpers.
 //! - `debug`: debug-only naming helpers.
-//! - `runner`: thin public entrypoint wrapper.
-//! - `loop_core`: long-running mix loop implementation.
+//! - `runner`: long-running mix loop and public entrypoint wrapper.
+//! - `track_stage` / `output_stage`: staged helpers used by the runner.
 
 mod buffer_mixer;
+mod cover_map;
 mod debug;
 mod decoder_events;
 mod effects;
 mod output_stage;
 mod runner;
-mod source_spawner;
-mod track_mix;
 mod track_stage;
 mod types;
-mod utils;
 
 pub use runner::spawn_mix_thread;
-pub use types::MixThreadArgs;
+pub use types::{EffectParameter, EffectSettingsCommand, MixThreadArgs};
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mix_module_exports_public_api() {
+        let _ = spawn_mix_thread;
+        let _ = core::mem::size_of::<MixThreadArgs>();
+    }
+}

@@ -57,7 +57,7 @@ pub fn bench_convolver(config: DspBenchConfig) -> DspBenchResult {
     } else {
         0.0
     };
-    let ir_segments = (ir_len + (config.fft_size / 2) - 1) / (config.fft_size / 2);
+    let ir_segments = ir_len.div_ceil(config.fft_size / 2);
 
     DspBenchResult {
         avg_ms,
@@ -80,4 +80,43 @@ pub fn bench_convolver_sweep(
         results.push((fft_size, bench_convolver(config)));
     }
     results
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bench_convolver_returns_consistent_metrics() {
+        let config = DspBenchConfig {
+            sample_rate: 48_000,
+            input_seconds: 0.01,
+            ir_seconds: 0.02,
+            fft_size: 128,
+            iterations: 2,
+        };
+
+        let result = bench_convolver(config);
+        assert!(result.avg_ms >= 0.0);
+        assert!(result.max_ms >= result.min_ms);
+        assert!(result.rt_factor >= 0.0);
+        assert!(result.ir_segments > 0);
+    }
+
+    #[test]
+    fn bench_convolver_sweep_returns_one_result_per_fft_size() {
+        let config = DspBenchConfig {
+            sample_rate: 44_100,
+            input_seconds: 0.005,
+            ir_seconds: 0.01,
+            fft_size: 64,
+            iterations: 1,
+        };
+
+        let sweep = bench_convolver_sweep(config, &[64, 128, 256]);
+        assert_eq!(sweep.len(), 3);
+        assert_eq!(sweep[0].0, 64);
+        assert_eq!(sweep[1].0, 128);
+        assert_eq!(sweep[2].0, 256);
+    }
 }

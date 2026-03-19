@@ -49,7 +49,9 @@ impl Log for SharedLogger {
             eprintln!("{}", line);
         }
 
-        let mut buffer = self.buffer.lock().unwrap();
+        let mut buffer = self.buffer.lock().unwrap_or_else(|_| {
+            panic!("log buffer lock poisoned — a thread panicked while holding it")
+        });
         if buffer.len() >= LOG_CAPACITY {
             buffer.pop_front();
         }
@@ -68,6 +70,15 @@ impl Log for SharedLogger {
 
 static LOG_BUFFER: OnceLock<Arc<Mutex<VecDeque<LogLine>>>> = OnceLock::new();
 static LOGGER: OnceLock<SharedLogger> = OnceLock::new();
+static LOGGER_INSTALLED: AtomicBool = AtomicBool::new(false);
+
+/// Result of attempting to install the process-global logger.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LoggerInstallStatus {
+    Installed,
+    AlreadyInstalled,
+    InstallFailed,
+}
 
 /// Initialize the logger and return the shared log buffer.
 pub fn init() -> Arc<Mutex<VecDeque<LogLine>>> {
@@ -90,18 +101,43 @@ pub fn init() -> Arc<Mutex<VecDeque<LogLine>>> {
         .map(|value| value != "0")
         .unwrap_or(true);
 
-    let logger = SharedLogger {
-        level,
-        buffer: buffer.clone(),
-        echo_stderr: AtomicBool::new(echo_stderr),
-    };
-
-    let logger_ref = LOGGER.get_or_init(|| logger);
-    if log::set_logger(logger_ref).is_ok() {
-        log::set_max_level(level);
-    }
+    let _ = install_global_logger(level, buffer.clone(), echo_stderr);
 
     buffer
+}
+
+/// Install the process-global logger with explicit status.
+pub fn install_global_logger(
+    level: LevelFilter,
+    buffer: Arc<Mutex<VecDeque<LogLine>>>,
+    echo_stderr: bool,
+) -> LoggerInstallStatus {
+    if LOGGER_INSTALLED.load(Ordering::SeqCst) {
+        set_echo_stderr(echo_stderr);
+        log::set_max_level(level);
+        return LoggerInstallStatus::AlreadyInstalled;
+    }
+
+    let logger = SharedLogger {
+        level,
+        buffer,
+        echo_stderr: AtomicBool::new(echo_stderr),
+    };
+    let logger_ref = LOGGER.get_or_init(|| logger);
+
+    match log::set_logger(logger_ref) {
+        Ok(()) => {
+            LOGGER_INSTALLED.store(true, Ordering::SeqCst);
+            log::set_max_level(level);
+            LoggerInstallStatus::Installed
+        }
+        Err(_) if LOGGER_INSTALLED.load(Ordering::SeqCst) => {
+            set_echo_stderr(echo_stderr);
+            log::set_max_level(level);
+            LoggerInstallStatus::AlreadyInstalled
+        }
+        Err(_) => LoggerInstallStatus::InstallFailed,
+    }
 }
 
 /// Enable or disable stderr echoing for log lines.
@@ -113,7 +149,12 @@ pub fn set_echo_stderr(enabled: bool) {
 
 /// Snapshot the current log buffer for rendering.
 pub fn snapshot_lines(buffer: &Arc<Mutex<VecDeque<LogLine>>>) -> Vec<LogLine> {
-    buffer.lock().unwrap().iter().cloned().collect()
+    buffer
+        .lock()
+        .unwrap_or_else(|_| panic!("log buffer lock poisoned — a thread panicked while holding it"))
+        .iter()
+        .cloned()
+        .collect()
 }
 
 /// Restores stderr on drop for capture sessions.
@@ -180,7 +221,9 @@ pub fn capture_stderr(buffer: Arc<Mutex<VecDeque<LogLine>>>) -> Option<StderrCap
             if trimmed.is_empty() {
                 continue;
             }
-            let mut buffer = buffer.lock().unwrap();
+            let mut buffer = buffer.lock().unwrap_or_else(|_| {
+                panic!("log buffer lock poisoned — a thread panicked while holding it")
+            });
             if buffer.len() >= LOG_CAPACITY {
                 buffer.pop_front();
             }
@@ -200,4 +243,23 @@ pub fn capture_stderr(buffer: Arc<Mutex<VecDeque<LogLine>>>) -> Option<StderrCap
         stderr_fd,
         reader_handle: Some(handle),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{snapshot_lines, LogKind, LogLine};
+    use std::collections::VecDeque;
+    use std::sync::{Arc, Mutex};
+
+    #[test]
+    fn snapshot_returns_buffered_lines() {
+        let buffer = Arc::new(Mutex::new(VecDeque::new()));
+        buffer.lock().unwrap().push_back(LogLine {
+            kind: LogKind::Info,
+            text: "hello".to_string(),
+        });
+        let lines = snapshot_lines(&buffer);
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].text, "hello");
+    }
 }

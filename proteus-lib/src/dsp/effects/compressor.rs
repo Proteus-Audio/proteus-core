@@ -2,8 +2,11 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::level::{db_to_linear, deserialize_db_gain, linear_to_db};
+use super::core::level::deserialize_db_gain;
 use super::EffectContext;
+use crate::dsp::guardrails::{
+    sanitize_channels, sanitize_finite, sanitize_finite_max, sanitize_finite_min,
+};
 
 const DEFAULT_THRESHOLD_DB: f32 = -18.0;
 const DEFAULT_RATIO: f32 = 4.0;
@@ -15,17 +18,22 @@ const DEFAULT_MAKEUP_DB: f32 = 0.0;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct CompressorSettings {
+    /// Signal level above which compression is applied, in dBFS.
     #[serde(
         alias = "threshold",
         alias = "threshold_db",
         deserialize_with = "deserialize_db_gain"
     )]
     pub threshold_db: f32,
+    /// Compression ratio; e.g. 4.0 means a 4:1 ratio above the threshold.
     pub ratio: f32,
+    /// Time for the compressor gain to react to a signal exceeding the threshold, in milliseconds.
     #[serde(alias = "attack_ms", alias = "attack")]
     pub attack_ms: f32,
+    /// Time for the compressor gain to recover after the signal drops below the threshold, in milliseconds.
     #[serde(alias = "release_ms", alias = "release")]
     pub release_ms: f32,
+    /// Makeup gain applied after compression to restore loudness, in dB.
     #[serde(
         alias = "makeup_db",
         alias = "makeup_gain",
@@ -67,10 +75,12 @@ impl Default for CompressorSettings {
 }
 
 /// Configured compressor effect with runtime state.
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct CompressorEffect {
+    /// Whether the compressor is active; when `false` samples pass through unmodified.
     pub enabled: bool,
+    /// Compressor parameters such as threshold, ratio, attack, and release.
     #[serde(flatten)]
     pub settings: CompressorSettings,
     #[serde(skip)]
@@ -86,27 +96,8 @@ impl std::fmt::Debug for CompressorEffect {
     }
 }
 
-impl Default for CompressorEffect {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            settings: CompressorSettings::default(),
-            state: None,
-        }
-    }
-}
-
-impl CompressorEffect {
-    /// Process interleaved samples through the compressor.
-    ///
-    /// # Arguments
-    /// - `samples`: Interleaved input samples.
-    /// - `context`: Environment details (sample rate, channels, etc.).
-    /// - `drain`: Unused for this effect.
-    ///
-    /// # Returns
-    /// Processed interleaved samples.
-    pub fn process(&mut self, samples: &[f32], context: &EffectContext, _drain: bool) -> Vec<f32> {
+impl super::core::DspEffect for CompressorEffect {
+    fn process(&mut self, samples: &[f32], context: &EffectContext, _drain: bool) -> Vec<f32> {
         if !self.enabled {
             return samples.to_vec();
         }
@@ -129,10 +120,10 @@ impl CompressorEffect {
                 peak = peak.max(sample.abs());
             }
 
-            let level_db = linear_to_db(peak);
+            let level_db = rodio::math::linear_to_db(peak);
             let target_gain_db = compute_gain_db(level_db, state.threshold_db, state.ratio);
             state.update_gain(target_gain_db);
-            let gain = db_to_linear(state.current_gain_db + state.makeup_gain_db);
+            let gain = rodio::math::db_to_linear(state.current_gain_db + state.makeup_gain_db);
 
             for &sample in frame {
                 output.push(sample * gain);
@@ -142,50 +133,88 @@ impl CompressorEffect {
         output
     }
 
-    /// Reset any internal state held by the compressor.
-    pub fn reset_state(&mut self) {
+    fn process_into(
+        &mut self,
+        input: &[f32],
+        output: &mut Vec<f32>,
+        context: &EffectContext,
+        _drain: bool,
+    ) {
+        if !self.enabled {
+            output.extend_from_slice(input);
+            return;
+        }
+        self.ensure_state(context);
+        let Some(state) = self.state.as_mut() else {
+            output.extend_from_slice(input);
+            return;
+        };
+        if input.is_empty() {
+            return;
+        }
+        let channels = state.channels;
+        for frame in input.chunks(channels) {
+            let mut peak = 0.0_f32;
+            for &sample in frame {
+                peak = peak.max(sample.abs());
+            }
+            let level_db = rodio::math::linear_to_db(peak);
+            let target_gain_db = compute_gain_db(level_db, state.threshold_db, state.ratio);
+            state.update_gain(target_gain_db);
+            let gain = rodio::math::db_to_linear(state.current_gain_db + state.makeup_gain_db);
+            for &sample in frame {
+                output.push(sample * gain);
+            }
+        }
+    }
+
+    fn reset_state(&mut self) {
         if let Some(state) = self.state.as_mut() {
             state.reset();
         }
         self.state = None;
     }
+}
 
+impl CompressorEffect {
     fn ensure_state(&mut self, context: &EffectContext) {
-        let threshold_db = sanitize_threshold_db(self.settings.threshold_db);
-        let ratio = sanitize_ratio(self.settings.ratio);
-        let attack_ms = sanitize_time_ms(self.settings.attack_ms, DEFAULT_ATTACK_MS);
-        let release_ms = sanitize_time_ms(self.settings.release_ms, DEFAULT_RELEASE_MS);
-        let makeup_gain_db = sanitize_makeup_db(self.settings.makeup_gain_db);
-        let channels = context.channels.max(1);
+        let threshold_db =
+            sanitize_finite_max(self.settings.threshold_db, DEFAULT_THRESHOLD_DB, 0.0);
+        let ratio = sanitize_finite_min(self.settings.ratio, DEFAULT_RATIO, 1.0);
+        let attack_ms = sanitize_finite_min(self.settings.attack_ms, DEFAULT_ATTACK_MS, 0.0);
+        let release_ms = sanitize_finite_min(self.settings.release_ms, DEFAULT_RELEASE_MS, 0.0);
+        let makeup_gain_db = sanitize_finite(self.settings.makeup_gain_db, DEFAULT_MAKEUP_DB);
+        let channels = sanitize_channels(context.channels());
 
-        let needs_reset = self
-            .state
-            .as_ref()
-            .map(|state| {
-                !state.matches(
-                    context.sample_rate,
-                    channels,
-                    threshold_db,
-                    ratio,
-                    attack_ms,
-                    release_ms,
-                    makeup_gain_db,
-                )
-            })
-            .unwrap_or(true);
-
-        if needs_reset {
-            self.state = Some(CompressorState::new(
-                context.sample_rate,
-                channels,
-                threshold_db,
-                ratio,
-                attack_ms,
-                release_ms,
-                makeup_gain_db,
-            ));
+        let params = CompressorParams {
+            sample_rate: context.sample_rate(),
+            channels,
+            threshold_db,
+            ratio,
+            attack_ms,
+            release_ms,
+            makeup_gain_db,
+        };
+        if let Some(state) = self.state.as_mut() {
+            if state.matches_structure(&params) {
+                state.update_parameters(&params);
+                return;
+            }
         }
+
+        self.state = Some(CompressorState::new(&params));
     }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct CompressorParams {
+    sample_rate: u32,
+    channels: usize,
+    threshold_db: f32,
+    ratio: f32,
+    attack_ms: f32,
+    release_ms: f32,
+    makeup_gain_db: f32,
 }
 
 #[derive(Clone, Debug)]
@@ -201,46 +230,31 @@ struct CompressorState {
 }
 
 impl CompressorState {
-    fn new(
-        sample_rate: u32,
-        channels: usize,
-        threshold_db: f32,
-        ratio: f32,
-        attack_ms: f32,
-        release_ms: f32,
-        makeup_gain_db: f32,
-    ) -> Self {
-        let attack_coeff = time_to_coeff(attack_ms, sample_rate);
-        let release_coeff = time_to_coeff(release_ms, sample_rate);
+    fn new(params: &CompressorParams) -> Self {
+        let attack_coeff = time_to_coeff(params.attack_ms, params.sample_rate);
+        let release_coeff = time_to_coeff(params.release_ms, params.sample_rate);
         Self {
-            sample_rate,
-            channels,
-            threshold_db,
-            ratio,
+            sample_rate: params.sample_rate,
+            channels: params.channels,
+            threshold_db: params.threshold_db,
+            ratio: params.ratio,
             attack_coeff,
             release_coeff,
-            makeup_gain_db,
+            makeup_gain_db: params.makeup_gain_db,
             current_gain_db: 0.0,
         }
     }
 
-    fn matches(
-        &self,
-        sample_rate: u32,
-        channels: usize,
-        threshold_db: f32,
-        ratio: f32,
-        attack_ms: f32,
-        release_ms: f32,
-        makeup_gain_db: f32,
-    ) -> bool {
-        self.sample_rate == sample_rate
-            && self.channels == channels
-            && (self.threshold_db - threshold_db).abs() < f32::EPSILON
-            && (self.ratio - ratio).abs() < f32::EPSILON
-            && (self.attack_coeff - time_to_coeff(attack_ms, sample_rate)).abs() < f32::EPSILON
-            && (self.release_coeff - time_to_coeff(release_ms, sample_rate)).abs() < f32::EPSILON
-            && (self.makeup_gain_db - makeup_gain_db).abs() < f32::EPSILON
+    fn matches_structure(&self, params: &CompressorParams) -> bool {
+        self.sample_rate == params.sample_rate && self.channels == params.channels
+    }
+
+    fn update_parameters(&mut self, params: &CompressorParams) {
+        self.threshold_db = params.threshold_db;
+        self.ratio = params.ratio;
+        self.attack_coeff = time_to_coeff(params.attack_ms, params.sample_rate);
+        self.release_coeff = time_to_coeff(params.release_ms, params.sample_rate);
+        self.makeup_gain_db = params.makeup_gain_db;
     }
 
     fn update_gain(&mut self, target_gain_db: f32) {
@@ -274,46 +288,13 @@ fn time_to_coeff(time_ms: f32, sample_rate: u32) -> f32 {
     (-1.0 / (t * sample_rate as f32)).exp()
 }
 
-fn sanitize_threshold_db(threshold_db: f32) -> f32 {
-    if !threshold_db.is_finite() {
-        return DEFAULT_THRESHOLD_DB;
-    }
-    threshold_db.min(0.0)
-}
-
-fn sanitize_ratio(ratio: f32) -> f32 {
-    if !ratio.is_finite() {
-        return DEFAULT_RATIO;
-    }
-    ratio.max(1.0)
-}
-
-fn sanitize_time_ms(value: f32, fallback: f32) -> f32 {
-    if !value.is_finite() {
-        return fallback;
-    }
-    value.max(0.0)
-}
-
-fn sanitize_makeup_db(value: f32) -> f32 {
-    if !value.is_finite() {
-        return DEFAULT_MAKEUP_DB;
-    }
-    value
-}
-
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::CompressorEffect;
+    use crate::dsp::effects::{core::DspEffect, EffectContext};
 
     fn context(channels: usize) -> EffectContext {
-        EffectContext {
-            sample_rate: 48_000,
-            channels,
-            container_path: None,
-            impulse_response_spec: None,
-            impulse_response_tail_db: -60.0,
-        }
+        EffectContext::new(48_000, channels, None, None, -60.0).unwrap()
     }
 
     fn approx_eq(a: f32, b: f32, eps: f32) -> bool {
@@ -344,7 +325,7 @@ mod tests {
 
         let level_db = 0.0;
         let target_gain_db = (-6.0 + (level_db + 6.0) / 2.0) - level_db;
-        let expected = db_to_linear(target_gain_db);
+        let expected = rodio::math::db_to_linear(target_gain_db);
         assert!(output.iter().all(|value| approx_eq(*value, expected, 1e-3)));
     }
 
@@ -363,7 +344,7 @@ mod tests {
         assert!(approx_eq(effect.settings.threshold_db, -12.0, 1e-6));
         assert!(approx_eq(
             effect.settings.makeup_gain_db,
-            linear_to_db(2.0),
+            rodio::math::linear_to_db(2.0),
             1e-6
         ));
     }
@@ -381,5 +362,74 @@ mod tests {
 
         let err = serde_json::from_str::<CompressorEffect>(json).expect_err("invalid compressor");
         assert!(err.to_string().contains("invalid gain value"));
+    }
+
+    #[test]
+    fn threshold_change_preserves_gain_envelope() {
+        let mut effect = CompressorEffect::default();
+        effect.enabled = true;
+        effect.settings.threshold_db = -24.0;
+        effect.settings.ratio = 4.0;
+        effect.settings.attack_ms = 0.0;
+        effect.settings.release_ms = 100.0;
+
+        let loud_frame = [1.0_f32, 1.0];
+        let _ = effect.process(&loud_frame, &context(2), false);
+        let before = effect
+            .state
+            .as_ref()
+            .expect("compressor state should exist")
+            .current_gain_db;
+        assert!(before < 0.0);
+
+        effect.settings.threshold_db = -6.0;
+        effect.ensure_state(&context(2));
+        let after_ensure = effect
+            .state
+            .as_ref()
+            .expect("compressor state should exist")
+            .current_gain_db;
+        assert!((after_ensure - before).abs() < 1e-6);
+
+        let _ = effect.process(&loud_frame, &context(2), false);
+        let after_process = effect
+            .state
+            .as_ref()
+            .expect("compressor state should exist")
+            .current_gain_db;
+        assert!(after_process < 0.0);
+    }
+
+    #[test]
+    fn attack_and_release_changes_recompute_coefficients_without_gain_jump() {
+        let mut effect = CompressorEffect::default();
+        effect.enabled = true;
+        effect.settings.threshold_db = -18.0;
+        effect.settings.ratio = 4.0;
+        effect.settings.attack_ms = 10.0;
+        effect.settings.release_ms = 100.0;
+
+        let loud_frame = [1.0_f32, 1.0];
+        let _ = effect.process(&loud_frame, &context(2), false);
+
+        let state = effect
+            .state
+            .as_ref()
+            .expect("compressor state should exist");
+        let gain_before = state.current_gain_db;
+        let attack_before = state.attack_coeff;
+        let release_before = state.release_coeff;
+
+        effect.settings.attack_ms = 25.0;
+        effect.settings.release_ms = 250.0;
+        effect.ensure_state(&context(2));
+
+        let state = effect
+            .state
+            .as_ref()
+            .expect("compressor state should exist");
+        assert!((state.current_gain_db - gain_before).abs() < 1e-6);
+        assert!((state.attack_coeff - attack_before).abs() > 1e-6);
+        assert!((state.release_coeff - release_before).abs() > 1e-6);
     }
 }

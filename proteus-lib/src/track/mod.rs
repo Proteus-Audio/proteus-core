@@ -1,9 +1,12 @@
-//! Track decoding and buffering helpers.
+//! Legacy track buffering modules.
+//!
+//! These modules predate the current `playback::engine` architecture. They are
+//! retained so their tests continue to compile and run, but the active playback
+//! path uses `playback::engine::mix::runner::decode` instead.
 
-mod buffer;
-mod container;
-pub(crate) mod convert;
-mod single;
+#![allow(dead_code)]
 
-pub use container::{buffer_container_tracks, ContainerTrackArgs};
-pub use single::{buffer_track, TrackArgs};
+pub mod buffer;
+pub mod container;
+pub(crate) mod context;
+pub mod single;

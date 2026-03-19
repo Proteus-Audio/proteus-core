@@ -5,14 +5,13 @@
 //! reporting hooks, and schedule inspection).
 
 use std::sync::{Arc, Mutex};
-use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
-use log::{info, warn};
+use log::{debug, info};
 
-use crate::diagnostics::reporter::{Report, Reporter};
-
+use super::lifecycle::current_ms;
 use super::{EndOfStreamAction, Player, PlayerState};
+use crate::diagnostics::reporter::{Report, Reporter};
 
 impl Player {
     /// Start playback from a specific timestamp (seconds).
@@ -24,29 +23,16 @@ impl Player {
         let trace_ms = current_ms();
         self.play_command_ms
             .store(trace_ms, std::sync::atomic::Ordering::Relaxed);
-        info!("play trace: play_at requested ts={:.3}", ts);
-        let mut timestamp = self.ts.lock().unwrap();
+        let mut timestamp = self.lock_ts_recoverable();
         *timestamp = ts;
         drop(timestamp);
 
         self.request_effects_reset();
         self.clear_inline_effects_update();
-        self.kill_current();
-        info!(
-            "play trace: play_at after kill_current +{}ms",
-            current_ms().saturating_sub(trace_ms)
-        );
+        self.stop_and_join_playback_thread();
         self.initialize_thread(Some(ts));
-        info!(
-            "play trace: play_at after initialize_thread +{}ms",
-            current_ms().saturating_sub(trace_ms)
-        );
 
         self.resume();
-        info!(
-            "play trace: play_at after resume() request +{}ms",
-            current_ms().saturating_sub(trace_ms)
-        );
 
         self.wait_for_audio_heard(Duration::from_secs(5));
     }
@@ -58,36 +44,30 @@ impl Player {
         let trace_ms = current_ms();
         self.play_command_ms
             .store(trace_ms, std::sync::atomic::Ordering::Relaxed);
-        info!("Playing audio");
+        info!("playing audio");
         let thread_exists = self
             .playback_thread_exists
             .load(std::sync::atomic::Ordering::SeqCst);
-        info!(
+        debug!(
             "play trace: play requested thread_exists={} state={:?}",
             thread_exists,
-            *self.state.lock().unwrap()
+            *self.lock_state_invariant()
         );
 
         if !thread_exists {
             self.initialize_thread(None);
-            info!(
-                "play trace: play after initialize_thread +{}ms",
-                current_ms().saturating_sub(trace_ms)
-            );
         }
 
         self.resume();
-        info!(
-            "play trace: play after resume() request +{}ms",
-            current_ms().saturating_sub(trace_ms)
-        );
 
         self.wait_for_audio_heard(Duration::from_secs(5));
     }
 
     /// Pause playback.
     pub fn pause(&self) {
-        self.state.lock().unwrap().clone_from(&PlayerState::Pausing);
+        self.lock_state_invariant()
+            .clone_from(&PlayerState::Pausing);
+        self.worker_notify.notify();
     }
 
     /// Resume playback if paused.
@@ -96,54 +76,17 @@ impl Player {
             .play_command_ms
             .load(std::sync::atomic::Ordering::Relaxed);
         if trace_ms > 0 {
-            info!(
-                "play trace: resume requested +{}ms",
-                current_ms().saturating_sub(trace_ms)
-            );
-        } else {
-            info!("play trace: resume requested");
+            debug!("play trace: resume requested");
         }
-        self.state
-            .lock()
-            .unwrap()
+        self.lock_state_invariant()
             .clone_from(&PlayerState::Resuming);
-    }
-
-    /// Stop the current playback thread and wait for it to exit.
-    ///
-    /// Internal state is moved through `Stopping` and finalized as `Stopped`.
-    pub fn kill_current(&self) {
-        self.state
-            .lock()
-            .unwrap()
-            .clone_from(&PlayerState::Stopping);
-        {
-            let sink = self.sink.lock().unwrap();
-            sink.stop();
-        }
-        self.abort.store(true, std::sync::atomic::Ordering::SeqCst);
-
-        while !self.thread_finished() {
-            thread::sleep(Duration::from_millis(10));
-        }
-        self.join_playback_thread();
-
-        self.state.lock().unwrap().clone_from(&PlayerState::Stopped);
-    }
-
-    /// Join the current playback thread handle if one is present.
-    pub(in crate::playback::player) fn join_playback_thread(&self) {
-        if let Some(handle) = self.playback_thread_handle.lock().unwrap().take() {
-            if handle.join().is_err() {
-                warn!("playback thread panicked during join");
-            }
-        }
+        self.worker_notify.notify();
     }
 
     /// Stop playback and reset timing state.
     pub fn stop(&self) {
-        self.kill_current();
-        self.ts.lock().unwrap().clone_from(&0.0);
+        self.stop_and_join_playback_thread();
+        self.lock_ts_recoverable().clone_from(&0.0);
     }
 
     /// Set the action applied automatically when playback reaches the end.
@@ -152,59 +95,12 @@ impl Player {
     ///
     /// * `action` - End-of-stream behavior (`Stop` or `Pause`).
     pub fn set_end_of_stream_action(&self, action: EndOfStreamAction) {
-        *self.end_of_stream_action.lock().unwrap() = action;
+        *self.lock_end_of_stream_action_recoverable() = action;
     }
 
     /// Get the current end-of-stream action.
     pub fn get_end_of_stream_action(&self) -> EndOfStreamAction {
-        *self.end_of_stream_action.lock().unwrap()
-    }
-
-    /// Return true if playback is currently active.
-    pub fn is_playing(&self) -> bool {
-        let state = self.state.lock().unwrap();
-        *state == PlayerState::Playing
-    }
-
-    /// Return true if playback is currently paused.
-    pub fn is_paused(&self) -> bool {
-        let state = self.state.lock().unwrap();
-        *state == PlayerState::Paused
-    }
-
-    /// Get the current playback time in seconds.
-    pub fn get_time(&self) -> f64 {
-        let ts = self.ts.lock().unwrap();
-        *ts
-    }
-
-    /// Return `true` when no playback worker thread is alive.
-    pub(super) fn thread_finished(&self) -> bool {
-        let playback_thread_exists = self
-            .playback_thread_exists
-            .load(std::sync::atomic::Ordering::SeqCst);
-        !playback_thread_exists
-    }
-
-    /// Return true if playback has reached the end.
-    pub fn is_finished(&self) -> bool {
-        self.thread_finished()
-    }
-
-    /// Block the current thread until playback finishes.
-    pub fn sleep_until_end(&self) {
-        loop {
-            if self.thread_finished() {
-                break;
-            }
-            thread::sleep(Duration::from_millis(100));
-        }
-    }
-
-    /// Get the total duration (seconds) of the active selection.
-    pub fn get_duration(&self) -> f64 {
-        let duration = self.duration.lock().unwrap();
-        *duration
+        *self.lock_end_of_stream_action_recoverable()
     }
 
     /// Seek to the given timestamp (seconds).
@@ -216,14 +112,14 @@ impl Player {
     ///
     /// * `ts` - New playback position in seconds.
     pub fn seek(&mut self, ts: f64) {
-        let mut timestamp = self.ts.lock().unwrap();
+        let mut timestamp = self.lock_ts_recoverable();
         *timestamp = ts;
         drop(timestamp);
 
-        let state = self.state.lock().unwrap().clone();
-        let was_active = matches!(state, PlayerState::Playing | PlayerState::Resuming);
+        let state = *self.lock_state_invariant();
+        let was_active = seek_should_resume(state);
         let (seek_fade_out_ms, seek_fade_in_ms) = {
-            let settings = self.buffer_settings.lock().unwrap();
+            let settings = self.lock_buffer_settings_recoverable();
             (settings.seek_fade_out_ms, settings.seek_fade_in_ms)
         };
         if was_active && seek_fade_out_ms > 0.0 {
@@ -232,13 +128,13 @@ impl Player {
         self.request_effects_reset();
         self.clear_inline_effects_update();
 
-        self.kill_current();
+        self.stop_and_join_playback_thread();
         self.initialize_thread(Some(ts));
         if was_active {
-            *self.next_resume_fade_ms.lock().unwrap() = Some(seek_fade_in_ms);
+            *self.lock_next_resume_fade_ms_recoverable() = Some(seek_fade_in_ms);
             self.resume();
         } else {
-            self.state.lock().unwrap().clone_from(&state);
+            self.lock_state_invariant().clone_from(&state);
         }
     }
 
@@ -250,16 +146,21 @@ impl Player {
     fn fade_current_sink_out(&self, fade_ms: f32) {
         let steps = ((fade_ms / 5.0).ceil() as u32).max(1);
         let step_ms = (fade_ms / steps as f32).max(1.0) as u64;
-        let sink = self.sink.lock().unwrap();
-        let start_volume = sink.volume().max(0.0);
+        let start_volume = {
+            let sink = self.lock_sink_recoverable();
+            sink.volume().max(0.0)
+        };
         if start_volume <= 0.0 {
             return;
         }
         for step in 1..=steps {
             let t = step as f32 / steps as f32;
             let gain = start_volume * (1.0 - t);
-            sink.set_volume(gain.max(0.0));
-            thread::sleep(Duration::from_millis(step_ms));
+            {
+                let sink = self.lock_sink_recoverable();
+                sink.set_volume(gain.max(0.0));
+            }
+            std::thread::sleep(Duration::from_millis(step_ms));
         }
     }
 
@@ -268,7 +169,7 @@ impl Player {
     /// Existing reverb overrides are re-applied and active playback is
     /// restarted at the current timestamp.
     pub fn refresh_tracks(&mut self) {
-        let mut prot = self.prot.lock().unwrap();
+        let mut prot = self.lock_prot_invariant();
         prot.refresh_tracks();
         if let Some(spec) = self.impulse_response_override.clone() {
             prot.set_impulse_response_spec(spec);
@@ -294,57 +195,6 @@ impl Player {
         self.wait_for_audio_heard(Duration::from_secs(5));
     }
 
-    /// Wait until the runtime reports that at least one chunk was appended.
-    ///
-    /// # Arguments
-    ///
-    /// * `timeout` - Maximum wait duration before returning `false`.
-    ///
-    /// # Returns
-    ///
-    /// `true` once audio has been observed, `false` on timeout or early thread
-    /// termination.
-    pub(super) fn wait_for_audio_heard(&self, timeout: Duration) -> bool {
-        let trace_ms = self
-            .play_command_ms
-            .load(std::sync::atomic::Ordering::Relaxed);
-        if trace_ms > 0 {
-            info!(
-                "play trace: wait_for_audio_heard start timeout_ms={} +{}ms",
-                timeout.as_millis(),
-                current_ms().saturating_sub(trace_ms)
-            );
-        }
-        let start = Instant::now();
-        loop {
-            if self.audio_heard.load(std::sync::atomic::Ordering::Relaxed) {
-                if trace_ms > 0 {
-                    info!(
-                        "play trace: audio_heard observed +{}ms (waited {}ms)",
-                        current_ms().saturating_sub(trace_ms),
-                        start.elapsed().as_millis()
-                    );
-                }
-                return true;
-            }
-            if self.thread_finished() {
-                warn!("playback thread ended before audio was heard");
-                return false;
-            }
-            if start.elapsed() >= timeout {
-                warn!("timed out waiting for audio to start");
-                if trace_ms > 0 {
-                    warn!(
-                        "play trace: wait_for_audio_heard timeout +{}ms",
-                        current_ms().saturating_sub(trace_ms)
-                    );
-                }
-                return false;
-            }
-            thread::sleep(Duration::from_millis(10));
-        }
-    }
-
     /// Shuffle track selections and restart playback.
     pub fn shuffle(&mut self) {
         self.refresh_tracks();
@@ -356,34 +206,18 @@ impl Player {
     ///
     /// * `new_volume` - Desired sink gain multiplier.
     pub fn set_volume(&mut self, new_volume: f32) {
-        let sink = self.sink.lock().unwrap();
+        let sink = self.lock_sink_recoverable();
         sink.set_volume(new_volume);
         drop(sink);
 
-        let mut volume = self.volume.lock().unwrap();
+        let mut volume = self.lock_volume_recoverable();
         *volume = new_volume;
         drop(volume);
     }
 
     /// Get the current playback volume.
     pub fn get_volume(&self) -> f32 {
-        *self.volume.lock().unwrap()
-    }
-
-    /// Get the track identifiers used for display.
-    pub fn get_ids(&self) -> Vec<String> {
-        let prot = self.prot.lock().unwrap();
-        prot.get_ids()
-    }
-
-    /// Get the full timestamped shuffle schedule used by playback.
-    ///
-    /// Each entry is `(time_seconds, grouped_selected_ids_or_paths)`, where the
-    /// inner groups map to logical tracks and contain all selections for each
-    /// track (for example when `selections_count > 1`).
-    pub fn get_shuffle_schedule(&self) -> Vec<(f64, Vec<Vec<String>>)> {
-        let prot = self.prot.lock().unwrap();
-        prot.get_shuffle_schedule()
+        *self.lock_volume_recoverable()
     }
 
     /// Enable periodic reporting of playback status for UI consumers.
@@ -399,8 +233,8 @@ impl Player {
         reporting: Arc<Mutex<dyn Fn(Report) + Send>>,
         reporting_interval: Duration,
     ) {
-        if self.reporter.is_some() {
-            self.reporter.as_ref().unwrap().lock().unwrap().stop();
+        if let Some(reporter) = self.reporter.as_ref() {
+            Self::lock_reporter_invariant(reporter).stop();
         }
 
         let reporter = Arc::new(Mutex::new(Reporter::new(
@@ -412,17 +246,76 @@ impl Player {
             reporting_interval,
         )));
 
-        reporter.lock().unwrap().start();
+        Self::lock_reporter_invariant(&reporter).start();
 
         self.reporter = Some(reporter);
     }
 }
 
-fn current_ms() -> u64 {
-    use std::time::SystemTime;
+fn seek_should_resume(state: PlayerState) -> bool {
+    matches!(state, PlayerState::Playing | PlayerState::Resuming)
+}
 
-    SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0)
+#[cfg(test)]
+mod tests {
+    use super::{seek_should_resume, EndOfStreamAction, Player, PlayerState};
+    use crate::container::prot::PathsTrack;
+    use crate::playback::player::lifecycle::current_ms;
+    use std::sync::atomic::Ordering;
+
+    #[test]
+    fn current_ms_returns_non_zero_epoch_time() {
+        assert!(current_ms() > 0);
+    }
+
+    #[test]
+    fn seek_should_resume_only_for_active_states() {
+        assert!(seek_should_resume(PlayerState::Playing));
+        assert!(seek_should_resume(PlayerState::Resuming));
+        assert!(!seek_should_resume(PlayerState::Paused));
+        assert!(!seek_should_resume(PlayerState::Stopped));
+        assert!(!seek_should_resume(PlayerState::Stopping));
+        assert!(!seek_should_resume(PlayerState::Pausing));
+    }
+
+    #[test]
+    fn pause_and_resume_update_player_state() {
+        let player = lifecycle_test_player();
+        player.pause();
+        assert_eq!(*player.state.lock().unwrap(), PlayerState::Pausing);
+        player.resume();
+        assert_eq!(*player.state.lock().unwrap(), PlayerState::Resuming);
+    }
+
+    #[test]
+    fn stop_resets_timestamp_and_marks_stopped_when_thread_already_finished() {
+        let player = lifecycle_test_player();
+        *player.ts.lock().unwrap() = 12.5;
+        player.stop();
+        assert_eq!(player.get_time(), 0.0);
+        assert_eq!(*player.state.lock().unwrap(), PlayerState::Stopped);
+        assert!(player.abort.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn end_of_stream_action_round_trip() {
+        let player = lifecycle_test_player();
+        player.set_end_of_stream_action(EndOfStreamAction::Pause);
+        assert_eq!(player.get_end_of_stream_action(), EndOfStreamAction::Pause);
+        player.set_end_of_stream_action(EndOfStreamAction::Stop);
+        assert_eq!(player.get_end_of_stream_action(), EndOfStreamAction::Stop);
+    }
+
+    fn lifecycle_test_player() -> Player {
+        let mut player = Player::new_from_file_paths(vec![PathsTrack::new_from_file_paths(vec![
+            "/tmp/nonexistent.wav".to_string(),
+        ])]);
+        // Avoid waiting for runtime thread work in unit tests.
+        player.playback_thread_exists.store(false, Ordering::SeqCst);
+        player.abort.store(true, Ordering::SeqCst);
+        *player.playback_thread_handle.lock().unwrap() = None;
+        *player.state.lock().unwrap() = PlayerState::Stopped;
+        player.reporter = None;
+        player
+    }
 }

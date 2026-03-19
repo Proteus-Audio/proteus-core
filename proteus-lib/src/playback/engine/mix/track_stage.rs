@@ -1,14 +1,12 @@
 //! Logical-track mixing helpers.
 
+use crate::dsp::guardrails::{sanitize_finite_clamped, sanitize_finite_min};
+
 /// Apply per-track gain/pan in-place to interleaved samples.
 ///
 /// Stereo-only panning is supported for now.
 pub(crate) fn apply_track_gain_pan(samples: &mut [f32], level: f32, pan: f32, channels: usize) {
-    let level = if level.is_finite() {
-        level.max(0.0)
-    } else {
-        1.0
-    };
+    let level = sanitize_finite_min(level, 1.0, 0.0);
     if channels <= 1 {
         for sample in samples.iter_mut() {
             *sample *= level;
@@ -16,11 +14,7 @@ pub(crate) fn apply_track_gain_pan(samples: &mut [f32], level: f32, pan: f32, ch
         return;
     }
 
-    let pan = if pan.is_finite() {
-        pan.clamp(-1.0, 1.0)
-    } else {
-        0.0
-    };
+    let pan = sanitize_finite_clamped(pan, 0.0, -1.0, 1.0);
 
     let left = if pan > 0.0 { 1.0 - pan } else { 1.0 };
     let right = if pan < 0.0 { 1.0 + pan } else { 1.0 };
@@ -75,5 +69,12 @@ mod tests {
             vec![0.0_f32, 1.0, 0.0, 1.0],
         ]);
         assert_eq!(out, vec![0.5_f32, 0.5, 0.5, 0.5]);
+    }
+
+    #[test]
+    fn apply_track_gain_pan_clamps_invalid_inputs() {
+        let mut samples = vec![1.0_f32, 1.0, 1.0, 1.0];
+        apply_track_gain_pan(&mut samples, f32::NAN, 2.0, 2);
+        assert_eq!(samples, vec![0.0_f32, 1.0, 0.0, 1.0]);
     }
 }

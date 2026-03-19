@@ -2,8 +2,8 @@ use log::warn;
 use symphonia::core::audio::Channels;
 use symphonia::core::errors::Error;
 
-use crate::tools::tools::open_file;
-use crate::track::convert::for_each_channel_sample;
+use crate::audio::decode::for_each_channel_sample;
+use crate::tools::decode::open_file;
 
 use super::{PeakWindow, PeaksData, PeaksError};
 
@@ -60,7 +60,8 @@ pub(super) fn extract_peaks_from_audio(
     file_path: &str,
     limited: bool,
 ) -> Result<PeaksData, PeaksError> {
-    let (mut decoder, mut format) = open_file(file_path);
+    let (mut decoder, mut format) =
+        open_file(file_path).map_err(|err| PeaksError::Decode(err.to_string()))?;
 
     let track = format
         .tracks()
@@ -114,9 +115,7 @@ pub(super) fn extract_peaks_from_audio(
                     channel_limit,
                     &mut accumulators,
                     window_size,
-                    |channel, push| {
-                        for_each_channel_sample(&decoded, channel, |sample| push(sample))
-                    },
+                    |channel, push| for_each_channel_sample(&decoded, channel, push),
                 );
             }
             Err(Error::DecodeError(err)) => {
@@ -149,10 +148,44 @@ fn process_channels<F>(
 ) where
     F: FnMut(usize, &mut dyn FnMut(f32)),
 {
-    for channel in 0..channels {
+    for (channel, acc) in accumulators.iter_mut().enumerate().take(channels) {
         let mut push_sample = |sample: f32| {
-            accumulators[channel].push(sample, window_size);
+            acc.push(sample, window_size);
         };
         each_channel(channel, &mut push_sample);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn channel_accumulator_flushes_partial_window() {
+        let mut acc = ChannelAccumulator::new();
+        acc.push(0.5, 4);
+        acc.push(-0.2, 4);
+        acc.flush_partial();
+        assert_eq!(acc.peaks.len(), 1);
+        assert_eq!(acc.peaks[0].max, 0.5);
+        assert_eq!(acc.peaks[0].min, -0.2);
+    }
+
+    #[test]
+    fn process_channels_routes_samples_per_channel() {
+        let mut accumulators = vec![ChannelAccumulator::new(), ChannelAccumulator::new()];
+        process_channels(2, &mut accumulators, 2, |channel, push| {
+            if channel == 0 {
+                push(0.1);
+                push(0.3);
+            } else {
+                push(-0.4);
+                push(-0.2);
+            }
+        });
+        assert_eq!(accumulators[0].peaks.len(), 1);
+        assert_eq!(accumulators[1].peaks.len(), 1);
+        assert_eq!(accumulators[0].peaks[0].max, 0.3);
+        assert_eq!(accumulators[1].peaks[0].min, -0.4);
     }
 }

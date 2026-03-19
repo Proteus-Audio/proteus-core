@@ -107,3 +107,32 @@ impl AlignedSampleBuffer {
         self.len_samples = self.len_samples.saturating_add(len);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::AlignedSampleBuffer;
+
+    #[test]
+    fn aligned_buffer_pops_zeros_and_samples_in_order() {
+        let mut buffer = AlignedSampleBuffer::with_capacity(16);
+        buffer.push_zeros(2);
+        buffer.push_samples_from_slice(&[1.0, 2.0]);
+        assert_eq!(buffer.len(), 4);
+        assert_eq!(buffer.pop_front(), Some(0.0));
+        assert_eq!(buffer.pop_front(), Some(0.0));
+        assert_eq!(buffer.pop_front(), Some(1.0));
+        assert_eq!(buffer.pop_front(), Some(2.0));
+        assert_eq!(buffer.pop_front(), None);
+    }
+
+    #[test]
+    fn aligned_buffer_coalesces_zero_segments() {
+        let mut buffer = AlignedSampleBuffer::with_capacity(8);
+        buffer.push_zeros(1);
+        buffer.push_zeros(2);
+        assert_eq!(buffer.len(), 3);
+        assert_eq!(buffer.pop_front(), Some(0.0));
+        assert_eq!(buffer.pop_front(), Some(0.0));
+        assert_eq!(buffer.pop_front(), Some(0.0));
+    }
+}

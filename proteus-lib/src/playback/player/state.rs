@@ -1,0 +1,119 @@
+//! Read-only player state helpers.
+
+use std::thread;
+use std::time::Duration;
+
+use super::{Player, PlayerState};
+
+impl Player {
+    /// Get read-only metadata describing the active container or file list.
+    pub fn audio_info(&self) -> &crate::container::info::Info {
+        &self.info
+    }
+
+    /// Return true if playback is currently active.
+    pub fn is_playing(&self) -> bool {
+        *self.lock_state_invariant() == PlayerState::Playing
+    }
+
+    /// Return true if playback is currently paused.
+    pub fn is_paused(&self) -> bool {
+        *self.lock_state_invariant() == PlayerState::Paused
+    }
+
+    /// Get the current playback time in seconds.
+    pub fn playback_position_secs(&self) -> f64 {
+        *self.lock_ts_recoverable()
+    }
+
+    /// Get the current playback time in seconds.
+    pub fn get_time(&self) -> f64 {
+        self.playback_position_secs()
+    }
+
+    /// Get the finished track identifiers as a detached snapshot.
+    pub fn finished_track_indices(&self) -> Vec<i32> {
+        self.lock_finished_tracks_recoverable().clone()
+    }
+
+    /// Return `true` when no playback worker thread is alive.
+    ///
+    /// Uses `Acquire` to synchronize-with the `Release` store in
+    /// [`PlaybackThreadGuard::drop`], ensuring all work done by the
+    /// worker before it exited is visible once this returns `true`.
+    pub(super) fn thread_finished(&self) -> bool {
+        !self
+            .playback_thread_exists
+            .load(std::sync::atomic::Ordering::Acquire)
+    }
+
+    /// Return `true` when no playback worker thread is alive.
+    ///
+    /// This reflects runtime lifecycle state, not end-of-stream semantics.
+    /// Use playback state and timestamp/duration checks for stricter EOS logic.
+    pub fn is_finished(&self) -> bool {
+        self.thread_finished()
+    }
+
+    /// Block the current thread until playback finishes.
+    pub fn sleep_until_end(&self) {
+        while !self.thread_finished() {
+            thread::sleep(Duration::from_millis(100));
+        }
+    }
+
+    /// Get the total duration (seconds) of the active selection.
+    pub fn get_duration(&self) -> f64 {
+        *self.lock_duration_recoverable()
+    }
+
+    /// Get the track identifiers used for display.
+    pub fn get_ids(&self) -> Vec<String> {
+        self.lock_prot_invariant().get_ids()
+    }
+
+    /// Get the full timestamped shuffle schedule used by playback.
+    ///
+    /// Each entry is `(time_seconds, grouped_selected_ids_or_paths)`, where the
+    /// inner groups map to logical tracks and contain all selections for each
+    /// track (for example when `selections_count > 1`).
+    pub fn get_shuffle_schedule(&self) -> Vec<(f64, Vec<Vec<String>>)> {
+        self.lock_prot_invariant().get_shuffle_schedule()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+
+    // Verify the shutdown ordering contract: a Release store of false from a
+    // worker thread is visible to an Acquire load on the observing side.
+    // This mirrors the PlaybackThreadGuard::drop → thread_finished path.
+    #[test]
+    fn thread_exists_false_store_visible_to_acquire_load_after_join() {
+        let exists = Arc::new(AtomicBool::new(true));
+        let writer = exists.clone();
+        let handle = std::thread::spawn(move || {
+            // Mirrors PlaybackThreadGuard::drop.
+            writer.store(false, Ordering::Release);
+        });
+        handle.join().unwrap();
+        // Mirrors thread_finished's Acquire load.
+        assert!(!exists.load(Ordering::Acquire));
+    }
+
+    // Verify the startup ordering contract: a Release store of true by the
+    // spawner is visible to an Acquire load inside the new thread.
+    #[test]
+    fn thread_exists_true_store_visible_to_acquire_load_in_worker() {
+        let exists = Arc::new(AtomicBool::new(false));
+        // Spawner sets true with Release before thread::spawn.
+        exists.store(true, Ordering::Release);
+        let reader = exists.clone();
+        let seen = std::thread::spawn(move || reader.load(Ordering::Acquire))
+            .join()
+            .unwrap();
+        assert!(seen);
+    }
+}

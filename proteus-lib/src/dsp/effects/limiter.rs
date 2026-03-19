@@ -6,8 +6,9 @@ use std::time::Duration;
 use rodio::source::{Limit, LimitSettings, SeekError, Source};
 use serde::{Deserialize, Serialize};
 
-use super::level::deserialize_db_gain;
+use super::core::level::deserialize_db_gain;
 use super::EffectContext;
+use crate::dsp::guardrails::{sanitize_channels, sanitize_finite_max, sanitize_finite_min};
 
 const DEFAULT_THRESHOLD_DB: f32 = -1.0;
 const DEFAULT_KNEE_WIDTH_DB: f32 = 4.0;
@@ -18,20 +19,24 @@ const DEFAULT_RELEASE_MS: f32 = 100.0;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct LimiterSettings {
+    /// Signal level above which limiting is applied, in dBFS.
     #[serde(
         alias = "threshold",
         alias = "threshold_db",
         deserialize_with = "deserialize_db_gain"
     )]
     pub threshold_db: f32,
+    /// Width of the soft-knee transition zone around the threshold, in dB.
     #[serde(
         alias = "knee_width",
         alias = "knee_width_db",
         deserialize_with = "deserialize_db_gain"
     )]
     pub knee_width_db: f32,
+    /// Time for gain reduction to reach full limiting after a transient, in milliseconds.
     #[serde(alias = "attack_ms", alias = "attack")]
     pub attack_ms: f32,
+    /// Time for gain to recover after the signal falls below the threshold, in milliseconds.
     #[serde(alias = "release_ms", alias = "release")]
     pub release_ms: f32,
 }
@@ -60,10 +65,12 @@ impl Default for LimiterSettings {
 }
 
 /// Configured limiter effect with runtime state.
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct LimiterEffect {
+    /// Whether the limiter is active; when `false` samples pass through unmodified.
     pub enabled: bool,
+    /// Limiter parameters such as threshold, knee width, attack, and release.
     #[serde(flatten)]
     pub settings: LimiterSettings,
     #[serde(skip)]
@@ -79,27 +86,8 @@ impl std::fmt::Debug for LimiterEffect {
     }
 }
 
-impl Default for LimiterEffect {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            settings: LimiterSettings::default(),
-            state: None,
-        }
-    }
-}
-
-impl LimiterEffect {
-    /// Process interleaved samples through the limiter.
-    ///
-    /// # Arguments
-    /// - `samples`: Interleaved input samples.
-    /// - `context`: Environment details (sample rate, channels, etc.).
-    /// - `drain`: Unused for this effect.
-    ///
-    /// # Returns
-    /// Processed interleaved samples.
-    pub fn process(&mut self, samples: &[f32], context: &EffectContext, _drain: bool) -> Vec<f32> {
+impl super::core::DspEffect for LimiterEffect {
+    fn process(&mut self, samples: &[f32], context: &EffectContext, _drain: bool) -> Vec<f32> {
         if !self.enabled {
             return samples.to_vec();
         }
@@ -116,26 +104,49 @@ impl LimiterEffect {
         state.process(samples)
     }
 
-    /// Reset any internal state held by the limiter.
-    pub fn reset_state(&mut self) {
+    fn process_into(
+        &mut self,
+        input: &[f32],
+        output: &mut Vec<f32>,
+        context: &EffectContext,
+        _drain: bool,
+    ) {
+        if !self.enabled {
+            output.extend_from_slice(input);
+            return;
+        }
+        self.ensure_state(context);
+        let Some(state) = self.state.as_mut() else {
+            output.extend_from_slice(input);
+            return;
+        };
+        if input.is_empty() {
+            return;
+        }
+        state.process_into(input, output);
+    }
+
+    fn reset_state(&mut self) {
         if let Some(state) = self.state.as_mut() {
             state.reset();
         }
         self.state = None;
     }
+}
 
+impl LimiterEffect {
     fn ensure_state(&mut self, context: &EffectContext) {
         let settings = sanitize_settings(&self.settings);
-        let channels = context.channels.max(1);
+        let channels = sanitize_channels(context.channels());
 
         let needs_reset = self
             .state
             .as_ref()
-            .map(|state| !state.matches(context.sample_rate, channels, &settings))
+            .map(|state| !state.matches(context.sample_rate(), channels, &settings))
             .unwrap_or(true);
 
         if needs_reset {
-            self.state = Some(LimiterState::new(context.sample_rate, channels, settings));
+            self.state = Some(LimiterState::new(context.sample_rate(), channels, settings));
         }
     }
 }
@@ -184,6 +195,20 @@ impl LimiterState {
             }
         }
         output
+    }
+
+    fn process_into(&mut self, samples: &[f32], output: &mut Vec<f32>) {
+        {
+            let inner = self.limiter.inner_mut();
+            inner.push_samples(samples);
+        }
+        for _ in 0..samples.len() {
+            if let Some(sample) = self.limiter.next() {
+                output.push(sample);
+            } else {
+                break;
+            }
+        }
     }
 
     fn reset(&mut self) {
@@ -260,46 +285,20 @@ fn build_limit_settings(settings: &LimiterSettings) -> LimitSettings {
 
 fn sanitize_settings(settings: &LimiterSettings) -> LimiterSettings {
     LimiterSettings {
-        threshold_db: sanitize_threshold_db(settings.threshold_db),
-        knee_width_db: sanitize_knee_width_db(settings.knee_width_db),
-        attack_ms: sanitize_time_ms(settings.attack_ms, DEFAULT_ATTACK_MS),
-        release_ms: sanitize_time_ms(settings.release_ms, DEFAULT_RELEASE_MS),
+        threshold_db: sanitize_finite_max(settings.threshold_db, DEFAULT_THRESHOLD_DB, 0.0),
+        knee_width_db: sanitize_finite_min(settings.knee_width_db, DEFAULT_KNEE_WIDTH_DB, 0.1),
+        attack_ms: sanitize_finite_min(settings.attack_ms, DEFAULT_ATTACK_MS, 0.0),
+        release_ms: sanitize_finite_min(settings.release_ms, DEFAULT_RELEASE_MS, 0.0),
     }
-}
-
-fn sanitize_threshold_db(value: f32) -> f32 {
-    if !value.is_finite() {
-        return DEFAULT_THRESHOLD_DB;
-    }
-    value.min(0.0)
-}
-
-fn sanitize_knee_width_db(value: f32) -> f32 {
-    if !value.is_finite() {
-        return DEFAULT_KNEE_WIDTH_DB;
-    }
-    value.max(0.1)
-}
-
-fn sanitize_time_ms(value: f32, fallback: f32) -> f32 {
-    if !value.is_finite() {
-        return fallback;
-    }
-    value.max(0.0)
 }
 
 #[cfg(test)]
 mod tests {
+    use super::super::core::DspEffect;
     use super::*;
 
     fn context(channels: usize) -> EffectContext {
-        EffectContext {
-            sample_rate: 48_000,
-            channels,
-            container_path: None,
-            impulse_response_spec: None,
-            impulse_response_tail_db: -60.0,
-        }
+        EffectContext::new(48_000, channels, None, None, -60.0).unwrap()
     }
 
     fn approx_eq(a: f32, b: f32, eps: f32) -> bool {

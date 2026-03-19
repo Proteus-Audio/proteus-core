@@ -16,6 +16,10 @@ pub mod dsp;
 pub(crate) mod logging;
 pub mod peaks;
 pub mod playback;
-pub mod test_data;
+#[cfg(test)]
+mod test_data;
 pub mod tools;
 mod track;
+
+#[cfg(test)]
+mod tests;

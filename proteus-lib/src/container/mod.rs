@@ -3,3 +3,4 @@
 pub mod info;
 pub mod play_settings;
 pub mod prot;
+pub(crate) mod prot_settings;

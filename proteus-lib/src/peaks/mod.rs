@@ -9,15 +9,20 @@ pub use error::PeaksError;
 /// A single peak window with maximum and minimum sample amplitude.
 #[derive(Debug, Clone, Copy)]
 pub struct PeakWindow {
+    /// Maximum sample amplitude within the window (positive peak).
     pub max: f32,
+    /// Minimum sample amplitude within the window (negative peak).
     pub min: f32,
 }
 
 /// Peak data for all channels at a fixed window size.
 #[derive(Debug, Clone)]
 pub struct PeaksData {
+    /// Sample rate of the source audio, in Hz.
     pub sample_rate: u32,
+    /// Number of source samples represented by each [`PeakWindow`].
     pub window_size: u32,
+    /// Per-channel vectors of peak windows in temporal order.
     pub channels: Vec<Vec<PeakWindow>>,
 }
 
@@ -122,4 +127,21 @@ pub fn get_peaks_in_range(
 /// Returns an error if decoding fails.
 pub fn extract_peaks_from_audio(file_path: &str, limited: bool) -> Result<PeaksData, PeaksError> {
     extract::extract_peaks_from_audio(file_path, limited)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn get_peaks_in_range_builds_range_options() {
+        let result = get_peaks_in_range("/definitely/missing.peaks", 1.0, 2.0);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn get_all_peaks_uses_default_options() {
+        let result = get_all_peaks("/definitely/missing.peaks");
+        assert!(result.is_err());
+    }
 }
