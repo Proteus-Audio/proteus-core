@@ -1,12 +1,14 @@
 //! Public metering and analysis types for DSP inspection features.
 
+use serde::{Deserialize, Serialize};
+
 #[cfg(feature = "effect-meter")]
 pub(crate) mod frequency_response;
 pub mod level;
 pub(crate) mod spectral;
 
 /// Per-channel time-domain level measurements.
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct LevelSnapshot {
     /// Peak absolute value for each channel.
     pub peak: Vec<f32>,
@@ -15,7 +17,7 @@ pub struct LevelSnapshot {
 }
 
 /// Input/output level measurements captured around a single effect slot.
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct EffectLevelSnapshot {
     /// Levels measured immediately before the effect.
     pub input: LevelSnapshot,
@@ -24,7 +26,7 @@ pub struct EffectLevelSnapshot {
 }
 
 /// A single point on an analytical frequency-response curve.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct FrequencyResponsePoint {
     /// Probe frequency in Hz.
     pub freq_hz: f32,
@@ -33,7 +35,7 @@ pub struct FrequencyResponsePoint {
 }
 
 /// Analytical frequency response for a filter-like effect.
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct FilterResponseCurve {
     /// Composite response across all configured sections.
     pub composite: Vec<FrequencyResponsePoint>,
@@ -44,7 +46,7 @@ pub struct FilterResponseCurve {
 }
 
 /// Spectral energy values for a single measurement direction.
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct BandLevels {
     /// Energy per analysis bucket in dB.
     pub bands_db: Vec<f32>,
@@ -53,7 +55,7 @@ pub struct BandLevels {
 }
 
 /// Spectral band levels measured before and after a filter effect.
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct EffectBandSnapshot {
     /// Spectral bucket levels measured before the effect.
     pub input: BandLevels,

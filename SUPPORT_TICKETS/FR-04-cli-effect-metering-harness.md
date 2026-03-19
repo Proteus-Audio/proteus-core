@@ -282,21 +282,21 @@ visualization, not a second interactive workstation UI.
 
 ## Acceptance Criteria
 
-- [ ] `proteus-cli` exposes a `meter` command for effect metering inspection
-- [ ] default CLI builds remain unchanged and do not enable the new command path
+- [x] `proteus-cli` exposes a `meter` command for effect metering inspection
+- [x] default CLI builds remain unchanged and do not enable the new command path
       by default
-- [ ] builds without `effect-meter-cli` fail gracefully with a clear message
-- [ ] `prot meter effects ... --format table` shows per-effect before/after
+- [x] builds without `effect-meter-cli` fail gracefully with a clear message
+- [x] `prot meter effects ... --format table` shows per-effect before/after
       input/output levels
-- [ ] `prot meter effects ... --format bars` provides a readable terminal
+- [x] `prot meter effects ... --format bars` provides a readable terminal
       visualization of effect-boundary changes
-- [ ] `prot meter effects ... --format json` emits a deterministic report
+- [x] `prot meter effects ... --format json` emits a deterministic report
       suitable for integration tests
-- [ ] the command can run without opening the normal playback UI or depending on
+- [x] the command can run without opening the normal playback UI or depending on
       a live audio device
-- [ ] `effect-meter-cli-spectral` optionally appends spectral bucket output for
+- [x] `effect-meter-cli-spectral` optionally appends spectral bucket output for
       supported filter effects
 
 ## Status
 
-Open.
+Done.
