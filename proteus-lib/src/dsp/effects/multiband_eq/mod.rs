@@ -12,6 +12,8 @@ use super::EffectContext;
 use crate::dsp::guardrails::{sanitize_channels, sanitize_finite_clamped, sanitize_freq};
 
 mod biquad;
+#[cfg(feature = "effect-meter")]
+mod response;
 
 use biquad::{EqPointParams, HighEdgeParams, LowEdgeParams, MultibandEqState};
 

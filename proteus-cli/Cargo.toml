@@ -35,6 +35,8 @@ debug = ["proteus-lib/debug"]
 real-fft = ["proteus-lib/real-fft"]
 complex-fft = ["proteus-lib/complex-fft"]
 output-meter = ["proteus-lib/output-meter"]
+effect-meter = ["proteus-lib/effect-meter"]
+effect-meter-spectral = ["proteus-lib/effect-meter-spectral"]
 
 [[bin]]
 name = "prot"

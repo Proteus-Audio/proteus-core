@@ -5,6 +5,7 @@ use std::sync::{Arc, Mutex};
 
 use crate::container::prot::Prot;
 use crate::dsp::effects::AudioEffect;
+use crate::playback::effect_meter::EffectMeter;
 
 use super::super::state::{DspChainMetrics, PlaybackBufferSettings};
 use super::super::{InlineEffectsUpdate, InlineTrackMixUpdate};
@@ -91,6 +92,7 @@ pub struct MixThreadArgs {
     pub effects: Arc<Mutex<Vec<AudioEffect>>>,
     pub dsp_metrics: Arc<Mutex<DspChainMetrics>>,
     pub effect_settings_commands: Arc<Mutex<Vec<EffectSettingsCommand>>>,
+    pub effect_meter: Arc<EffectMeter>,
 }
 
 /// Active in-progress inline effect transition state.

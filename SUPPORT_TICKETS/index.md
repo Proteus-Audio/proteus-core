@@ -8,7 +8,7 @@ in-place; larger items get a writeup here.
 
 | Done | ID    | Writeup                                                                    | Summary                                                                                                                         |
 | ---- | ----- | -------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
-| [ ]  | FR-01 | [FR-01-per-effect-level-metering.md](./FR-01-per-effect-level-metering.md) | Per-effect input/output level metering and per-band spectral analysis for GUI visualization, behind `effect-meter` feature flag |
+| [x]  | FR-01 | [FR-01-per-effect-level-metering.md](./FR-01-per-effect-level-metering.md) | Per-effect input/output level metering and per-band spectral analysis for GUI visualization, behind `effect-meter` feature flag |
 | [x]  | FR-02 | [FR-02-inline-effect-parameter-smoothing.md](./FR-02-inline-effect-parameter-smoothing.md) | Per-parameter smoothing (gain ramps, biquad coefficient interpolation, compressor envelope continuity) for click-free DAW-style live editing |
 | [x]  | FR-03 | [FR-03-bounded-live-effect-control-latency.md](./FR-03-bounded-live-effect-control-latency.md) | Bound audible live-edit latency with time-based sink budgeting, latency diagnostics, and smaller sink-facing output slices |
 

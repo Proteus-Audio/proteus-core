@@ -19,6 +19,7 @@ use super::super::decoder_events::DecodeWorkerEvent;
 use super::super::effects::EffectEnableFade;
 use super::super::types::{ActiveInlineTransition, EffectSettingsCommand, MixThreadArgs};
 use super::decode::DecodeWorkerJoinGuard;
+use super::effect_metering::MixEffectMeteringState;
 
 /// Precomputed mixing buffer sizes.
 pub(super) struct MixBufferSizes {
@@ -61,6 +62,7 @@ pub(super) struct MixLoopState {
     pub(super) active_inline_transition: Option<ActiveInlineTransition>,
     pub(super) pending_mix_samples: PremixBuffer,
     pub(super) effect_enable_fades: Vec<Option<EffectEnableFade>>,
+    pub(super) effect_metering: MixEffectMeteringState,
     pub(super) effect_scratch_a: Vec<f32>,
     pub(super) effect_scratch_b: Vec<f32>,
     pub(super) effect_drain_passes: usize,
@@ -104,6 +106,8 @@ impl MixLoopState {
         )
         .clone();
         let effect_count = local_effects.len();
+        let effect_metering =
+            MixEffectMeteringState::new(args.effect_meter, &local_effects, &effect_context);
         Self {
             abort: args.abort,
             packet_rx: decode_handle.packet_rx,
@@ -131,6 +135,7 @@ impl MixLoopState {
             active_inline_transition: None,
             pending_mix_samples: PremixBuffer::new(),
             effect_enable_fades: vec![None; effect_count],
+            effect_metering,
             effect_scratch_a: Vec::new(),
             effect_scratch_b: Vec::new(),
             effect_drain_passes: 0,

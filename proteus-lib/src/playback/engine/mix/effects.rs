@@ -2,6 +2,24 @@
 
 use crate::dsp::effects::{AudioEffect, EffectContext};
 
+pub(super) trait EffectChainObserver {
+    fn before_effect(
+        &mut self,
+        effect_index: usize,
+        effect: &AudioEffect,
+        input: &[f32],
+        channels: usize,
+    );
+
+    fn after_effect(
+        &mut self,
+        effect_index: usize,
+        effect: &AudioEffect,
+        output: &[f32],
+        channels: usize,
+    );
+}
+
 #[derive(Clone, Debug)]
 pub(super) struct EffectEnableFade {
     current_mix: f32,
@@ -84,19 +102,27 @@ pub(super) fn run_effect_chain(
     drain: bool,
     scratch_a: &mut Vec<f32>,
     scratch_b: &mut Vec<f32>,
+    observer: Option<&mut dyn EffectChainObserver>,
     enable_fades: Option<&mut [Option<EffectEnableFade>]>,
 ) {
     scratch_a.clear();
     scratch_a.extend_from_slice(input);
 
     let channels = context.channels().max(1);
+    let mut observer = observer;
     let mut enable_fades = enable_fades;
     for (index, effect) in effects.iter_mut().enumerate() {
+        if let Some(observer) = observer.as_deref_mut() {
+            observer.before_effect(index, effect, scratch_a, channels);
+        }
         if let Some(fades) = enable_fades.as_deref_mut() {
             if let Some(fade) = fades.get_mut(index).and_then(Option::as_mut) {
                 scratch_b.clear();
                 effect.process_into(scratch_a, scratch_b, context, drain);
                 crossfade_enabled_output(scratch_a, scratch_b, fade, channels);
+                if let Some(observer) = observer.as_deref_mut() {
+                    observer.after_effect(index, effect, scratch_a, channels);
+                }
 
                 if fade.is_complete() {
                     if !fade.target_enabled() {
@@ -112,6 +138,9 @@ pub(super) fn run_effect_chain(
         scratch_b.clear();
         effect.process_into(scratch_a, scratch_b, context, drain);
         std::mem::swap(scratch_a, scratch_b);
+        if let Some(observer) = observer.as_deref_mut() {
+            observer.after_effect(index, effect, scratch_a, channels);
+        }
     }
     // scratch_a holds the final processed output.
 }
@@ -196,6 +225,7 @@ mod tests {
             &mut scratch_a,
             &mut scratch_b,
             None,
+            None,
         );
         assert_eq!(scratch_a, input);
     }
@@ -218,6 +248,7 @@ mod tests {
             &mut scratch_a,
             &mut scratch_b,
             None,
+            None,
         );
         assert_eq!(scratch_a, vec![1.0_f32, -1.0]);
     }
@@ -236,6 +267,7 @@ mod tests {
             false,
             &mut scratch_a,
             &mut scratch_b,
+            None,
             None,
         );
         assert_eq!(scratch_a, input);
@@ -261,6 +293,7 @@ mod tests {
             false,
             &mut scratch_a,
             &mut scratch_b,
+            None,
             Some(&mut enable_fades),
         );
 
@@ -279,5 +312,72 @@ mod tests {
         assert!(largest_delta < 0.01);
         assert!(!audio_effect_enabled(&effects[0]));
         assert!(enable_fades[0].is_none());
+    }
+
+    #[test]
+    fn run_effect_chain_observer_does_not_change_audio_output() {
+        use crate::dsp::effects::{AudioEffect, GainEffect};
+
+        struct RecordingObserver {
+            visits: usize,
+        }
+
+        impl EffectChainObserver for RecordingObserver {
+            fn before_effect(
+                &mut self,
+                _effect_index: usize,
+                _effect: &AudioEffect,
+                _input: &[f32],
+                _channels: usize,
+            ) {
+                self.visits += 1;
+            }
+
+            fn after_effect(
+                &mut self,
+                _effect_index: usize,
+                _effect: &AudioEffect,
+                _output: &[f32],
+                _channels: usize,
+            ) {
+                self.visits += 1;
+            }
+        }
+
+        let mut gain = GainEffect::default();
+        gain.enabled = true;
+        gain.settings.gain = 2.0;
+        let input = vec![0.25_f32, -0.25, 0.5, -0.5];
+        let mut without_observer = vec![AudioEffect::Gain(gain.clone())];
+        let mut with_observer = vec![AudioEffect::Gain(gain)];
+        let mut expected_a = Vec::new();
+        let mut expected_b = Vec::new();
+        let mut observed_a = Vec::new();
+        let mut observed_b = Vec::new();
+        let mut observer = RecordingObserver { visits: 0 };
+
+        run_effect_chain(
+            &mut without_observer,
+            &input,
+            &context(),
+            false,
+            &mut expected_a,
+            &mut expected_b,
+            None,
+            None,
+        );
+        run_effect_chain(
+            &mut with_observer,
+            &input,
+            &context(),
+            false,
+            &mut observed_a,
+            &mut observed_b,
+            Some(&mut observer),
+            None,
+        );
+
+        assert_eq!(expected_a, observed_a);
+        assert_eq!(observer.visits, 2);
     }
 }

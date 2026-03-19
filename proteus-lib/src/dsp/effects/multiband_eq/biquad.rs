@@ -2,6 +2,9 @@
 
 use std::f32::consts::PI;
 
+#[cfg(feature = "effect-meter")]
+use crate::dsp::meter::frequency_response::magnitude_to_db;
+
 #[derive(Clone, Copy, Debug)]
 pub(super) struct EqPointParams {
     pub(super) freq_hz: u32,
@@ -367,6 +370,93 @@ fn coefficients(sample_rate: u32, design: BiquadDesign) -> BiquadCoefficients {
             gain_db,
         } => high_shelf_coefficients(sample_rate, freq_hz, q, gain_db),
     }
+}
+
+#[cfg(feature = "effect-meter")]
+pub(crate) fn peaking_response_db(
+    sample_rate: u32,
+    freq_hz: u32,
+    q: f32,
+    gain_db: f32,
+    probe_hz: f32,
+) -> f32 {
+    response_db(
+        sample_rate,
+        BiquadDesign::Peaking {
+            freq_hz,
+            q,
+            gain_db,
+        },
+        probe_hz,
+    )
+}
+
+#[cfg(feature = "effect-meter")]
+pub(crate) fn low_pass_response_db(sample_rate: u32, freq_hz: u32, q: f32, probe_hz: f32) -> f32 {
+    response_db(sample_rate, BiquadDesign::LowPass { freq_hz, q }, probe_hz)
+}
+
+#[cfg(feature = "effect-meter")]
+pub(crate) fn high_pass_response_db(sample_rate: u32, freq_hz: u32, q: f32, probe_hz: f32) -> f32 {
+    response_db(sample_rate, BiquadDesign::HighPass { freq_hz, q }, probe_hz)
+}
+
+#[cfg(feature = "effect-meter")]
+pub(crate) fn low_shelf_response_db(
+    sample_rate: u32,
+    freq_hz: u32,
+    q: f32,
+    gain_db: f32,
+    probe_hz: f32,
+) -> f32 {
+    response_db(
+        sample_rate,
+        BiquadDesign::LowShelf {
+            freq_hz,
+            q,
+            gain_db,
+        },
+        probe_hz,
+    )
+}
+
+#[cfg(feature = "effect-meter")]
+pub(crate) fn high_shelf_response_db(
+    sample_rate: u32,
+    freq_hz: u32,
+    q: f32,
+    gain_db: f32,
+    probe_hz: f32,
+) -> f32 {
+    response_db(
+        sample_rate,
+        BiquadDesign::HighShelf {
+            freq_hz,
+            q,
+            gain_db,
+        },
+        probe_hz,
+    )
+}
+
+#[cfg(feature = "effect-meter")]
+fn response_db(sample_rate: u32, design: BiquadDesign, probe_hz: f32) -> f32 {
+    let coeffs = coefficients(sample_rate, design);
+    let omega = 2.0 * PI * probe_hz.max(0.0) / sample_rate.max(1) as f32;
+    let cos_omega = omega.cos();
+    let sin_omega = omega.sin();
+    let cos_two_omega = (2.0 * omega).cos();
+    let sin_two_omega = (2.0 * omega).sin();
+
+    let numerator_re = coeffs.b0 + coeffs.b1 * cos_omega + coeffs.b2 * cos_two_omega;
+    let numerator_im = -(coeffs.b1 * sin_omega + coeffs.b2 * sin_two_omega);
+    let denominator_re = 1.0 + coeffs.a1 * cos_omega + coeffs.a2 * cos_two_omega;
+    let denominator_im = -(coeffs.a1 * sin_omega + coeffs.a2 * sin_two_omega);
+
+    let numerator_mag_sq = (numerator_re * numerator_re) + (numerator_im * numerator_im);
+    let denominator_mag_sq = (denominator_re * denominator_re) + (denominator_im * denominator_im);
+    let magnitude = (numerator_mag_sq / denominator_mag_sq.max(f32::EPSILON)).sqrt();
+    magnitude_to_db(magnitude)
 }
 
 fn peaking_coefficients(

@@ -2,4 +2,5 @@
 
 pub mod effects;
 pub mod guardrails;
+pub mod meter;
 pub mod utils;

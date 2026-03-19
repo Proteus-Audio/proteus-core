@@ -556,38 +556,38 @@ During a full-chain inline transition:
 
 ### Tier 1
 
-- [ ] `effect-meter` is off by default
-- [ ] public metering types and `Player` methods remain available when the feature is off
-- [ ] `effect_levels()` returns `None` when the feature is not compiled or runtime metering is disabled
-- [ ] runtime level metering is disabled by default
-- [ ] enabling runtime level metering adds no steady-state allocations and no blocking on the mix thread
-- [ ] refresh cadence is based on sample frames, not chunk count
-- [ ] enable-fade output metering reflects the crossfaded signal actually heard
-- [ ] full-chain inline transitions freeze the last stable snapshot instead of publishing ambiguous data
-- [ ] unit tests verify `measure_peak_rms()` with known signals
-- [ ] existing playback tests still pass and metering does not alter audio output
+- [x] `effect-meter` is off by default
+- [x] public metering types and `Player` methods remain available when the feature is off
+- [x] `effect_levels()` returns `None` when the feature is not compiled or runtime metering is disabled
+- [x] runtime level metering is disabled by default
+- [x] enabling runtime level metering adds no steady-state allocations and no blocking on the mix thread
+- [x] refresh cadence is based on sample frames, not chunk count
+- [x] enable-fade output metering reflects the crossfaded signal actually heard
+- [x] full-chain inline transitions freeze the last stable snapshot instead of publishing ambiguous data
+- [x] unit tests verify `measure_peak_rms()` with known signals
+- [x] existing playback tests still pass and metering does not alter audio output
 
 ### Tier 2
 
-- [ ] analytical curves are available for LPF, HPF, and multiband EQ
-- [ ] multiband EQ exposes both composite and per-section curves
-- [ ] response computation reads from effect settings, not mutable DSP state
-- [ ] on-demand queries add no mix-thread work
-- [ ] unit tests verify known response points (for example LPF at cutoff is near -3 dB for Butterworth-like settings)
+- [x] analytical curves are available for LPF, HPF, and multiband EQ
+- [x] multiband EQ exposes both composite and per-section curves
+- [x] response computation reads from effect settings, not mutable DSP state
+- [x] on-demand queries add no mix-thread work
+- [x] unit tests verify known response points (for example LPF at cutoff is near -3 dB for Butterworth-like settings)
 
 ### Tier 3
 
-- [ ] `effect-meter-spectral` is off by default
-- [ ] runtime spectral analysis is disabled by default
-- [ ] when runtime spectral analysis is off, no spectral accumulation or FFT work is performed
-- [ ] low-pass and high-pass spectral buckets split at cutoff frequency
-- [ ] multiband EQ spectral buckets are documented as control-aligned analysis buckets, not exact per-filter isolation
-- [ ] full-chain inline transitions freeze the last stable spectral snapshot
-- [ ] FFT plans are reused across refreshes
-- [ ] unit tests verify bucket energy with known single-tone inputs
+- [x] `effect-meter-spectral` is off by default
+- [x] runtime spectral analysis is disabled by default
+- [x] when runtime spectral analysis is off, no spectral accumulation or FFT work is performed
+- [x] low-pass and high-pass spectral buckets split at cutoff frequency
+- [x] multiband EQ spectral buckets are documented as control-aligned analysis buckets, not exact per-filter isolation
+- [x] full-chain inline transitions freeze the last stable spectral snapshot
+- [x] FFT plans are reused across refreshes
+- [x] unit tests verify bucket energy with known single-tone inputs
 
 ---
 
 ## Status
 
-Open.
+Done.

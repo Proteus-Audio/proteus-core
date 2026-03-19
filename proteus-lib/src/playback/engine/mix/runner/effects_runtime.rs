@@ -98,6 +98,7 @@ fn process_effects(samples: &[f32], state: &mut MixLoopState) {
             &mut state.effect_scratch_a,
             &mut state.effect_scratch_b,
             None,
+            None,
         );
         // During a transition we need both outputs simultaneously, so we save
         // old_out in a temporary Vec. Transitions are non-steady-state so this
@@ -112,6 +113,7 @@ fn process_effects(samples: &[f32], state: &mut MixLoopState) {
             false,
             &mut state.effect_scratch_a,
             &mut state.effect_scratch_b,
+            None,
             None,
         );
 
@@ -137,6 +139,15 @@ fn process_effects(samples: &[f32], state: &mut MixLoopState) {
             .remaining_samples
             .saturating_sub(samples.len().max(1));
     } else {
+        let frames = samples.len() / state.effect_context.channels().max(1);
+        let mut metering = state.effect_metering.prepare_chunk(
+            &state.local_effects,
+            &state.effect_context,
+            frames,
+        );
+        let observer = metering
+            .as_mut()
+            .map(|metering| metering as &mut dyn super::super::effects::EffectChainObserver);
         // DSP runs on the mix-thread-owned local chain — no mutex held.
         run_effect_chain(
             &mut state.local_effects,
@@ -145,8 +156,12 @@ fn process_effects(samples: &[f32], state: &mut MixLoopState) {
             false,
             &mut state.effect_scratch_a,
             &mut state.effect_scratch_b,
+            observer,
             Some(&mut state.effect_enable_fades),
         );
+        if let Some(metering) = metering {
+            metering.finish(&state.local_effects);
+        }
     }
 
     // Finalize transition: adopt new effects as the local chain and sync shared.
@@ -160,6 +175,11 @@ fn process_effects(samples: &[f32], state: &mut MixLoopState) {
             *state.lock_effects_recoverable() = completed.clone();
             state.local_effects = completed;
             state.effect_enable_fades = vec![None; state.local_effects.len()];
+            state.effect_metering.reset_for_chain(
+                &state.local_effects,
+                &state.effect_context,
+                true,
+            );
         }
     }
 }
@@ -279,6 +299,9 @@ pub(super) fn apply_effect_runtime_updates(state: &mut MixLoopState) {
         state.lock_inline_effects_update_recoverable().take();
         state.effect_context = rebuild_effect_context(&state.prot, &state.buffer_settings);
         state.last_effects_reset = current_reset;
+        state
+            .effect_metering
+            .reset_for_chain(&state.local_effects, &state.effect_context, true);
     }
 
     let pending_update = {
@@ -299,6 +322,11 @@ pub(super) fn apply_effect_runtime_updates(state: &mut MixLoopState) {
             *state.lock_effects_recoverable() = state.local_effects.clone();
             state.effect_enable_fades = vec![None; state.local_effects.len()];
             state.active_inline_transition = None;
+            state.effect_metering.reset_for_chain(
+                &state.local_effects,
+                &state.effect_context,
+                true,
+            );
         } else {
             // Crossfade transition: snapshot local chain as old, warm up new.
             let old_effects = state.local_effects.clone();
@@ -328,6 +356,7 @@ fn drain_effect_chains(state: &mut MixLoopState) {
             &mut state.effect_scratch_a,
             &mut state.effect_scratch_b,
             None,
+            None,
         );
         let old_out: Vec<f32> = state.effect_scratch_a.clone();
 
@@ -338,6 +367,7 @@ fn drain_effect_chains(state: &mut MixLoopState) {
             true,
             &mut state.effect_scratch_a,
             &mut state.effect_scratch_b,
+            None,
             None,
         );
 
@@ -360,6 +390,7 @@ fn drain_effect_chains(state: &mut MixLoopState) {
             true,
             &mut state.effect_scratch_a,
             &mut state.effect_scratch_b,
+            None,
             Some(&mut state.effect_enable_fades),
         );
     }
