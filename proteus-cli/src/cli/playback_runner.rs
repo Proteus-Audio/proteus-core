@@ -71,6 +71,7 @@ pub(crate) fn run_playback(
             }
         }
     }
+    configure_live_effect_metering(&player);
 
     player.play();
     player.set_volume(session.gain / 100.0);
@@ -195,6 +196,8 @@ fn draw_status_frame(
     let duration = player.get_duration();
     let playing = player.is_playing();
     let effect_names = player.get_effect_names();
+    #[cfg(feature = "effect-meter-cli")]
+    let effect_levels = player.effect_levels();
     #[cfg(feature = "output-meter")]
     let levels = player.get_levels();
     #[cfg(not(feature = "output-meter"))]
@@ -216,7 +219,7 @@ fn draw_status_frame(
         time,
         duration,
         playing,
-        effects: effect_names,
+        effects: effect_names.clone(),
         #[cfg(feature = "debug")]
         sample_rate: player.audio_info().sample_rate,
         #[cfg(feature = "debug")]
@@ -266,7 +269,18 @@ fn draw_status_frame(
         #[cfg(feature = "debug")]
         sink_len,
     });
-    ui::draw_status(terminal, &status, &log_lines, &levels, &levels_db);
+    ui::draw_status(
+        terminal,
+        &status,
+        &log_lines,
+        &levels,
+        &levels_db,
+        &effect_names,
+        #[cfg(feature = "effect-meter-cli")]
+        effect_levels.as_deref(),
+        #[cfg(not(feature = "effect-meter-cli"))]
+        None,
+    );
 }
 
 fn arg_f32(args: &ArgMatches, key: &str) -> f32 {
@@ -292,6 +306,17 @@ fn configure_player(args: &ArgMatches, player: &mut player::Player) {
     player.set_track_eos_ms(arg_f32(args, "track-eos-ms"));
 }
 
+fn configure_live_effect_metering(player: &player::Player) {
+    #[cfg(feature = "effect-meter-cli")]
+    {
+        player.set_effect_level_meter_refresh_hz(20.0);
+        player.set_effect_level_metering_enabled(true);
+    }
+
+    #[cfg(not(feature = "effect-meter-cli"))]
+    let _ = player;
+}
+
 struct RawModeGuard;
 
 impl RawModeGuard {
@@ -309,6 +334,9 @@ impl Drop for RawModeGuard {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(feature = "effect-meter-cli")]
+    use proteus_lib::playback::player::Player;
+
     #[test]
     fn maybe_print_durations_returns_none_without_duration_flags() {
         let args = clap::Command::new("prot")
@@ -337,5 +365,16 @@ mod tests {
 
         let code = super::run_playback(&args, logs).expect("runner should return result");
         assert_eq!(code, -1);
+    }
+
+    #[cfg(feature = "effect-meter-cli")]
+    #[test]
+    fn configure_live_effect_metering_enables_runtime_snapshots() {
+        let player =
+            Player::new_from_file_paths(vec![super::PathsTrack::new_from_file_paths(vec![
+                "/tmp/nonexistent.wav".to_string(),
+            ])]);
+        super::configure_live_effect_metering(&player);
+        assert!(player.effect_levels().is_some());
     }
 }

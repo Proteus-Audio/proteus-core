@@ -1,9 +1,9 @@
 # Effects Metering CLI Guide
 
-This guide covers the offline effect-metering command added to `proteus-cli`.
+This guide covers both effect-metering paths added to `proteus-cli`:
 
-The command runs audio through an effects chain without opening the normal
-playback UI, then reports per-effect **before/after** metering.
+- live per-effect meters during normal playback
+- the offline `meter effects` command for deterministic inspection and JSON output
 
 ## Features
 
@@ -27,7 +27,44 @@ If you run the command without the required feature, the CLI exits with:
 Effect metering requires the `effect-meter-cli` feature.
 ```
 
-## Command Shape
+## Live Playback
+
+When built with `effect-meter-cli`, the normal playback TUI now adds an
+`Effect Meters` pane under the playback status block.
+
+Example:
+
+```bash
+cargo run -p proteus-cli --features effect-meter-cli -- \
+  test_audio/test-16bit.wav \
+  --effects-json gain.json
+```
+
+This works on the same playback paths the CLI already supports:
+
+- normal audio files
+- `.prot` / `.mka` containers
+- directory-backed sessions
+
+The live pane shows one row per effect in the current chain, using the runtime
+`Player::effect_levels()` snapshots gathered during playback.
+
+Typical shape:
+
+```text
+[0] Gain           in [##      ] -14.5  out [####    ]  -8.5  d +6.0
+[1] LowPassFilter  in [####    ]  -8.5  out [###     ] -11.2  d -2.7
+```
+
+Use the normal playback controls as usual:
+
+- `space` play/pause
+- `s` shuffle
+- `←/→` seek
+- `r`, `-`, `=` for reverb controls
+- `q` quit
+
+## Offline Command Shape
 
 ```bash
 prot meter effects <INPUT> \

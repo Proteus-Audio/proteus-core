@@ -1,4 +1,4 @@
-# FR-04: CLI Effect Metering Harness and Before/After Visualization
+# FR-04: CLI Effect Metering Harness and Live Playback Visualization
 
 ## Summary
 
@@ -9,16 +9,19 @@ analysis. That work is still difficult to exercise outside an embedding app:
 through an effects chain for inspection, or visualize the per-effect
 before/after snapshots.
 
-Add an opt-in CLI metering harness for testing and debugging that can:
+Add an opt-in CLI metering surface for testing and debugging that can:
 
 1. run an input through a configured effects chain without requiring normal
    interactive playback
 2. enable FR-01 metering at runtime from the CLI
 3. render each effect's **input vs output** levels in a human-readable
-   before/after view
+   before/after view in an offline report
 4. emit machine-readable JSON so integration tests can assert on the meter
    output
 5. optionally expose FR-01 spectral snapshots under a second CLI feature flag
+6. render one live meter row per effect during the normal playback TUI, using
+   the same player/runtime path as every playback format the CLI already
+   supports
 
 The default CLI build and default playback UX should remain unchanged.
 
@@ -39,11 +42,13 @@ The library already exposes the core inspection surface in
 The CLI does not currently make practical use of those APIs:
 
 - [`proteus-cli/src/cli/playback_runner.rs`](../proteus-cli/src/cli/playback_runner.rs)
-  only shows the final output meter
+  only shows the final output meter during normal playback
 - [`proteus-cli/src/cli/verify.rs`](../proteus-cli/src/cli/verify.rs) only
   probes/decodes packets and never runs the DSP chain
 - there is no deterministic, no-audio-device path for capturing per-effect
   meter output
+- there is no live per-effect view in the normal playback UI even though the
+  runtime player already exposes `effect_levels()`
 - there is no test-friendly JSON report for asserting that an effect actually
   boosts, attenuates, or reshapes the signal as expected
 
@@ -151,7 +156,30 @@ Recommended v1 behavior:
 This matters for testing: a metering command should not depend on a live audio
 device, wall-clock timing, or manual key input.
 
-### C. Use FR-01's existing boundary semantics directly
+### C. Enable effect metering during normal playback
+
+The offline command is useful for deterministic testing, but the more important
+CLI path is the normal playback session:
+
+```text
+prot <INPUT> [--effects-json <PATH>]
+```
+
+When built with `effect-meter-cli`, the playback runner should:
+
+- enable `Player::set_effect_level_metering_enabled(true)` before playback
+- poll `effect_levels()` during the existing TUI draw loop
+- render one live meter row per effect in the active chain
+- keep working for every playback format the CLI already supports:
+  - standalone audio files
+  - `.prot` / `.mka` containers
+  - directory-backed sessions
+
+The normal playback UI already has the final output meter. This FR extends that
+surface with a dedicated per-effect pane, rather than forcing users into the
+offline command whenever they want to inspect the live chain.
+
+### D. Use FR-01's existing boundary semantics directly
 
 For the CLI, "before/after metering of effects" should map directly to the
 existing FR-01 data model:
@@ -181,7 +209,7 @@ out: L [##########  ] -12.2 dBFS | R [##########  ] -12.1 dBFS
 The key requirement is that the CLI view makes the effect boundary obvious:
 what went in, what came out, and how much it changed.
 
-### D. Add a deterministic report path for tests
+### E. Add a deterministic report path for tests
 
 The live `Player::effect_levels()` API stores the latest decimated snapshot,
 which is fine for UI polling but too timing-sensitive for stable CLI tests.
@@ -214,7 +242,7 @@ Recommended summary modes:
 `--format json` should emit this report shape so CLI integration tests can
 assert on real metering behavior without scraping text output.
 
-### E. Build the CLI on a small library-side offline helper
+### F. Build the CLI on a small library-side offline helper
 
 `verify.rs` is too low-level for this because it only decodes packets and never
 runs the Proteus DSP chain. The CLI should instead call a small library helper
@@ -235,7 +263,7 @@ That helper should:
 This keeps the CLI thin and also makes the test surface reusable outside the
 binary if needed.
 
-### F. Optional spectral extension under the second feature flag
+### G. Optional spectral extension under the second feature flag
 
 When built with `effect-meter-cli-spectral`, `prot meter effects --spectral`
 should additionally expose the FR-01 spectral snapshots for supported filter
@@ -250,7 +278,7 @@ Recommended v1 output:
 This should stay opt-in because the spectral path is materially more expensive
 and depends on the FFT-enabled feature stack.
 
-### G. Keep the initial scope bounded
+### H. Keep the initial scope bounded
 
 This FR should not require a full redesign of the normal playback TUI.
 
@@ -296,6 +324,11 @@ visualization, not a second interactive workstation UI.
       a live audio device
 - [x] `effect-meter-cli-spectral` optionally appends spectral bucket output for
       supported filter effects
+- [x] normal playback (`prot <INPUT>`) enables live per-effect meters in the
+      TUI when built with `effect-meter-cli`
+- [x] the live per-effect meter pane uses the same playback path and therefore
+      works across the file, container, and directory-backed input modes the
+      player already supports
 
 ## Status
 

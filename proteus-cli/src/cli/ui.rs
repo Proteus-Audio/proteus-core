@@ -12,6 +12,7 @@ use ratatui::{
 use super::controls::StatusSnapshot;
 use crate::logging::{LogKind, LogLine};
 use proteus_lib::container::info::Info;
+use proteus_lib::dsp::meter::EffectLevelSnapshot;
 
 fn title_banner() -> &'static str {
     "Proteus Audio"
@@ -31,6 +32,17 @@ fn levels_widget(text: Text<'static>) -> Paragraph<'static> {
     Paragraph::new(text)
         .style(Style::default().fg(Color::Cyan))
         .block(Block::default().borders(Borders::ALL).title("Levels"))
+}
+
+#[cfg(feature = "effect-meter-cli")]
+fn effect_levels_widget(text: Text<'static>) -> Paragraph<'static> {
+    Paragraph::new(text)
+        .style(Style::default().fg(Color::Yellow))
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title("Effect Meters"),
+        )
 }
 
 fn log_text(log_lines: &[LogLine], log_height: usize) -> Text<'_> {
@@ -65,10 +77,18 @@ pub fn draw_status(
     log_lines: &[LogLine],
     levels: &[f32],
     levels_db: &[f32],
+    effect_names: &[String],
+    effect_levels: Option<&[EffectLevelSnapshot]>,
 ) {
+    #[cfg(not(feature = "effect-meter-cli"))]
+    {
+        let _ = effect_names;
+        let _ = effect_levels;
+    }
+
     // Render the controls + status panels.
     let _ = terminal.draw(|f| {
-        let status_height = {
+        let base_status_height = {
             #[cfg(feature = "debug")]
             {
                 16
@@ -78,6 +98,12 @@ pub fn draw_status(
                 4
             }
         };
+        #[cfg(feature = "effect-meter-cli")]
+        let effect_meter_height =
+            effect_meter_panel_height(effect_names, effect_levels, f.size().width);
+        #[cfg(not(feature = "effect-meter-cli"))]
+        let effect_meter_height = 0;
+        let status_height = base_status_height + effect_meter_height;
         let title_text = format!("{}\nv{}", title_banner(), env!("CARGO_PKG_VERSION"));
         let title_height = title_text.lines().count().max(1) as u16;
 
@@ -103,18 +129,33 @@ pub fn draw_status(
         f.render_widget(controls, chunks[1]);
 
         let status_area = chunks[2];
+        #[cfg(feature = "effect-meter-cli")]
+        let (playback_area, effect_meter_area) = if effect_meter_height > 0 {
+            let parts = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([
+                    Constraint::Length(base_status_height),
+                    Constraint::Min(effect_meter_height),
+                ])
+                .split(status_area);
+            (parts[0], Some(parts[1]))
+        } else {
+            (status_area, None)
+        };
+        #[cfg(not(feature = "effect-meter-cli"))]
+        let playback_area = status_area;
         #[cfg(feature = "output-meter")]
         {
-            let meter_mode = pick_meter_mode(status_area.width, status_area.height);
+            let meter_mode = pick_meter_mode(playback_area.width, playback_area.height);
             match meter_mode {
                 MeterMode::Hidden => {
-                    f.render_widget(playback_widget(status.text.as_str()), status_area);
+                    f.render_widget(playback_widget(status.text.as_str()), playback_area);
                 }
                 MeterMode::Vertical => {
                     let cols = Layout::default()
                         .direction(Direction::Horizontal)
                         .constraints([Constraint::Min(0), Constraint::Length(10)])
-                        .split(status_area);
+                        .split(playback_area);
 
                     f.render_widget(playback_widget(status.text.as_str()), cols[0]);
 
@@ -126,7 +167,7 @@ pub fn draw_status(
                     let rows = Layout::default()
                         .direction(Direction::Vertical)
                         .constraints([Constraint::Min(0), Constraint::Length(4)])
-                        .split(status_area);
+                        .split(playback_area);
 
                     f.render_widget(playback_widget(status.text.as_str()), rows[0]);
 
@@ -140,7 +181,16 @@ pub fn draw_status(
         {
             let _ = levels;
             let _ = levels_db;
-            f.render_widget(playback_widget(status.text.as_str()), status_area);
+            let _ = effect_names;
+            let _ = effect_levels;
+            f.render_widget(playback_widget(status.text.as_str()), playback_area);
+        }
+
+        #[cfg(feature = "effect-meter-cli")]
+        if let Some(effect_meter_area) = effect_meter_area {
+            let meter_text =
+                effect_meter_text(effect_names, effect_levels, effect_meter_area.width);
+            f.render_widget(effect_levels_widget(meter_text), effect_meter_area);
         }
 
         let log_height = chunks[3].height.saturating_sub(2) as usize;
@@ -150,6 +200,83 @@ pub fn draw_status(
             Paragraph::new(log_text).block(Block::default().borders(Borders::ALL).title("Logs"));
         f.render_widget(log_widget, chunks[3]);
     });
+}
+
+#[cfg(feature = "effect-meter-cli")]
+fn effect_meter_panel_height(
+    effect_names: &[String],
+    effect_levels: Option<&[EffectLevelSnapshot]>,
+    width: u16,
+) -> u16 {
+    if width < 48 {
+        return 0;
+    }
+    let rows = effect_names
+        .len()
+        .max(effect_levels.map_or(0, <[EffectLevelSnapshot]>::len));
+    if rows == 0 {
+        0
+    } else {
+        rows.min(6) as u16 + 2
+    }
+}
+
+#[cfg(feature = "effect-meter-cli")]
+fn effect_meter_text(
+    effect_names: &[String],
+    effect_levels: Option<&[EffectLevelSnapshot]>,
+    width: u16,
+) -> Text<'static> {
+    let Some(effect_levels) = effect_levels else {
+        if effect_names.is_empty() {
+            return Text::from(Line::from("No effects configured."));
+        }
+        return Text::from(Line::from("Effect metering is warming up..."));
+    };
+
+    if effect_levels.is_empty() && effect_names.is_empty() {
+        return Text::from(Line::from("No effects configured."));
+    }
+
+    let line_width = width.saturating_sub(2) as usize;
+    let bar_width = if line_width >= 88 {
+        10
+    } else if line_width >= 72 {
+        8
+    } else {
+        6
+    };
+    let rows = effect_names.len().max(effect_levels.len()).min(6);
+    let mut lines = Vec::with_capacity(rows + 1);
+    for index in 0..rows {
+        let name = effect_names
+            .get(index)
+            .map(String::as_str)
+            .unwrap_or("Effect");
+        let snapshot = effect_levels
+            .get(index)
+            .cloned()
+            .unwrap_or_else(EffectLevelSnapshot::default);
+        let input_peak = max_level(&snapshot.input.peak);
+        let output_peak = max_level(&snapshot.output.peak);
+        lines.push(Line::from(format!(
+            "[{index}] {:<14} in [{}] {:>5}  out [{}] {:>5}  d {}",
+            truncate_ascii(name, 14),
+            render_bar(input_peak, bar_width),
+            format_db(linear_to_db(input_peak)),
+            render_bar(output_peak, bar_width),
+            format_db(linear_to_db(output_peak)),
+            format_delta_db(linear_to_db(input_peak), linear_to_db(output_peak)),
+        )));
+    }
+    let hidden = effect_names
+        .len()
+        .max(effect_levels.len())
+        .saturating_sub(rows);
+    if hidden > 0 {
+        lines.push(Line::from(format!("... {} more effect(s)", hidden)));
+    }
+    Text::from(lines)
 }
 
 #[cfg(feature = "output-meter")]
@@ -232,7 +359,7 @@ fn horizontal_meter_text(levels: &[f32], levels_db: &[f32], width: u16) -> Text<
     Text::from(lines)
 }
 
-#[cfg(feature = "output-meter")]
+#[cfg(any(feature = "output-meter", feature = "effect-meter-cli"))]
 fn render_bar(level: f32, width: usize) -> String {
     let clamped = level.clamp(0.0, 1.0);
     let filled = (clamped * width as f32).round() as usize;
@@ -241,6 +368,15 @@ fn render_bar(level: f32, width: usize) -> String {
         out.push(if i < filled { '#' } else { ' ' });
     }
     out
+}
+
+#[cfg(feature = "effect-meter-cli")]
+fn max_level(levels: &[f32]) -> f32 {
+    levels
+        .iter()
+        .copied()
+        .max_by(|left, right| left.total_cmp(right))
+        .unwrap_or(0.0)
 }
 
 #[cfg(feature = "output-meter")]
@@ -303,12 +439,43 @@ fn pick_levels_db(levels: &[f32]) -> LevelDbDisplay {
     }
 }
 
-#[cfg(feature = "output-meter")]
+#[cfg(any(feature = "output-meter", feature = "effect-meter-cli"))]
 fn format_db(value: f32) -> String {
     if value.is_infinite() && value.is_sign_negative() {
         "-inf".to_string()
     } else {
         format!("{value:>5.1}")
+    }
+}
+
+#[cfg(feature = "effect-meter-cli")]
+fn linear_to_db(value: f32) -> f32 {
+    if value <= 0.0 {
+        f32::NEG_INFINITY
+    } else {
+        20.0 * value.log10()
+    }
+}
+
+#[cfg(feature = "effect-meter-cli")]
+fn format_delta_db(before: f32, after: f32) -> String {
+    if before.is_finite() && after.is_finite() {
+        format!("{:+4.1}", after - before)
+    } else {
+        "n/a".to_string()
+    }
+}
+
+#[cfg(feature = "effect-meter-cli")]
+fn truncate_ascii(value: &str, width: usize) -> String {
+    if value.chars().count() <= width {
+        value.to_string()
+    } else {
+        value
+            .chars()
+            .take(width.saturating_sub(3))
+            .collect::<String>()
+            + "..."
     }
 }
 
@@ -379,6 +546,8 @@ pub fn draw_info(
 #[cfg(test)]
 mod tests {
     use super::title_banner;
+    #[cfg(feature = "effect-meter-cli")]
+    use super::{effect_meter_text, EffectLevelSnapshot};
     #[cfg(feature = "output-meter")]
     use super::{format_db, render_bar};
 
@@ -398,5 +567,51 @@ mod tests {
     #[test]
     fn format_db_handles_negative_infinity() {
         assert_eq!(format_db(f32::NEG_INFINITY), "-inf");
+    }
+
+    #[cfg(feature = "effect-meter-cli")]
+    #[test]
+    fn effect_meter_text_includes_effect_names_and_before_after_levels() {
+        let names = vec!["Gain".to_string(), "LowPassFilter".to_string()];
+        let snapshots = vec![
+            EffectLevelSnapshot {
+                input: proteus_lib::dsp::meter::LevelSnapshot {
+                    peak: vec![0.25, 0.2],
+                    rms: vec![0.1, 0.1],
+                },
+                output: proteus_lib::dsp::meter::LevelSnapshot {
+                    peak: vec![0.5, 0.4],
+                    rms: vec![0.2, 0.2],
+                },
+            },
+            EffectLevelSnapshot {
+                input: proteus_lib::dsp::meter::LevelSnapshot {
+                    peak: vec![0.5, 0.4],
+                    rms: vec![0.2, 0.2],
+                },
+                output: proteus_lib::dsp::meter::LevelSnapshot {
+                    peak: vec![0.2, 0.15],
+                    rms: vec![0.1, 0.1],
+                },
+            },
+        ];
+
+        let text = effect_meter_text(&names, Some(&snapshots), 100);
+        let rendered = text
+            .lines
+            .into_iter()
+            .map(|line| {
+                line.spans
+                    .into_iter()
+                    .map(|span| span.content.to_string())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(rendered.contains("[0] Gain"));
+        assert!(rendered.contains("[1] LowPassFilter"));
+        assert!(rendered.contains("in ["));
+        assert!(rendered.contains("out ["));
     }
 }
