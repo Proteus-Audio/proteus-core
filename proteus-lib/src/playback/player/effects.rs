@@ -303,7 +303,11 @@ impl Player {
         let mut guard = self.lock_effects_recoverable();
         let normalized = normalize_legacy_effect_aliases(effects);
         log::info!("updated effects chain: {} effect(s)", normalized.len());
+        let effect_count = normalized.len();
         *guard = normalized;
+        self.effect_meter
+            .set_level_layout_zeroed(effect_count, self.info.channels as usize);
+        self.effect_meter.set_spectral_layout_zeroed(effect_count);
     }
 }
 

@@ -52,7 +52,7 @@ impl PlaybackBufferSettings {
             start_buffer_ms: start_buffer_ms.max(0.0),
             track_eos_ms: 1000.0,
             start_sink_chunks: 0,
-            max_sink_chunks: 0,
+            max_sink_chunks: 40,
             startup_silence_ms: 0.0,
             startup_fade_ms: 150.0,
             seek_fade_out_ms: 30.0,

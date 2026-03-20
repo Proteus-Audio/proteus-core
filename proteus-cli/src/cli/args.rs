@@ -178,6 +178,58 @@ fn build_create_subcommand() -> Command {
         )
 }
 
+fn build_meter_subcommand() -> Command {
+    Command::new("meter")
+        .about("Offline DSP metering and effect-chain inspection")
+        .subcommand(with_input_arg(
+            Command::new("effects")
+                .about("Run an input through the effects chain and print before/after metering")
+                .arg(
+                    Arg::new("effects-json")
+                        .long("effects-json")
+                        .short('E')
+                        .alias("effects")
+                        .value_name("PATH")
+                        .help("Path to JSON file containing Vec<AudioEffect>"),
+                )
+                .arg(
+                    Arg::new("seek")
+                        .long("seek")
+                        .short('s')
+                        .value_name("TIME")
+                        .default_value("0")
+                        .help("Seek to the given time in seconds before metering"),
+                )
+                .arg(
+                    Arg::new("duration")
+                        .long("duration")
+                        .value_name("SECONDS")
+                        .help("Only meter this many seconds after the seek point"),
+                )
+                .arg(
+                    Arg::new("format")
+                        .long("format")
+                        .value_name("FORMAT")
+                        .default_value("table")
+                        .help("Output format: table, bars, or json"),
+                )
+                .arg(
+                    Arg::new("summary")
+                        .long("summary")
+                        .value_name("MODE")
+                        .default_value("max")
+                        .help("Summary mode: final or max"),
+                )
+                .arg(
+                    Arg::new("spectral")
+                        .long("spectral")
+                        .action(ArgAction::SetTrue)
+                        .help("Append spectral buckets for supported filter effects"),
+                ),
+            true,
+        ))
+}
+
 /// Build the CLI argument parser and command definitions.
 pub fn build_cli() -> Command {
     // Compose root args and subcommands from smaller builders to reduce structural complexity.
@@ -228,7 +280,7 @@ pub fn build_cli() -> Command {
             Arg::new("max-sink-chunks")
                 .long("max-sink-chunks")
                 .value_name("CHUNKS")
-                .default_value("0")
+                .default_value("40")
                 .help("Maximum sink chunks queued before producer waits (0 disables)"),
         )
         .arg(
@@ -313,6 +365,7 @@ pub fn build_cli() -> Command {
         .subcommand(build_peaks_subcommand())
         .subcommand(build_init_subcommand())
         .subcommand(build_create_subcommand())
+        .subcommand(build_meter_subcommand())
 }
 
 #[cfg(test)]

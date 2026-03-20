@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::dsp::effects::convolution_reverb::ImpulseResponseSpec;
 use crate::dsp::effects::core::smoother;
+use crate::dsp::meter::FilterResponseCurve;
 
 pub mod basic_reverb;
 pub mod compressor;
@@ -306,6 +307,38 @@ impl AudioEffect {
         match self {
             AudioEffect::DelayReverb(effect) => Some(effect),
             _ => None,
+        }
+    }
+
+    /// Build an analytical frequency-response curve from the effect settings.
+    ///
+    /// Builds without the `effect-meter` feature return `None` for every slot.
+    pub fn frequency_response_curve(
+        &self,
+        sample_rate: u32,
+        num_points: usize,
+    ) -> Option<FilterResponseCurve> {
+        #[cfg(feature = "effect-meter")]
+        {
+            match self {
+                AudioEffect::LowPassFilter(effect) => {
+                    Some(effect.frequency_response_curve(sample_rate, num_points))
+                }
+                AudioEffect::HighPassFilter(effect) => {
+                    Some(effect.frequency_response_curve(sample_rate, num_points))
+                }
+                AudioEffect::MultibandEq(effect) => {
+                    Some(effect.frequency_response_curve(sample_rate, num_points))
+                }
+                _ => None,
+            }
+        }
+
+        #[cfg(not(feature = "effect-meter"))]
+        {
+            let _ = sample_rate;
+            let _ = num_points;
+            None
         }
     }
 }

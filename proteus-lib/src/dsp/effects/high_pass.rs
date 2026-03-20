@@ -4,6 +4,10 @@ use serde::{Deserialize, Serialize};
 
 use super::core::biquad::{BiquadKind, BiquadState};
 use super::EffectContext;
+#[cfg(feature = "effect-meter")]
+use crate::dsp::meter::frequency_response::build_log_spaced_curve;
+#[cfg(feature = "effect-meter")]
+use crate::dsp::meter::FilterResponseCurve;
 
 const DEFAULT_FREQ_HZ: u32 = 1000;
 const DEFAULT_Q: f32 = 0.5;
@@ -100,6 +104,25 @@ impl super::core::DspEffect for HighPassFilterEffect {
 }
 
 impl HighPassFilterEffect {
+    #[cfg(feature = "effect-meter")]
+    pub(crate) fn frequency_response_curve(
+        &self,
+        sample_rate: u32,
+        num_points: usize,
+    ) -> FilterResponseCurve {
+        FilterResponseCurve {
+            composite: build_log_spaced_curve(sample_rate, num_points, |freq_hz| {
+                super::core::biquad::high_pass_response_db(
+                    sample_rate,
+                    self.settings.freq_hz,
+                    self.settings.q,
+                    freq_hz,
+                )
+            }),
+            per_band: Vec::new(),
+        }
+    }
+
     fn ensure_state(&mut self, context: &EffectContext) {
         if let Some(state) = self.state.as_mut() {
             if state.matches_structure(

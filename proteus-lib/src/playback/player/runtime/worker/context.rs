@@ -7,6 +7,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use crate::container::info::Info;
 use crate::container::prot::Prot;
 use crate::dsp::effects::AudioEffect;
+use crate::playback::effect_meter::EffectMeter;
 use crate::playback::engine::{
     DspChainMetrics, EffectSettingsCommand, InlineEffectsUpdate, InlineTrackMixUpdate,
     PlaybackBufferSettings,
@@ -37,6 +38,7 @@ pub(in crate::playback::player::runtime) struct ThreadContext {
         Arc<Mutex<Vec<InlineTrackMixUpdate>>>,
     pub(in crate::playback::player::runtime) dsp_metrics: Arc<Mutex<DspChainMetrics>>,
     pub(in crate::playback::player::runtime) effects_reset: Arc<AtomicU64>,
+    pub(in crate::playback::player::runtime) effect_meter: Arc<EffectMeter>,
     pub(in crate::playback::player::runtime) output_meter: Arc<Mutex<OutputMeter>>,
     pub(in crate::playback::player::runtime) audio_info: Info,
     pub(in crate::playback::player::runtime) next_resume_fade_ms: Arc<Mutex<Option<f32>>>,

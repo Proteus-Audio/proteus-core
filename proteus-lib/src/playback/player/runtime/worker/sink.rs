@@ -10,7 +10,9 @@ use log::{debug, error, warn};
 
 use super::context::ThreadContext;
 use super::runner::LoopState;
-use super::timing::{update_append_timing, update_chunk_lengths};
+use super::timing::{
+    publish_output_latency_metrics, queued_sink_ms, update_append_timing, update_chunk_lengths,
+};
 use super::transitions::check_runtime_state;
 use crate::playback::player::runtime::now_ms;
 use crate::playback::player::{OUTPUT_STREAM_OPEN_RETRIES, OUTPUT_STREAM_OPEN_RETRY_MS};
@@ -158,6 +160,7 @@ pub(super) fn wait_for_sink_capacity(
     ctx: &ThreadContext,
     loop_state: &mut LoopState,
     playback_id: u64,
+    next_chunk_seconds: f64,
 ) -> bool {
     let settings = ctx.lock_buffer_settings_recoverable();
     let max_sink_chunks = settings.max_sink_chunks;
@@ -179,8 +182,9 @@ pub(super) fn wait_for_sink_capacity(
         update_chunk_lengths(ctx, loop_state);
 
         let chunk_ok = max_sink_chunks == 0 || ctx.lock_sink_recoverable().len() < max_sink_chunks;
-        let latency_ok = max_sink_latency_ms
-            .is_none_or(|budget_ms| queued_sink_ms(loop_state) < budget_ms as f64);
+        let queued_ms = queued_sink_ms(loop_state);
+        let latency_ok =
+            latency_budget_allows_append(queued_ms, next_chunk_seconds, max_sink_latency_ms);
 
         if chunk_ok && latency_ok {
             return true;
@@ -193,13 +197,18 @@ pub(super) fn wait_for_sink_capacity(
     }
 }
 
-// Sum the durations of all queued (not yet played) chunks in milliseconds.
-fn queued_sink_ms(loop_state: &LoopState) -> f64 {
-    loop_state
-        .lock_chunk_lengths_recoverable()
-        .iter()
-        .sum::<f64>()
-        * 1000.0
+fn latency_budget_allows_append(
+    current_queued_ms: f64,
+    next_chunk_seconds: f64,
+    max_sink_latency_ms: Option<f32>,
+) -> bool {
+    max_sink_latency_ms.is_none_or(|budget_ms| {
+        let next_chunk_ms = next_chunk_seconds.max(0.0) * 1000.0;
+        let projected_queued_ms = current_queued_ms + next_chunk_ms;
+        // A single append chunk is the minimum unit the worker can admit here.
+        let effective_budget_ms = (budget_ms as f64).max(next_chunk_ms);
+        projected_queued_ms <= effective_budget_ms + f64::EPSILON
+    })
 }
 
 // Append one chunk to the sink and update runtime telemetry/state.
@@ -214,7 +223,7 @@ pub(super) fn update_sink(
     if ctx.playback_id_atomic.load(Ordering::SeqCst) != playback_id {
         return;
     }
-    if !wait_for_sink_capacity(ctx, loop_state, playback_id) {
+    if !wait_for_sink_capacity(ctx, loop_state, playback_id, length_in_seconds) {
         return;
     }
 
@@ -264,20 +273,13 @@ pub(super) fn update_sink(
         .push_back(length_in_seconds);
 
     update_chunk_lengths(ctx, loop_state);
+    publish_output_latency_metrics(ctx, loop_state, Some(length_in_seconds * 1000.0));
     check_runtime_state(ctx, loop_state);
-
-    // Publish queued-output diagnostics for the editor.
-    {
-        let q_ms = queued_sink_ms(loop_state);
-        let mut metrics = ctx.lock_dsp_metrics_recoverable();
-        metrics.queued_sink_ms = q_ms;
-        metrics.output_chunk_ms = length_in_seconds * 1000.0;
-    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::open_output_stream_with_retry_hooks;
+    use super::{latency_budget_allows_append, open_output_stream_with_retry_hooks};
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
 
@@ -303,5 +305,21 @@ mod tests {
         assert!(stream.is_none());
         assert_eq!(attempts.load(Ordering::Relaxed), 3);
         assert_eq!(sleep_calls.load(Ordering::Relaxed), 2);
+    }
+
+    #[test]
+    fn latency_budget_allows_append_when_projected_backlog_fits_budget() {
+        assert!(latency_budget_allows_append(30.0, 0.03, Some(60.0)));
+    }
+
+    #[test]
+    fn latency_budget_blocks_append_when_projected_backlog_exceeds_budget() {
+        assert!(!latency_budget_allows_append(40.0, 0.03, Some(60.0)));
+    }
+
+    #[test]
+    fn latency_budget_allows_one_chunk_when_budget_is_smaller_than_chunk() {
+        assert!(latency_budget_allows_append(0.0, 0.03, Some(0.0)));
+        assert!(!latency_budget_allows_append(5.0, 0.03, Some(0.0)));
     }
 }

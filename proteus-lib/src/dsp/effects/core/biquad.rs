@@ -3,6 +3,8 @@
 use std::f32::consts::PI;
 
 use crate::dsp::guardrails::{sanitize_channels, sanitize_finite_clamped, sanitize_freq};
+#[cfg(feature = "effect-meter")]
+use crate::dsp::meter::frequency_response::magnitude_to_db;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum BiquadKind {
@@ -276,6 +278,43 @@ fn coefficients(kind: BiquadKind, sample_rate: u32, freq: u32, q: f32) -> Biquad
             }
         }
     }
+}
+
+#[cfg(feature = "effect-meter")]
+pub(crate) fn low_pass_response_db(sample_rate: u32, freq: u32, q: f32, probe_hz: f32) -> f32 {
+    response_db(BiquadKind::LowPass, sample_rate, freq, q, probe_hz)
+}
+
+#[cfg(feature = "effect-meter")]
+pub(crate) fn high_pass_response_db(sample_rate: u32, freq: u32, q: f32, probe_hz: f32) -> f32 {
+    response_db(BiquadKind::HighPass, sample_rate, freq, q, probe_hz)
+}
+
+#[cfg(feature = "effect-meter")]
+fn response_db(kind: BiquadKind, sample_rate: u32, freq: u32, q: f32, probe_hz: f32) -> f32 {
+    let freq = sanitize_freq(freq, sample_rate);
+    let q = sanitize_finite_clamped(q, 0.5, 0.1, 10.0);
+    let coeffs = coefficients(kind, sample_rate, freq, q);
+    magnitude_response_db(coeffs, sample_rate, probe_hz)
+}
+
+#[cfg(feature = "effect-meter")]
+fn magnitude_response_db(coeffs: BiquadCoefficients, sample_rate: u32, probe_hz: f32) -> f32 {
+    let omega = 2.0 * PI * probe_hz.max(0.0) / sample_rate.max(1) as f32;
+    let cos_omega = omega.cos();
+    let sin_omega = omega.sin();
+    let cos_two_omega = (2.0 * omega).cos();
+    let sin_two_omega = (2.0 * omega).sin();
+
+    let numerator_re = coeffs.b0 + coeffs.b1 * cos_omega + coeffs.b2 * cos_two_omega;
+    let numerator_im = -(coeffs.b1 * sin_omega + coeffs.b2 * sin_two_omega);
+    let denominator_re = 1.0 + coeffs.a1 * cos_omega + coeffs.a2 * cos_two_omega;
+    let denominator_im = -(coeffs.a1 * sin_omega + coeffs.a2 * sin_two_omega);
+
+    let numerator_mag_sq = (numerator_re * numerator_re) + (numerator_im * numerator_im);
+    let denominator_mag_sq = (denominator_re * denominator_re) + (denominator_im * denominator_im);
+    let magnitude = (numerator_mag_sq / denominator_mag_sq.max(f32::EPSILON)).sqrt();
+    magnitude_to_db(magnitude)
 }
 
 #[cfg(test)]
