@@ -14,6 +14,7 @@ mod enabled {
     use crate::dsp::guardrails::sanitize_channels;
     use crate::dsp::meter::{BandLevels, EffectBandSnapshot};
 
+    const FILTER_BUCKET_COUNT: usize = 12;
     const MIN_DB: f32 = -120.0;
     const MIN_POWER: f32 = 1.0e-12;
 
@@ -244,38 +245,74 @@ mod enabled {
     fn buckets_for_effect(effect: &AudioEffect, sample_rate: u32) -> Option<Vec<Bucket>> {
         let nyquist_hz = (sample_rate as f32 * 0.5).max(1.0);
         match effect {
-            AudioEffect::LowPassFilter(effect) => {
-                let cutoff_hz = effect.settings.freq_hz.min(nyquist_hz as u32) as f32;
-                Some(vec![
-                    Bucket {
-                        lower_hz: 0.0,
-                        upper_hz: cutoff_hz,
-                        center_hz: (cutoff_hz * 0.5).max(1.0),
-                    },
-                    Bucket {
-                        lower_hz: cutoff_hz,
-                        upper_hz: nyquist_hz,
-                        center_hz: cutoff_hz + ((nyquist_hz - cutoff_hz) * 0.5),
-                    },
-                ])
+            AudioEffect::LowPassFilter(_effect) => {
+                Some(full_spectrum_buckets(nyquist_hz, FILTER_BUCKET_COUNT))
             }
-            AudioEffect::HighPassFilter(effect) => {
-                let cutoff_hz = effect.settings.freq_hz.min(nyquist_hz as u32) as f32;
-                Some(vec![
-                    Bucket {
-                        lower_hz: 0.0,
-                        upper_hz: cutoff_hz,
-                        center_hz: (cutoff_hz * 0.5).max(1.0),
-                    },
-                    Bucket {
-                        lower_hz: cutoff_hz,
-                        upper_hz: nyquist_hz,
-                        center_hz: cutoff_hz + ((nyquist_hz - cutoff_hz) * 0.5),
-                    },
-                ])
+            AudioEffect::HighPassFilter(_effect) => {
+                Some(full_spectrum_buckets(nyquist_hz, FILTER_BUCKET_COUNT))
             }
             AudioEffect::MultibandEq(effect) => Some(multiband_eq_buckets(effect, nyquist_hz)),
             _ => None,
+        }
+    }
+
+    fn full_spectrum_buckets(nyquist_hz: f32, count: usize) -> Vec<Bucket> {
+        let count = count.max(1);
+        if count == 1 {
+            return vec![Bucket {
+                lower_hz: 0.0,
+                upper_hz: nyquist_hz,
+                center_hz: (nyquist_hz * 0.5).max(1.0),
+            }];
+        }
+
+        if nyquist_hz <= 40.0 {
+            return linear_buckets(nyquist_hz, count);
+        }
+
+        let min_hz = 20.0_f32.min(nyquist_hz * 0.5).max(1.0);
+        let ratio = nyquist_hz / min_hz;
+        if !ratio.is_finite() || ratio <= 1.1 {
+            return linear_buckets(nyquist_hz, count);
+        }
+
+        let mut boundaries = Vec::with_capacity(count + 1);
+        boundaries.push(0.0);
+        for index in 1..count {
+            let t = index as f32 / count as f32;
+            boundaries.push(min_hz * ratio.powf(t));
+        }
+        boundaries.push(nyquist_hz);
+
+        boundaries
+            .windows(2)
+            .map(|pair| Bucket {
+                lower_hz: pair[0],
+                upper_hz: pair[1],
+                center_hz: bucket_center_hz(pair[0], pair[1]),
+            })
+            .collect()
+    }
+
+    fn linear_buckets(nyquist_hz: f32, count: usize) -> Vec<Bucket> {
+        (0..count)
+            .map(|index| {
+                let lower_hz = nyquist_hz * index as f32 / count as f32;
+                let upper_hz = nyquist_hz * (index + 1) as f32 / count as f32;
+                Bucket {
+                    lower_hz,
+                    upper_hz,
+                    center_hz: bucket_center_hz(lower_hz, upper_hz),
+                }
+            })
+            .collect()
+    }
+
+    fn bucket_center_hz(lower_hz: f32, upper_hz: f32) -> f32 {
+        if lower_hz <= 0.0 {
+            (upper_hz * 0.5).max(1.0)
+        } else {
+            (lower_hz * upper_hz).sqrt().max(1.0)
         }
     }
 
@@ -389,7 +426,15 @@ mod enabled {
             analyzer.capture_output(&samples);
 
             let snapshot = analyzer.analyze(&effect, sample_rate).expect("snapshot");
-            assert!(snapshot.input.bands_db[0] > snapshot.input.bands_db[1] + 10.0);
+            let max_index = snapshot
+                .input
+                .bands_db
+                .iter()
+                .enumerate()
+                .max_by(|left, right| left.1.total_cmp(right.1))
+                .map(|(index, _)| index)
+                .expect("band");
+            assert!(snapshot.input.band_centers_hz[max_index] < 500.0);
         }
 
         #[test]
@@ -404,7 +449,40 @@ mod enabled {
             analyzer.capture_output(&samples);
 
             let snapshot = analyzer.analyze(&effect, sample_rate).expect("snapshot");
-            assert!(snapshot.output.bands_db[1] > snapshot.output.bands_db[0] + 10.0);
+            let max_index = snapshot
+                .output
+                .bands_db
+                .iter()
+                .enumerate()
+                .max_by(|left, right| left.1.total_cmp(right.1))
+                .map(|(index, _)| index)
+                .expect("band");
+            assert!(snapshot.output.band_centers_hz[max_index] > 2_000.0);
+        }
+
+        #[test]
+        fn low_and_high_pass_use_dense_full_spectrum_buckets() {
+            let sample_rate = 48_000;
+
+            let low = super::buckets_for_effect(
+                &AudioEffect::LowPassFilter(LowPassFilterEffect::default()),
+                sample_rate,
+            )
+            .expect("lowpass buckets");
+            let high = super::buckets_for_effect(
+                &AudioEffect::HighPassFilter(HighPassFilterEffect::default()),
+                sample_rate,
+            )
+            .expect("highpass buckets");
+
+            assert_eq!(low.len(), super::FILTER_BUCKET_COUNT);
+            assert_eq!(high.len(), super::FILTER_BUCKET_COUNT);
+            assert!(low
+                .windows(2)
+                .all(|pair| pair[0].center_hz < pair[1].center_hz));
+            assert!(high
+                .windows(2)
+                .all(|pair| pair[0].center_hz < pair[1].center_hz));
         }
 
         #[test]

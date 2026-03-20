@@ -290,7 +290,7 @@ fn effect_meter_text(
             if spectral_snapshot.is_some() || spectral_graph::supports_spectral_graph(name) {
                 let graph = spectral_snapshot
                     .map(|snapshot| {
-                        spectral_graph::render_delta_graph(
+                        spectral_graph::render_output_graph(
                             snapshot,
                             graph_width.unwrap_or(line_width),
                         )
@@ -301,7 +301,7 @@ fn effect_meter_text(
                             "warming up",
                         )
                     });
-                lines.push(Line::from(format!("    spec d: {graph}")));
+                lines.push(Line::from(format!("    spec o: {graph}")));
             }
         }
     }
@@ -713,7 +713,7 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
 
-        assert!(rendered.contains("spec d:"));
+        assert!(rendered.contains("spec o:"));
     }
 
     #[cfg(feature = "effect-meter-cli-spectral")]
@@ -744,6 +744,6 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
 
-        assert!(!rendered.contains("spec d:"));
+        assert!(!rendered.contains("spec o:"));
     }
 }

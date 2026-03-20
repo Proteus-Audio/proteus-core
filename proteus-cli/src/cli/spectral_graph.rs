@@ -8,6 +8,9 @@ pub(crate) const EFFECT_METER_MAX_VISIBLE_EFFECTS: usize = 6;
 
 const MIN_GRAPH_WIDTH: usize = 16;
 const MAX_GRAPH_WIDTH: usize = 24;
+const GRAPH_NOISE_FLOOR_DB: f32 = -72.0;
+const GRAPH_DYNAMIC_RANGE_DB: f32 = 36.0;
+const GRAPH_ABSOLUTE_RANGE_DB: f32 = 72.0;
 
 pub(crate) fn supports_spectral_graph(effect_name: &str) -> bool {
     matches!(
@@ -39,10 +42,13 @@ pub(crate) fn live_graph_width(width: u16) -> Option<usize> {
     }
 }
 
-pub(crate) fn render_delta_graph(snapshot: &EffectBandSnapshot, width: usize) -> String {
-    let deltas = spectral_deltas(snapshot);
-    if deltas.is_empty() {
+pub(crate) fn render_output_graph(snapshot: &EffectBandSnapshot, width: usize) -> String {
+    let intensities = spectral_output_intensities(snapshot);
+    if intensities.is_empty() {
         return placeholder_graph(width, "no data");
+    }
+    if intensities.iter().all(|value| *value <= 0.0) {
+        return placeholder_graph(width, "quiet");
     }
 
     let width = graph_width_from_available(width);
@@ -51,13 +57,13 @@ pub(crate) fn render_delta_graph(snapshot: &EffectBandSnapshot, width: usize) ->
         let position = if width <= 1 {
             0.0
         } else {
-            column as f32 * (deltas.len() - 1) as f32 / (width - 1) as f32
+            column as f32 * (intensities.len() - 1) as f32 / (width - 1) as f32
         };
         let left = position.floor() as usize;
         let right = position.ceil() as usize;
         let frac = position - left as f32;
-        let delta_db = deltas[left] * (1.0 - frac) + deltas[right] * frac;
-        graph.push(delta_glyph(delta_db));
+        let intensity = intensities[left] * (1.0 - frac) + intensities[right] * frac;
+        graph.push(output_glyph(intensity));
     }
     graph
 }
@@ -99,32 +105,55 @@ fn graph_width_from_available(width: usize) -> usize {
     width.clamp(MIN_GRAPH_WIDTH, MAX_GRAPH_WIDTH)
 }
 
-fn spectral_deltas(snapshot: &EffectBandSnapshot) -> Vec<f32> {
-    snapshot
-        .input
+fn spectral_output_intensities(snapshot: &EffectBandSnapshot) -> Vec<f32> {
+    let max_output_db = snapshot
+        .output
         .bands_db
         .iter()
-        .zip(snapshot.output.bands_db.iter())
-        .map(|(input, output)| {
-            let delta = *output - *input;
-            if delta.is_finite() {
-                delta
+        .copied()
+        .filter(|value| value.is_finite())
+        .max_by(|left, right| left.total_cmp(right))
+        .unwrap_or(f32::NEG_INFINITY);
+    if !max_output_db.is_finite() || max_output_db < GRAPH_NOISE_FLOOR_DB {
+        return Vec::new();
+    }
+
+    let overall_strength =
+        ((max_output_db - GRAPH_NOISE_FLOOR_DB) / GRAPH_ABSOLUTE_RANGE_DB).clamp(0.0, 1.0);
+    snapshot
+        .output
+        .bands_db
+        .iter()
+        .enumerate()
+        .map(|(index, output)| {
+            let output_db = if output.is_finite() {
+                *output
             } else {
+                f32::NEG_INFINITY
+            };
+            let input_db = snapshot
+                .input
+                .bands_db
+                .get(index)
+                .copied()
+                .filter(|value| value.is_finite())
+                .unwrap_or(output_db);
+            let band_signal_db = input_db.max(output_db);
+            if !band_signal_db.is_finite() || band_signal_db < GRAPH_NOISE_FLOOR_DB {
                 0.0
+            } else {
+                let shape_strength = ((output_db - (max_output_db - GRAPH_DYNAMIC_RANGE_DB))
+                    / GRAPH_DYNAMIC_RANGE_DB)
+                    .clamp(0.0, 1.0);
+                shape_strength * overall_strength
             }
         })
         .collect()
 }
 
-fn delta_glyph(delta_db: f32) -> char {
-    let magnitude = (delta_db.abs() / 6.0).ceil().clamp(0.0, 4.0) as usize;
-    if delta_db <= -1.5 {
-        ['.', '-', '~', '=', 'X'][magnitude]
-    } else if delta_db >= 1.5 {
-        ['.', '+', '*', '%', '#'][magnitude]
-    } else {
-        '.'
-    }
+fn output_glyph(intensity: f32) -> char {
+    let magnitude = (intensity.clamp(0.0, 1.0) * 4.0).round() as usize;
+    ['.', '-', '~', '=', '#'][magnitude]
 }
 
 #[cfg(test)]
@@ -146,28 +175,51 @@ mod tests {
     }
 
     #[test]
-    fn low_pass_like_delta_graph_cuts_high_end() {
-        let graph = render_delta_graph(
-            &snapshot(&[-10.0, -10.0, -10.0], &[-10.0, -16.0, -28.0]),
-            24,
-        );
-        assert!(graph.starts_with('.'));
-        assert!(graph.ends_with('X') || graph.ends_with('='));
+    fn low_pass_like_output_graph_fades_high_end() {
+        let graph =
+            render_output_graph(&snapshot(&[-10.0, -10.0, -10.0], &[-8.0, -18.0, -42.0]), 24);
+        assert!(matches!(graph.chars().next(), Some('#' | '=')));
+        assert!(matches!(graph.chars().last(), Some('.' | '-')));
     }
 
     #[test]
-    fn high_pass_like_delta_graph_cuts_low_end() {
-        let graph = render_delta_graph(
-            &snapshot(&[-10.0, -10.0, -10.0], &[-28.0, -16.0, -10.0]),
+    fn high_pass_like_output_graph_fades_low_end() {
+        let graph =
+            render_output_graph(&snapshot(&[-10.0, -10.0, -10.0], &[-42.0, -18.0, -8.0]), 24);
+        assert!(matches!(graph.chars().next(), Some('.' | '-')));
+        assert!(matches!(graph.chars().last(), Some('#' | '=')));
+    }
+
+    #[test]
+    fn weak_output_graph_is_dimmer_than_strong_output_graph() {
+        let strong = render_output_graph(&snapshot(&[-8.0, -8.0, -8.0], &[-8.0, -20.0, -44.0]), 24);
+        let weak = render_output_graph(
+            &snapshot(&[-48.0, -48.0, -48.0], &[-48.0, -60.0, -84.0]),
             24,
         );
-        assert!(graph.starts_with('X') || graph.starts_with('='));
-        assert!(graph.ends_with('.'));
+
+        let strong_weight = graph_weight(&strong);
+        let weak_weight = graph_weight(&weak);
+        assert!(strong_weight > weak_weight);
     }
 
     #[test]
     fn placeholder_graph_is_bounded() {
         let graph = placeholder_graph(12, "warming up");
         assert_eq!(graph.chars().count(), 16);
+    }
+
+    fn graph_weight(graph: &str) -> usize {
+        graph
+            .chars()
+            .map(|ch| match ch {
+                '.' => 0,
+                '-' => 1,
+                '~' => 2,
+                '=' => 3,
+                '#' => 4,
+                _ => 0,
+            })
+            .sum()
     }
 }

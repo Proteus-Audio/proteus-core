@@ -217,7 +217,7 @@ fn meter_effects_bars_renders_compact_spectral_graph_when_requested() {
     assert!(output.status.success());
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("spec d:"));
+    assert!(stdout.contains("spec o:"));
 }
 
 #[cfg(feature = "effect-meter-cli")]

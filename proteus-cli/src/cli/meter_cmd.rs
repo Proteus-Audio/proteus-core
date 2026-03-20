@@ -212,11 +212,11 @@ fn print_bars(report: &EffectMeterReport) {
         {
             match spectral {
                 Some(snapshot) => println!(
-                    "spec d: {}",
-                    spectral_graph::render_delta_graph(snapshot, 24)
+                    "spec o: {}",
+                    spectral_graph::render_output_graph(snapshot, 24)
                 ),
                 None => println!(
-                    "spec d: {}",
+                    "spec o: {}",
                     spectral_graph::placeholder_graph(24, "not supported")
                 ),
             }
