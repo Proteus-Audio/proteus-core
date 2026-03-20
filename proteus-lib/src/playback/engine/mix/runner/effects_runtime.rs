@@ -36,6 +36,14 @@ pub(super) fn process_and_send_samples(
             state.convolution_batch_samples
         );
     }
+
+    // Advance the producer clock and inform effect metering before DSP runs.
+    let channels = state.audio_info.channels.max(1) as f64;
+    let sample_rate = state.audio_info.sample_rate.max(1) as f64;
+    let chunk_secs = samples.len() as f64 / channels / sample_rate;
+    state.mix_elapsed_secs += chunk_secs;
+    state.effect_metering.set_mix_time(state.mix_elapsed_secs);
+
     #[cfg(feature = "debug")]
     let audio_time_ms = if state.audio_info.channels > 0 && state.audio_info.sample_rate > 0 {
         (samples.len() as f64
@@ -262,6 +270,12 @@ pub(super) fn drain_effect_tail(state: &mut MixLoopState) -> bool {
         info!("effect drain stopped after consecutive silent drain passes");
         return false;
     }
+
+    // Advance producer clock for drain chunks.
+    let channels = state.audio_info.channels.max(1) as f64;
+    let sample_rate = state.audio_info.sample_rate.max(1) as f64;
+    let drain_secs = state.effect_scratch_a.len() as f64 / channels / sample_rate;
+    state.mix_elapsed_secs += drain_secs;
 
     let slice_samples = output_slice_samples(state);
     match output_stage::send_samples(

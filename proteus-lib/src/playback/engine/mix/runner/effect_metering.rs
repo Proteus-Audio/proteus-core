@@ -19,6 +19,7 @@ use super::super::effects::EffectChainObserver;
 
 pub(super) struct MixEffectMeteringState {
     shared: Arc<EffectMeter>,
+    mix_time_secs: f64,
     #[cfg(feature = "effect-meter")]
     level: LevelMeterRuntime,
     #[cfg(feature = "effect-meter-spectral")]
@@ -33,6 +34,7 @@ impl MixEffectMeteringState {
     ) -> Self {
         let mut state = Self {
             shared,
+            mix_time_secs: 0.0,
             #[cfg(feature = "effect-meter")]
             level: LevelMeterRuntime::new(effects.len(), context.channels()),
             #[cfg(feature = "effect-meter-spectral")]
@@ -40,6 +42,14 @@ impl MixEffectMeteringState {
         };
         state.reset_for_chain(effects, context, false);
         state
+    }
+
+    /// Set the producer-clock position for the next snapshot.
+    ///
+    /// Called before `prepare_chunk` so that `finish` can tag the snapshot
+    /// with the cumulative mix-time at the mix→worker boundary.
+    pub(super) fn set_mix_time(&mut self, secs: f64) {
+        self.mix_time_secs = secs;
     }
 
     pub(super) fn prepare_chunk<'a>(
@@ -127,6 +137,9 @@ impl ChunkEffectMetering<'_> {
             self.state
                 .shared
                 .try_publish_levels(&self.state.level.snapshots);
+            self.state
+                .shared
+                .push_timestamped_levels(self.state.mix_time_secs, &self.state.level.snapshots);
         }
 
         #[cfg(feature = "effect-meter-spectral")]

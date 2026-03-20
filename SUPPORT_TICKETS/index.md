@@ -12,7 +12,7 @@ in-place; larger items get a writeup here.
 | [x]  | FR-02 | [FR-02-inline-effect-parameter-smoothing.md](./FR-02-inline-effect-parameter-smoothing.md) | Per-parameter smoothing (gain ramps, biquad coefficient interpolation, compressor envelope continuity) for click-free DAW-style live editing |
 | [x]  | FR-03 | [FR-03-bounded-live-effect-control-latency.md](./FR-03-bounded-live-effect-control-latency.md) | Bound audible live-edit latency with time-based sink budgeting, latency diagnostics, and smaller sink-facing output slices |
 | [x]  | FR-04 | [FR-04-cli-effect-metering-harness.md](./FR-04-cli-effect-metering-harness.md) | Opt-in CLI effect metering for both offline reports and live per-effect visualization during normal playback |
-| [ ]  | FR-05 | [FR-05-audible-time-aligned-effect-metering.md](./FR-05-audible-time-aligned-effect-metering.md) | Align live effect meters to audible playback time instead of mix-thread processing time |
+| [x]  | FR-05 | [FR-05-audible-time-aligned-effect-metering.md](./FR-05-audible-time-aligned-effect-metering.md) | Align live effect meters to audible playback time instead of mix-thread processing time |
 
 ## Style Issues
 

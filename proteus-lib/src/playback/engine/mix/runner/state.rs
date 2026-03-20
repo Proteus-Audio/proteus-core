@@ -67,6 +67,7 @@ pub(super) struct MixLoopState {
     pub(super) effect_scratch_b: Vec<f32>,
     pub(super) effect_drain_passes: usize,
     pub(super) effect_drain_silent_passes: usize,
+    pub(super) mix_elapsed_secs: f64,
     pub(super) running_count: usize,
     pub(super) logged_first_packet_drain: bool,
     pub(super) logged_first_packet_route: bool,
@@ -98,6 +99,7 @@ impl MixLoopState {
         decode_handle: MixDecodeHandle,
     ) -> Self {
         let last_effects_reset = args.effects_reset.load(std::sync::atomic::Ordering::SeqCst);
+        let start_time = args.start_time;
         let start_samples = sizes.start_samples;
         let local_effects = lock_recoverable(
             &args.effects,
@@ -140,6 +142,7 @@ impl MixLoopState {
             effect_scratch_b: Vec::new(),
             effect_drain_passes: 0,
             effect_drain_silent_passes: 0,
+            mix_elapsed_secs: start_time,
             running_count: 0,
             logged_first_packet_drain: false,
             logged_first_packet_route: false,

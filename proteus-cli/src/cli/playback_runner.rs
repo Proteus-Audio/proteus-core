@@ -197,7 +197,7 @@ fn draw_status_frame(
     let playing = player.is_playing();
     let effect_names = player.get_effect_names();
     #[cfg(feature = "effect-meter-cli")]
-    let effect_levels = player.effect_levels();
+    let effect_levels = player.effect_levels_audible();
     #[cfg(feature = "output-meter")]
     let levels = player.get_levels();
     #[cfg(not(feature = "output-meter"))]

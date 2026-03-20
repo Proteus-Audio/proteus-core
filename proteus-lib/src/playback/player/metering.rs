@@ -26,10 +26,28 @@ impl Player {
 
     /// Return the latest per-effect input/output level snapshots.
     ///
+    /// Returns the most recently processed mix-thread snapshot regardless of
+    /// output-path latency. Suitable for offline/diagnostic use.
+    ///
     /// Returns `None` when the `effect-meter` feature is not compiled in or
     /// when runtime level metering is disabled.
     pub fn effect_levels(&self) -> Option<Vec<EffectLevelSnapshot>> {
         self.effect_meter.effect_levels()
+    }
+
+    /// Return per-effect level snapshots aligned to audible playback time.
+    ///
+    /// During live playback the mix thread runs ahead of the listener.
+    /// This accessor returns the snapshot whose audio is closest to the
+    /// chunk currently draining from the managed sink queue, rather than
+    /// the latest chunk the mix thread has processed.
+    ///
+    /// Returns `None` when the `effect-meter` feature is not compiled in,
+    /// when runtime level metering is disabled, or when no snapshot has
+    /// been produced yet.
+    pub fn effect_levels_audible(&self) -> Option<Vec<EffectLevelSnapshot>> {
+        let audible_time = self.get_time();
+        self.effect_meter.effect_levels_audible(audible_time)
     }
 
     /// Build analytical filter-response curves from the current effect settings.
@@ -90,6 +108,20 @@ mod tests {
     fn effect_levels_return_none_while_runtime_metering_is_disabled() {
         let player = test_player(vec![AudioEffect::Gain(GainEffect::default())]);
         assert_eq!(player.effect_levels(), None);
+    }
+
+    #[test]
+    fn effect_levels_audible_returns_none_while_metering_disabled() {
+        let player = test_player(vec![AudioEffect::Gain(GainEffect::default())]);
+        assert_eq!(player.effect_levels_audible(), None);
+    }
+
+    #[cfg(feature = "effect-meter")]
+    #[test]
+    fn effect_levels_audible_returns_none_with_empty_ring() {
+        let player = test_player(vec![AudioEffect::Gain(GainEffect::default())]);
+        player.set_effect_level_metering_enabled(true);
+        assert_eq!(player.effect_levels_audible(), None);
     }
 
     #[cfg(feature = "effect-meter")]
