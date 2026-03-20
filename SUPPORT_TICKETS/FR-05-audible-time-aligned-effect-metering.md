@@ -277,13 +277,15 @@ semantics.
 
 | File | Why |
 | --- | --- |
-| `proteus-lib/src/playback/effect_meter.rs` | Add queued/live snapshot staging rather than one latest-only store |
-| `proteus-lib/src/playback/engine/mix/runner/effect_metering.rs` | Tag and publish per-chunk meter snapshots into a timing-aware queue |
-| `proteus-lib/src/playback/player/runtime/worker/timing.rs` | Align queued chunk drain bookkeeping with effect-meter snapshot retirement |
-| `proteus-lib/src/playback/player/runtime/worker/sink.rs` | Advance the audible-time meter as queued output drains |
-| `proteus-lib/src/playback/player/metering.rs` | Expose audible-time vs processing-time access semantics |
-| `proteus-cli/src/cli/playback_runner.rs` | Switch live playback UI to audible-time effect meters |
-| `proteus-cli/src/cli/ui.rs` | Render the corrected live meter semantics |
+| `proteus-lib/src/playback/effect_meter.rs` | Add timestamped ring buffer alongside existing latest-only store; new `push_timestamped()` and `levels_at_time()` methods |
+| `proteus-lib/src/playback/engine/mix/runner/effect_metering.rs` | Stamp each snapshot with the current playback-clock position before publishing to the ring buffer |
+| `proteus-lib/src/playback/engine/mix/output_stage.rs` | Thread the playback-clock timestamp through `send_samples()` so the metering layer can read it at publication time |
+| `proteus-lib/src/playback/player/runtime/worker/timing.rs` | Expose `time_chunks_passed` (or a derived audible-time clock) so the consumer can query the current audible position |
+| `proteus-lib/src/playback/player/runtime/worker/sink.rs` | No direct changes expected — timing advancement already happens here via `update_chunk_lengths()` |
+| `proteus-lib/src/playback/player/runtime/worker/runner.rs` | May need to forward audible-time clock to a shared location readable by the control path |
+| `proteus-lib/src/playback/player/metering.rs` | Add `effect_levels_audible()` accessor that reads the ring buffer using the current audible-time clock |
+| `proteus-cli/src/cli/playback_runner.rs` | Switch live playback UI to call `effect_levels_audible()` instead of `effect_levels()` |
+| `proteus-cli/src/cli/ui.rs` | No rendering changes expected — the data shape is identical, only the timing semantics change upstream |
 
 ---
 
@@ -294,11 +296,15 @@ semantics.
 - [ ] the live CLI effect-meter pane reflects audible playback time rather than
       last-processed mix time
 - [ ] offline metering/reporting can still use processing-time snapshots for
-      deterministic inspection
+      deterministic inspection via the existing `effect_levels()` accessor
 - [ ] effect meter timing remains bounded and coherent when authoring-mode sink
       slicing or sink backlog limits are active
-- [ ] the public/runtime API makes the timing semantics explicit enough that
-      callers do not confuse processing-time and audible-time meters
+- [ ] the snapshot ring buffer is explicitly bounded (not only implicitly by the
+      latency envelope) so memory stays controlled in all configurations
+- [ ] the mix thread is never blocked by the audible-time publication path
+      (lock-free push or non-blocking try-lock with graceful degradation)
+- [ ] the public/runtime API makes the timing semantics explicit through
+      separate accessors (`effect_levels()` vs `effect_levels_audible()`)
 
 ## Status
 
