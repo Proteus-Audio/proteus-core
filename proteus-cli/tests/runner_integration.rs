@@ -193,6 +193,33 @@ fn meter_effects_json_includes_spectral_section_when_requested() {
     assert!(spectral[0].is_object());
 }
 
+#[cfg(all(feature = "effect-meter-cli", feature = "effect-meter-cli-spectral"))]
+#[test]
+fn meter_effects_bars_renders_compact_spectral_graph_when_requested() {
+    use proteus_lib::dsp::effects::{AudioEffect, LowPassFilterEffect};
+
+    let tmp = write_effects_json(vec![AudioEffect::LowPassFilter(
+        LowPassFilterEffect::default(),
+    )]);
+
+    let output = run_cli(&[
+        "meter",
+        "effects",
+        &fixture_path("test-16bit.wav"),
+        "--effects-json",
+        tmp.path().to_str().expect("utf8 path"),
+        "--duration",
+        "0.25",
+        "--format",
+        "bars",
+        "--spectral",
+    ]);
+    assert!(output.status.success());
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("spec d:"));
+}
+
 #[cfg(feature = "effect-meter-cli")]
 fn write_effects_json(effects: Vec<proteus_lib::dsp::effects::AudioEffect>) -> NamedTempFile {
     let tmp = NamedTempFile::new().expect("temp file");

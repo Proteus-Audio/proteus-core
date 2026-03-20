@@ -69,6 +69,9 @@ impl Player {
     ///
     /// Disabled builds ignore this setter.
     pub fn set_spectral_analysis_enabled(&self, enabled: bool) {
+        if self.effect_meter.spectral_analysis_enabled() == enabled {
+            return;
+        }
         self.effect_meter.set_spectral_analysis_enabled(enabled);
         if enabled {
             let effect_count = self.lock_effects_recoverable().len();
@@ -83,6 +86,11 @@ impl Player {
         self.effect_meter.set_spectral_refresh_hz(hz);
     }
 
+    /// Return whether runtime spectral analysis is currently enabled.
+    pub fn spectral_analysis_enabled(&self) -> bool {
+        self.effect_meter.spectral_analysis_enabled()
+    }
+
     /// Return the latest spectral-analysis snapshots for filter effects.
     ///
     /// Buckets for multiband EQ are control-aligned analysis buckets derived
@@ -93,6 +101,20 @@ impl Player {
     /// runtime spectral analysis is disabled.
     pub fn effect_band_levels(&self) -> Option<Vec<Option<EffectBandSnapshot>>> {
         self.effect_meter.effect_band_levels()
+    }
+
+    /// Return spectral snapshots aligned to audible playback time.
+    ///
+    /// During live playback the mix thread runs ahead of the listener.
+    /// This accessor returns the spectral snapshot whose audio is closest
+    /// to the chunk currently draining from the managed sink queue.
+    ///
+    /// Returns `None` when `effect-meter-spectral` is not compiled in, when
+    /// runtime spectral analysis is disabled, or when no snapshot has been
+    /// produced yet.
+    pub fn effect_band_levels_audible(&self) -> Option<Vec<Option<EffectBandSnapshot>>> {
+        let audible_time = self.get_time();
+        self.effect_meter.effect_band_levels_audible(audible_time)
     }
 }
 
@@ -160,6 +182,7 @@ mod tests {
             LowPassFilterEffect::default(),
         )]);
         assert_eq!(player.effect_band_levels(), None);
+        assert_eq!(player.effect_band_levels_audible(), None);
     }
 
     #[cfg(feature = "effect-meter-spectral")]
@@ -175,6 +198,22 @@ mod tests {
         assert_eq!(snapshots.len(), 2);
         assert_eq!(snapshots[0], None);
         assert_eq!(snapshots[1], None);
+        assert_eq!(player.effect_band_levels_audible(), None);
+    }
+
+    #[cfg(feature = "effect-meter-spectral")]
+    #[test]
+    fn spectral_enable_accessor_tracks_runtime_state() {
+        let player = test_player(vec![AudioEffect::LowPassFilter(
+            LowPassFilterEffect::default(),
+        )]);
+        assert!(!player.spectral_analysis_enabled());
+
+        player.set_spectral_analysis_enabled(true);
+        assert!(player.spectral_analysis_enabled());
+
+        player.set_spectral_analysis_enabled(false);
+        assert!(!player.spectral_analysis_enabled());
     }
 
     fn test_player(effects: Vec<AudioEffect>) -> Player {

@@ -145,6 +145,10 @@ impl ChunkEffectMetering<'_> {
         #[cfg(feature = "effect-meter-spectral")]
         if self.spectral_due {
             self.state.spectral.publish(&self.state.shared, _effects);
+            self.state.shared.push_timestamped_spectral(
+                self.state.mix_time_secs,
+                &self.state.spectral.snapshots,
+            );
         }
     }
 }

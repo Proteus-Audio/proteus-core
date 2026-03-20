@@ -296,4 +296,4 @@ not a terminal EQ editor.
 
 ## Status
 
-Open.
+Done.

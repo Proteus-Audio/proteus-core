@@ -33,6 +33,16 @@ struct TimestampedLevelSnapshot {
     snapshots: Vec<EffectLevelSnapshot>,
 }
 
+/// A spectral snapshot tagged with the mix-thread producer clock.
+#[cfg(feature = "effect-meter-spectral")]
+#[derive(Debug)]
+struct TimestampedSpectralSnapshot {
+    /// Cumulative audio time at the mix→worker boundary for this snapshot.
+    mix_time_secs: f64,
+    /// Per-effect spectral measurements captured around the DSP chain.
+    snapshots: Vec<Option<EffectBandSnapshot>>,
+}
+
 /// Shared runtime meter state used by the control path and the mix thread.
 #[derive(Debug)]
 pub struct EffectMeter {
@@ -47,6 +57,8 @@ pub struct EffectMeter {
     spectral_refresh_hz_bits: AtomicU32,
     #[cfg(feature = "effect-meter-spectral")]
     spectral_snapshots: Mutex<Vec<Option<EffectBandSnapshot>>>,
+    #[cfg(feature = "effect-meter-spectral")]
+    audible_spectral_ring: Mutex<VecDeque<TimestampedSpectralSnapshot>>,
 }
 
 impl EffectMeter {
@@ -65,6 +77,8 @@ impl EffectMeter {
             ),
             #[cfg(feature = "effect-meter-spectral")]
             spectral_snapshots: Mutex::new(Vec::new()),
+            #[cfg(feature = "effect-meter-spectral")]
+            audible_spectral_ring: Mutex::new(VecDeque::new()),
         }
     }
 
@@ -87,6 +101,13 @@ impl EffectMeter {
             &self.spectral_snapshots,
             "effect spectral snapshots",
             "effect spectral snapshots are derived telemetry that can be rebuilt",
+        )
+        .clear();
+        #[cfg(feature = "effect-meter-spectral")]
+        lock_recoverable(
+            &self.audible_spectral_ring,
+            "audible effect spectral ring",
+            "audible-time spectral snapshots are derived telemetry that can be rebuilt",
         )
         .clear();
     }
@@ -266,7 +287,12 @@ impl EffectMeter {
 
     pub(crate) fn set_spectral_analysis_enabled(&self, enabled: bool) {
         #[cfg(feature = "effect-meter-spectral")]
-        self.spectral_enabled.store(enabled, Ordering::Relaxed);
+        {
+            self.spectral_enabled.store(enabled, Ordering::Relaxed);
+            if !enabled {
+                self.clear_spectral_data();
+            }
+        }
 
         #[cfg(not(feature = "effect-meter-spectral"))]
         let _ = enabled;
@@ -321,6 +347,67 @@ impl EffectMeter {
         }
     }
 
+    pub(crate) fn push_timestamped_spectral(
+        &self,
+        mix_time_secs: f64,
+        snapshots: &[Option<EffectBandSnapshot>],
+    ) {
+        #[cfg(feature = "effect-meter-spectral")]
+        if let Some(mut ring) = try_lock_recoverable(
+            &self.audible_spectral_ring,
+            "audible effect spectral ring",
+            "audible-time spectral snapshots are derived telemetry that can be rebuilt",
+        ) {
+            if ring.len() >= AUDIBLE_RING_CAPACITY {
+                return;
+            }
+            ring.push_back(TimestampedSpectralSnapshot {
+                mix_time_secs,
+                snapshots: snapshots.to_vec(),
+            });
+        }
+
+        #[cfg(not(feature = "effect-meter-spectral"))]
+        {
+            let _ = mix_time_secs;
+            let _ = snapshots;
+        }
+    }
+
+    pub(crate) fn effect_band_levels_audible(
+        &self,
+        audible_time_secs: f64,
+    ) -> Option<Vec<Option<EffectBandSnapshot>>> {
+        if !self.spectral_analysis_enabled() {
+            return None;
+        }
+
+        #[cfg(feature = "effect-meter-spectral")]
+        {
+            let mut ring = lock_recoverable(
+                &self.audible_spectral_ring,
+                "audible effect spectral ring",
+                "audible-time spectral snapshots are derived telemetry that can be rebuilt",
+            );
+            while ring.len() > 1 {
+                if ring
+                    .get(1)
+                    .is_none_or(|next| next.mix_time_secs > audible_time_secs)
+                {
+                    break;
+                }
+                ring.pop_front();
+            }
+            ring.front().map(|entry| entry.snapshots.clone())
+        }
+
+        #[cfg(not(feature = "effect-meter-spectral"))]
+        {
+            let _ = audible_time_secs;
+            None
+        }
+    }
+
     #[cfg(feature = "effect-meter-spectral")]
     pub(crate) fn try_publish_spectral(&self, snapshots: &[Option<EffectBandSnapshot>]) {
         if let Some(mut latest) = try_lock_recoverable(
@@ -343,10 +430,32 @@ impl EffectMeter {
             );
             latest.clear();
             latest.resize(effect_count, None);
+            lock_recoverable(
+                &self.audible_spectral_ring,
+                "audible effect spectral ring",
+                "audible-time spectral snapshots are derived telemetry that can be rebuilt",
+            )
+            .clear();
         }
 
         #[cfg(not(feature = "effect-meter-spectral"))]
         let _ = effect_count;
+    }
+
+    #[cfg(feature = "effect-meter-spectral")]
+    fn clear_spectral_data(&self) {
+        lock_recoverable(
+            &self.spectral_snapshots,
+            "effect spectral snapshots",
+            "effect spectral snapshots are derived telemetry that can be rebuilt",
+        )
+        .clear();
+        lock_recoverable(
+            &self.audible_spectral_ring,
+            "audible effect spectral ring",
+            "audible-time spectral snapshots are derived telemetry that can be rebuilt",
+        )
+        .clear();
     }
 }
 
@@ -411,6 +520,20 @@ mod tests {
             output: crate::dsp::meter::LevelSnapshot {
                 peak: vec![peak * 0.9],
                 rms: vec![peak * 0.6],
+            },
+        }
+    }
+
+    #[cfg(feature = "effect-meter-spectral")]
+    fn make_band_snapshot(low: f32, high: f32) -> EffectBandSnapshot {
+        EffectBandSnapshot {
+            input: crate::dsp::meter::BandLevels {
+                bands_db: vec![low, high],
+                band_centers_hz: vec![200.0, 2_000.0],
+            },
+            output: crate::dsp::meter::BandLevels {
+                bands_db: vec![low - 3.0, high - 6.0],
+                band_centers_hz: vec![200.0, 2_000.0],
             },
         }
     }
@@ -545,5 +668,51 @@ mod tests {
         let meter = EffectMeter::new();
         // Should not panic even when metering is disabled.
         meter.push_timestamped_levels(1.0, &[make_snapshot(0.5)]);
+    }
+
+    #[cfg(feature = "effect-meter-spectral")]
+    #[test]
+    fn spectral_audible_returns_none_when_analysis_disabled() {
+        let meter = EffectMeter::new();
+        assert_eq!(meter.effect_band_levels_audible(0.0), None);
+    }
+
+    #[cfg(feature = "effect-meter-spectral")]
+    #[test]
+    fn spectral_audible_returns_snapshot_at_or_before_audible_time() {
+        let meter = EffectMeter::new();
+        meter.set_spectral_analysis_enabled(true);
+
+        meter.push_timestamped_spectral(1.0, &[Some(make_band_snapshot(-20.0, -40.0))]);
+        meter.push_timestamped_spectral(2.0, &[Some(make_band_snapshot(-10.0, -30.0))]);
+        meter.push_timestamped_spectral(3.0, &[Some(make_band_snapshot(-5.0, -15.0))]);
+
+        let result = meter.effect_band_levels_audible(1.5).expect("snapshot");
+        assert_eq!(result.len(), 1);
+        assert_eq!(
+            result[0].as_ref().expect("band").input.bands_db,
+            vec![-20.0, -40.0]
+        );
+
+        let result = meter.effect_band_levels_audible(5.0).expect("snapshot");
+        assert_eq!(
+            result[0].as_ref().expect("band").input.bands_db,
+            vec![-5.0, -15.0]
+        );
+    }
+
+    #[cfg(feature = "effect-meter-spectral")]
+    #[test]
+    fn disabling_spectral_analysis_clears_latest_and_audible_data() {
+        let meter = EffectMeter::new();
+        meter.set_spectral_analysis_enabled(true);
+        meter.push_timestamped_spectral(1.0, &[Some(make_band_snapshot(-20.0, -40.0))]);
+
+        meter.set_spectral_analysis_enabled(false);
+
+        assert_eq!(meter.effect_band_levels(), None);
+        assert_eq!(meter.effect_band_levels_audible(1.0), None);
+        assert!(meter.spectral_snapshots.lock().unwrap().is_empty());
+        assert!(meter.audible_spectral_ring.lock().unwrap().is_empty());
     }
 }

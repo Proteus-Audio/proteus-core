@@ -22,6 +22,8 @@ use proteus_lib::{
 use ratatui::{backend::CrosstermBackend, Terminal};
 use symphonia::core::errors::Result;
 
+#[cfg(feature = "effect-meter-cli-spectral")]
+use super::spectral_graph;
 use super::{controls, ui};
 use crate::logging::LogLine;
 use crate::{logging, project_files};
@@ -198,6 +200,18 @@ fn draw_status_frame(
     let effect_names = player.get_effect_names();
     #[cfg(feature = "effect-meter-cli")]
     let effect_levels = player.effect_levels_audible();
+    #[cfg(feature = "effect-meter-cli-spectral")]
+    let effect_spectral = {
+        let width = terminal.size().map(|size| size.width).unwrap_or_default();
+        sync_live_spectral_analysis(player, &effect_names, width);
+        if spectral_graph::live_spectral_graph_visible(&effect_names, width) {
+            player.effect_band_levels_audible()
+        } else {
+            None
+        }
+    };
+    #[cfg(not(feature = "effect-meter-cli-spectral"))]
+    let effect_spectral: Option<Vec<Option<proteus_lib::dsp::meter::EffectBandSnapshot>>> = None;
     #[cfg(feature = "output-meter")]
     let levels = player.get_levels();
     #[cfg(not(feature = "output-meter"))]
@@ -280,6 +294,7 @@ fn draw_status_frame(
         effect_levels.as_deref(),
         #[cfg(not(feature = "effect-meter-cli"))]
         None,
+        effect_spectral.as_deref(),
     );
 }
 
@@ -313,8 +328,23 @@ fn configure_live_effect_metering(player: &player::Player) {
         player.set_effect_level_metering_enabled(true);
     }
 
+    #[cfg(feature = "effect-meter-cli-spectral")]
+    {
+        player.set_spectral_analysis_refresh_hz(12.0);
+        player.set_spectral_analysis_enabled(false);
+    }
+
     #[cfg(not(feature = "effect-meter-cli"))]
     let _ = player;
+}
+
+#[cfg(feature = "effect-meter-cli-spectral")]
+fn sync_live_spectral_analysis(player: &player::Player, effect_names: &[String], width: u16) {
+    let should_enable = spectral_graph::live_spectral_graph_visible(effect_names, width)
+        && spectral_graph::live_effect_meter_visible(effect_names, effect_names.len(), width);
+    if player.spectral_analysis_enabled() != should_enable {
+        player.set_spectral_analysis_enabled(should_enable);
+    }
 }
 
 struct RawModeGuard;
@@ -376,5 +406,17 @@ mod tests {
             ])]);
         super::configure_live_effect_metering(&player);
         assert!(player.effect_levels().is_some());
+    }
+
+    #[cfg(feature = "effect-meter-cli-spectral")]
+    #[test]
+    fn configure_live_effect_metering_keeps_spectral_analysis_disabled_until_needed() {
+        let player =
+            Player::new_from_file_paths(vec![super::PathsTrack::new_from_file_paths(vec![
+                "/tmp/nonexistent.wav".to_string(),
+            ])]);
+        super::configure_live_effect_metering(&player);
+        assert!(!player.spectral_analysis_enabled());
+        assert_eq!(player.effect_band_levels(), None);
     }
 }

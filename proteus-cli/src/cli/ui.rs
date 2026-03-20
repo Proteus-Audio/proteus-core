@@ -10,9 +10,11 @@ use ratatui::{
 };
 
 use super::controls::StatusSnapshot;
+#[cfg(feature = "effect-meter-cli")]
+use super::spectral_graph;
 use crate::logging::{LogKind, LogLine};
 use proteus_lib::container::info::Info;
-use proteus_lib::dsp::meter::EffectLevelSnapshot;
+use proteus_lib::dsp::meter::{EffectBandSnapshot, EffectLevelSnapshot};
 
 fn title_banner() -> &'static str {
     "Proteus Audio"
@@ -79,11 +81,13 @@ pub fn draw_status(
     levels_db: &[f32],
     effect_names: &[String],
     effect_levels: Option<&[EffectLevelSnapshot]>,
+    effect_spectral: Option<&[Option<EffectBandSnapshot>]>,
 ) {
     #[cfg(not(feature = "effect-meter-cli"))]
     {
         let _ = effect_names;
         let _ = effect_levels;
+        let _ = effect_spectral;
     }
 
     // Render the controls + status panels.
@@ -100,7 +104,7 @@ pub fn draw_status(
         };
         #[cfg(feature = "effect-meter-cli")]
         let effect_meter_height =
-            effect_meter_panel_height(effect_names, effect_levels, f.size().width);
+            effect_meter_panel_height(effect_names, effect_levels, effect_spectral, f.size().width);
         #[cfg(not(feature = "effect-meter-cli"))]
         let effect_meter_height = 0;
         let status_height = base_status_height + effect_meter_height;
@@ -183,13 +187,18 @@ pub fn draw_status(
             let _ = levels_db;
             let _ = effect_names;
             let _ = effect_levels;
+            let _ = effect_spectral;
             f.render_widget(playback_widget(status.text.as_str()), playback_area);
         }
 
         #[cfg(feature = "effect-meter-cli")]
         if let Some(effect_meter_area) = effect_meter_area {
-            let meter_text =
-                effect_meter_text(effect_names, effect_levels, effect_meter_area.width);
+            let meter_text = effect_meter_text(
+                effect_names,
+                effect_levels,
+                effect_spectral,
+                effect_meter_area.width,
+            );
             f.render_widget(effect_levels_widget(meter_text), effect_meter_area);
         }
 
@@ -206,25 +215,25 @@ pub fn draw_status(
 fn effect_meter_panel_height(
     effect_names: &[String],
     effect_levels: Option<&[EffectLevelSnapshot]>,
+    effect_spectral: Option<&[Option<EffectBandSnapshot>]>,
     width: u16,
 ) -> u16 {
-    if width < 48 {
+    if !spectral_graph::live_effect_meter_visible(
+        effect_names,
+        effect_levels.map_or(0, <[EffectLevelSnapshot]>::len),
+        width,
+    ) {
         return 0;
     }
-    let rows = effect_names
-        .len()
-        .max(effect_levels.map_or(0, <[EffectLevelSnapshot]>::len));
-    if rows == 0 {
-        0
-    } else {
-        rows.min(6) as u16 + 2
-    }
+    let visible_rows = effect_rows_len(effect_names, effect_levels, effect_spectral, width);
+    visible_rows as u16 + 2
 }
 
 #[cfg(feature = "effect-meter-cli")]
 fn effect_meter_text(
     effect_names: &[String],
     effect_levels: Option<&[EffectLevelSnapshot]>,
+    effect_spectral: Option<&[Option<EffectBandSnapshot>]>,
     width: u16,
 ) -> Text<'static> {
     let Some(effect_levels) = effect_levels else {
@@ -246,7 +255,13 @@ fn effect_meter_text(
     } else {
         6
     };
-    let rows = effect_names.len().max(effect_levels.len()).min(6);
+    let rows = effect_names
+        .len()
+        .max(effect_levels.len())
+        .max(effect_spectral.map_or(0, <[Option<EffectBandSnapshot>]>::len))
+        .min(spectral_graph::EFFECT_METER_MAX_VISIBLE_EFFECTS);
+    let show_spectral = spectral_graph::live_spectral_graph_visible(effect_names, width);
+    let graph_width = spectral_graph::live_graph_width(width);
     let mut lines = Vec::with_capacity(rows + 1);
     for index in 0..rows {
         let name = effect_names
@@ -268,10 +283,32 @@ fn effect_meter_text(
             format_db(linear_to_db(output_peak)),
             format_delta_db(linear_to_db(input_peak), linear_to_db(output_peak)),
         )));
+        if show_spectral {
+            let spectral_snapshot = effect_spectral
+                .and_then(|snapshots| snapshots.get(index))
+                .and_then(Option::as_ref);
+            if spectral_snapshot.is_some() || spectral_graph::supports_spectral_graph(name) {
+                let graph = spectral_snapshot
+                    .map(|snapshot| {
+                        spectral_graph::render_delta_graph(
+                            snapshot,
+                            graph_width.unwrap_or(line_width),
+                        )
+                    })
+                    .unwrap_or_else(|| {
+                        spectral_graph::placeholder_graph(
+                            graph_width.unwrap_or(line_width),
+                            "warming up",
+                        )
+                    });
+                lines.push(Line::from(format!("    spec d: {graph}")));
+            }
+        }
     }
     let hidden = effect_names
         .len()
         .max(effect_levels.len())
+        .max(effect_spectral.map_or(0, <[Option<EffectBandSnapshot>]>::len))
         .saturating_sub(rows);
     if hidden > 0 {
         lines.push(Line::from(format!("... {} more effect(s)", hidden)));
@@ -468,15 +505,36 @@ fn format_delta_db(before: f32, after: f32) -> String {
 
 #[cfg(feature = "effect-meter-cli")]
 fn truncate_ascii(value: &str, width: usize) -> String {
-    if value.chars().count() <= width {
-        value.to_string()
-    } else {
-        value
-            .chars()
-            .take(width.saturating_sub(3))
-            .collect::<String>()
-            + "..."
+    spectral_graph::truncate_ascii(value, width)
+}
+
+#[cfg(feature = "effect-meter-cli")]
+fn effect_rows_len(
+    effect_names: &[String],
+    effect_levels: Option<&[EffectLevelSnapshot]>,
+    effect_spectral: Option<&[Option<EffectBandSnapshot>]>,
+    width: u16,
+) -> usize {
+    let rows = effect_names
+        .len()
+        .max(effect_levels.map_or(0, <[EffectLevelSnapshot]>::len))
+        .max(effect_spectral.map_or(0, <[Option<EffectBandSnapshot>]>::len))
+        .min(spectral_graph::EFFECT_METER_MAX_VISIBLE_EFFECTS);
+    if !spectral_graph::live_spectral_graph_visible(effect_names, width) {
+        return rows;
     }
+    let spectral_rows = effect_names
+        .iter()
+        .take(rows)
+        .enumerate()
+        .filter(|(index, name)| {
+            effect_spectral
+                .and_then(|snapshots| snapshots.get(*index))
+                .is_some_and(Option::is_some)
+                || spectral_graph::supports_spectral_graph(name)
+        })
+        .count();
+    rows + spectral_rows
 }
 
 /// Render the TUI frame for container info.
@@ -550,6 +608,8 @@ mod tests {
     use super::{effect_meter_text, EffectLevelSnapshot};
     #[cfg(feature = "output-meter")]
     use super::{format_db, render_bar};
+    #[cfg(feature = "effect-meter-cli-spectral")]
+    use proteus_lib::dsp::meter::{BandLevels, EffectBandSnapshot};
 
     #[test]
     fn title_banner_is_non_empty() {
@@ -596,7 +656,7 @@ mod tests {
             },
         ];
 
-        let text = effect_meter_text(&names, Some(&snapshots), 100);
+        let text = effect_meter_text(&names, Some(&snapshots), None, 100);
         let rendered = text
             .lines
             .into_iter()
@@ -613,5 +673,77 @@ mod tests {
         assert!(rendered.contains("[1] LowPassFilter"));
         assert!(rendered.contains("in ["));
         assert!(rendered.contains("out ["));
+    }
+
+    #[cfg(feature = "effect-meter-cli-spectral")]
+    #[test]
+    fn effect_meter_text_renders_spectral_row_for_supported_effects_on_wide_layouts() {
+        let names = vec!["LowPassFilter".to_string()];
+        let snapshots = vec![EffectLevelSnapshot {
+            input: proteus_lib::dsp::meter::LevelSnapshot {
+                peak: vec![0.5, 0.4],
+                rms: vec![0.2, 0.2],
+            },
+            output: proteus_lib::dsp::meter::LevelSnapshot {
+                peak: vec![0.2, 0.15],
+                rms: vec![0.1, 0.1],
+            },
+        }];
+        let spectral = vec![Some(EffectBandSnapshot {
+            input: BandLevels {
+                bands_db: vec![-10.0, -10.0],
+                band_centers_hz: vec![400.0, 4_000.0],
+            },
+            output: BandLevels {
+                bands_db: vec![-10.0, -24.0],
+                band_centers_hz: vec![400.0, 4_000.0],
+            },
+        })];
+
+        let text = effect_meter_text(&names, Some(&snapshots), Some(&spectral), 100);
+        let rendered = text
+            .lines
+            .into_iter()
+            .map(|line| {
+                line.spans
+                    .into_iter()
+                    .map(|span| span.content.to_string())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(rendered.contains("spec d:"));
+    }
+
+    #[cfg(feature = "effect-meter-cli-spectral")]
+    #[test]
+    fn effect_meter_text_hides_spectral_row_on_narrow_layouts() {
+        let names = vec!["HighPassFilter".to_string()];
+        let snapshots = vec![EffectLevelSnapshot {
+            input: proteus_lib::dsp::meter::LevelSnapshot {
+                peak: vec![0.5, 0.4],
+                rms: vec![0.2, 0.2],
+            },
+            output: proteus_lib::dsp::meter::LevelSnapshot {
+                peak: vec![0.2, 0.15],
+                rms: vec![0.1, 0.1],
+            },
+        }];
+
+        let text = effect_meter_text(&names, Some(&snapshots), None, 50);
+        let rendered = text
+            .lines
+            .into_iter()
+            .map(|line| {
+                line.spans
+                    .into_iter()
+                    .map(|span| span.content.to_string())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(!rendered.contains("spec d:"));
     }
 }

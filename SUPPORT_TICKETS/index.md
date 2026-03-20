@@ -13,7 +13,7 @@ in-place; larger items get a writeup here.
 | [x]  | FR-03 | [FR-03-bounded-live-effect-control-latency.md](./FR-03-bounded-live-effect-control-latency.md) | Bound audible live-edit latency with time-based sink budgeting, latency diagnostics, and smaller sink-facing output slices |
 | [x]  | FR-04 | [FR-04-cli-effect-metering-harness.md](./FR-04-cli-effect-metering-harness.md) | Opt-in CLI effect metering for both offline reports and live per-effect visualization during normal playback |
 | [x]  | FR-05 | [FR-05-audible-time-aligned-effect-metering.md](./FR-05-audible-time-aligned-effect-metering.md) | Align live effect meters to audible playback time instead of mix-thread processing time |
-| [ ]  | FR-06 | [FR-06-cli-spectral-graph-for-shaping-effects.md](./FR-06-cli-spectral-graph-for-shaping-effects.md) | Extend the live CLI effect meter pane with compact spectral graphs for lowpass, highpass, and multiband EQ effects |
+| [x]  | FR-06 | [FR-06-cli-spectral-graph-for-shaping-effects.md](./FR-06-cli-spectral-graph-for-shaping-effects.md) | Extend the live CLI effect meter pane with compact spectral graphs for lowpass, highpass, and multiband EQ effects |
 
 ## Style Issues
 

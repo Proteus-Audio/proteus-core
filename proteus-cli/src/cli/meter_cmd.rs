@@ -9,6 +9,9 @@ use proteus_lib::tools::effect_meter::{
 };
 
 #[cfg(feature = "effect-meter-cli")]
+use super::spectral_graph;
+
+#[cfg(feature = "effect-meter-cli")]
 use crate::project_files;
 
 /// Run a meter subcommand.
@@ -202,10 +205,24 @@ fn print_bars(report: &EffectMeterReport) {
                 max_dbfs(&effect.levels.output.rms)
             )
         );
+        if let Some(spectral) = report
+            .spectral
+            .as_ref()
+            .and_then(|rows| rows.get(effect.effect_index))
+        {
+            match spectral {
+                Some(snapshot) => println!(
+                    "spec d: {}",
+                    spectral_graph::render_delta_graph(snapshot, 24)
+                ),
+                None => println!(
+                    "spec d: {}",
+                    spectral_graph::placeholder_graph(24, "not supported")
+                ),
+            }
+        }
         println!();
     }
-
-    print_spectral_table(report);
 }
 
 #[cfg(feature = "effect-meter-cli")]
