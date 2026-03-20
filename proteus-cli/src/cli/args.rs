@@ -280,7 +280,7 @@ pub fn build_cli() -> Command {
             Arg::new("max-sink-chunks")
                 .long("max-sink-chunks")
                 .value_name("CHUNKS")
-                .default_value("0")
+                .default_value("40")
                 .help("Maximum sink chunks queued before producer waits (0 disables)"),
         )
         .arg(

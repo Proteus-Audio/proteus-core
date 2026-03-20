@@ -17,7 +17,11 @@ use crate::playback::mutex_policy::lock_recoverable;
 const DEFAULT_EFFECT_LEVEL_METER_REFRESH_HZ: f32 = 30.0;
 #[cfg(feature = "effect-meter-spectral")]
 const DEFAULT_SPECTRAL_ANALYSIS_REFRESH_HZ: f32 = 15.0;
-const AUDIBLE_RING_CAPACITY: usize = 32;
+/// Hard capacity for the audible-time ring buffer.
+///
+/// At 30 Hz metering this covers ~8.5 seconds of producer-to-consumer
+/// latency, which is well above practical startup buffering or sink backlog.
+const AUDIBLE_RING_CAPACITY: usize = 256;
 
 /// A metering snapshot tagged with the mix-thread producer clock.
 #[cfg(feature = "effect-meter")]
@@ -154,6 +158,10 @@ impl EffectMeter {
     ///
     /// Called by the mix thread after each metered chunk. The `mix_time_secs`
     /// is the cumulative producer-clock position at the mix→worker boundary.
+    ///
+    /// When the ring is full the new entry is dropped rather than evicting the
+    /// oldest one; old entries are what the consumer needs for audible-time
+    /// alignment, and the consumer drains them as playback time advances.
     pub(crate) fn push_timestamped_levels(
         &self,
         mix_time_secs: f64,
@@ -165,8 +173,12 @@ impl EffectMeter {
             "audible effect level ring",
             "audible-time snapshots are derived telemetry that can be rebuilt",
         ) {
+            // Drop the current entry when the buffer is full rather than
+            // evicting the oldest. The consumer needs old entries for
+            // audible-time lookup; it drains them as playback advances,
+            // which frees space for future pushes.
             if ring.len() >= AUDIBLE_RING_CAPACITY {
-                ring.pop_front();
+                return;
             }
             ring.push_back(TimestampedLevelSnapshot {
                 mix_time_secs,
@@ -469,7 +481,51 @@ mod tests {
         }
 
         let ring = meter.audible_ring.lock().unwrap();
-        assert!(ring.len() <= AUDIBLE_RING_CAPACITY);
+        assert_eq!(ring.len(), AUDIBLE_RING_CAPACITY);
+    }
+
+    #[cfg(feature = "effect-meter")]
+    #[test]
+    fn ring_full_drops_new_entry_preserves_oldest() {
+        let meter = EffectMeter::new();
+        meter.set_level_metering_enabled(true);
+
+        // Fill the ring completely.
+        for i in 0..AUDIBLE_RING_CAPACITY {
+            meter.push_timestamped_levels(i as f64, &[make_snapshot(i as f32 * 0.01)]);
+        }
+
+        // Try pushing one more; it should be dropped.
+        meter.push_timestamped_levels(999.0, &[make_snapshot(0.99)]);
+        let ring = meter.audible_ring.lock().unwrap();
+        assert_eq!(ring.len(), AUDIBLE_RING_CAPACITY);
+        // Oldest entry is preserved (not evicted).
+        assert!((ring.front().unwrap().mix_time_secs - 0.0).abs() < 1e-9);
+        // New entry was not added.
+        assert!(
+            (ring.back().unwrap().mix_time_secs - (AUDIBLE_RING_CAPACITY - 1) as f64).abs() < 1e-9
+        );
+    }
+
+    #[cfg(feature = "effect-meter")]
+    #[test]
+    fn consumer_drain_frees_space_for_producer() {
+        let meter = EffectMeter::new();
+        meter.set_level_metering_enabled(true);
+
+        // Fill the ring.
+        for i in 0..AUDIBLE_RING_CAPACITY {
+            meter.push_timestamped_levels(i as f64, &[make_snapshot(0.1)]);
+        }
+
+        // Consumer drains by querying past the midpoint.
+        let mid = (AUDIBLE_RING_CAPACITY / 2) as f64;
+        let _ = meter.effect_levels_audible(mid);
+
+        // Now pushing succeeds.
+        meter.push_timestamped_levels(999.0, &[make_snapshot(0.5)]);
+        let ring = meter.audible_ring.lock().unwrap();
+        assert!((ring.back().unwrap().mix_time_secs - 999.0).abs() < 1e-9);
     }
 
     #[cfg(feature = "effect-meter")]
