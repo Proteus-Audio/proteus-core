@@ -119,31 +119,67 @@ Do **not** move the actual measurement point out of the effect chain.
 
 Instead, introduce a second stage:
 
-- the mix thread measures and tags each metered chunk
-- the output/runtime layer advances a playback-aligned cursor
-- the public “live” effect meter exposes the snapshot associated with the chunk
-  that has reached audible playback time
+- the mix thread measures and tags each metered snapshot with a playback-clock
+  timestamp (the `time_chunks_passed` value at the point the corresponding
+  audio enters the worker queue)
+- the output/runtime layer advances a playback-aligned cursor as chunks drain
+- the public “live” effect meter exposes the snapshot whose timestamp is at or
+  just before the current audible playback time
 
 This preserves the correct measurement location while fixing the timing
 semantics.
 
-### B. Queue effect-meter snapshots alongside output timing
+### B. Timestamp-indexed snapshot ring buffer
 
-The output side already has timing information about queued chunks from the
-playback worker path used in [`FR-03`](./FR-03-bounded-live-effect-control-latency.md).
+#### Why not one snapshot per output chunk
 
-Build on that:
+The current metering is **rate-limited**: `MixEffectMeteringState` accumulates
+rendered frames and only emits a snapshot when the accumulated count reaches the
+refresh interval (default 30 Hz / ~1600 frames at 48 kHz). Many output chunks
+pass without producing a snapshot, and a single snapshot may span multiple
+output chunks.
 
-- when the mix thread publishes a metered chunk, attach:
-  - per-effect snapshot
-  - chunk duration / frame count
-  - monotonic sequence id
-- when the worker/sink bookkeeping advances playback, retire snapshot entries
-  in the same order as the queued audio drains
-- expose the most recent **played** effect snapshot as the audible-time meter
+Additionally, when `output_slice_ms` is active (FR-03 Section C), a single DSP
+pass is sliced into several smaller output chunks — but the effect measurement
+happens once per DSP pass, not per slice.
 
-This is conceptually similar to a small FIFO of effect-meter snapshots aligned
-to the already-queued output audio.
+This means a 1:1 “one snapshot per queued output chunk” model does not work.
+
+#### Proposed model: timestamped ring buffer
+
+Instead of trying to pair snapshots with individual chunks, use a small
+**bounded ring buffer** of timestamped snapshots:
+
+1. When `ChunkEffectMetering::finish()` publishes a snapshot, it also records
+   the current **playback-clock position** of that audio. This is the
+   cumulative duration of audio sent to the worker at the time the snapshot's
+   chunk crosses the mix→worker boundary.
+
+2. The ring buffer lives in `EffectMeter` (or a new sibling struct) and is
+   written by the mix thread. It should use a lock-free structure (e.g.,
+   `crossbeam::ArrayQueue` or a single-producer/single-consumer ring) to avoid
+   blocking the mix thread. The current `try_lock()` approach works for
+   “latest only” but is unsuitable for a queue where dropped entries create
+   timing gaps.
+
+3. On the consumer side, the caller reads the current audible playback time
+   (derived from `time_chunks_passed` in `timing.rs`) and finds the most
+   recent snapshot whose timestamp ≤ that time.
+
+4. Snapshots older than the current audible time can be retired (popped from
+   the front of the ring buffer).
+
+#### Capacity bound
+
+The ring buffer capacity should be bounded explicitly, not just implicitly by
+the sink-latency envelope:
+
+- With `max_sink_latency_ms = 60` and snapshots at 30 Hz, only ~2 snapshots
+  will be queued at any time — very small.
+- Without a latency budget (default playback), startup buffering could push the
+  mix thread significantly ahead. A fixed capacity of 16–32 entries is more
+  than sufficient and prevents unbounded growth regardless of configuration.
+- When the buffer is full, the oldest entry is overwritten (ring semantics).
 
 ### C. Preserve an explicit processing-time diagnostic path
 
@@ -151,41 +187,71 @@ The mix-time snapshot is still useful for diagnostics and testing.
 
 So v1 should distinguish two semantics explicitly:
 
-- **processing-time** effect meter
-- **audible-time** effect meter
+- **processing-time** effect meter — the latest snapshot from the mix thread
+  (current behavior, unchanged)
+- **audible-time** effect meter — the snapshot corresponding to the chunk
+  currently draining from the managed sink queue
 
-Recommended API direction:
+Recommended API direction for v1: **two separate player accessors** rather than
+a timing enum parameter:
 
 ```rust
-pub enum EffectMeterTiming {
-    ProcessingTime,
-    AudibleTime,
-}
+// Existing — unchanged, returns the latest mix-thread snapshot
+pub fn effect_levels(&self) -> Option<Vec<EffectLevelSnapshot>>;
+
+// New — returns the snapshot aligned to current audible playback time
+pub fn effect_levels_audible(&self) -> Option<Vec<EffectLevelSnapshot>>;
 ```
 
-The CLI live playback surface should use `AudibleTime`.
+This avoids adding a parameter to every metering call and keeps the two
+internal paths cleanly separated. The existing `effect_levels()` continues to
+work for offline tooling; the new `effect_levels_audible()` is what live
+playback surfaces use.
 
-Offline tooling can keep using `ProcessingTime`.
-
-If a new public enum feels too heavy for v1, an equivalent split through two
-player accessors is also acceptable.
+A unifying `EffectMeterTiming` enum can be introduced later if more timing
+modes are needed.
 
 ### D. Keep backlog accounting cheap
 
-The effect meter should not create a second independent timing system if the
-worker already tracks chunk durations.
+The effect meter should not create a second independent timing system.
 
 Preferred approach:
 
-- reuse the worker-side queued-duration bookkeeping
-- store one effect-meter payload per queued output chunk
-- advance/destroy entries as chunks are known to have drained from the Proteus
-  managed queue
+- reuse the worker-side `time_chunks_passed` bookkeeping already maintained in
+  `timing.rs` as the authoritative audible-time clock
+- expose this clock (or a snapshot of it) through the player API so the
+  consumer can compare it against snapshot timestamps
+- the ring buffer lookup is O(n) on a very small n (typically 1–3 entries);
+  a linear scan from the tail is sufficient
 
-This should remain bounded by the same sink-latency envelope discussed in
-`FR-03`, so memory growth is naturally limited.
+The worker already computes `queued_sink_ms` as part of
+`publish_output_latency_metrics()`. This value, combined with the total
+elapsed mix time, gives the audible-time boundary without new bookkeeping.
 
-### E. Be explicit about the final accuracy boundary
+### E. Address the `try_lock` publication path
+
+The current `try_publish_levels()` uses `Mutex::try_lock()` and silently drops
+the snapshot if the consumer holds the lock. For “latest only” this is fine —
+the next snapshot replaces it anyway.
+
+For the audible-time ring buffer, dropped entries leave timing gaps. Two
+options:
+
+1. **Lock-free queue** (preferred): Use a bounded SPSC ring buffer
+   (`crossbeam::ArrayQueue` or a hand-rolled atomic ring). The mix thread
+   always succeeds in pushing; if the buffer is full, the oldest entry is
+   overwritten. The consumer pops entries up to the current audible time.
+
+2. **Fallback — keep `try_lock` with a `VecDeque`**: The consumer holds the
+   lock only briefly to clone and drain. In practice the contention window is
+   tiny (sub-microsecond clone of a small vec). If a snapshot is dropped, the
+   audible-time view holds the previous value — acceptable degradation, not a
+   correctness failure.
+
+Option 1 is cleaner but adds a dependency. Option 2 is pragmatic for v1 and
+can be upgraded later.
+
+### F. Be explicit about the final accuracy boundary
 
 Proteus can align to the point where audio has drained from its managed sink
 queue.
@@ -196,6 +262,11 @@ So the v1 contract should be explicit:
 
 - effect meters are aligned to the library-managed audible playback boundary
 - small residual device/backend latency beyond Proteus may still remain
+
+The audible-time meter also inherits the refresh-rate quantization of the
+snapshot producer (e.g., 33 ms at 30 Hz). This is acceptable for visual
+metering — the meter is aligned to within one refresh period of the true
+audible boundary, which is well below perceptual thresholds.
 
 That is still a large improvement over the current “latest processed chunk”
 semantics.
