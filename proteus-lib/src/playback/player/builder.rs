@@ -10,6 +10,7 @@ use super::{
 };
 use crate::container::info::Info;
 use crate::container::prot::{PathsTrack, Prot};
+use crate::playback::effect_meter::EffectMeter;
 use crate::playback::engine::{DspChainMetrics, PlaybackBufferSettings};
 use crate::playback::mutex_policy::lock_invariant;
 use crate::playback::output_meter::OutputMeter;
@@ -55,6 +56,7 @@ impl Player {
             inline_track_mix_updates: Arc::new(Mutex::new(Vec::new())),
             dsp_metrics: Arc::new(Mutex::new(DspChainMetrics::default())),
             effects_reset: Arc::new(AtomicU64::new(0)),
+            effect_meter: Arc::new(EffectMeter::new()),
             output_meter: Arc::new(Mutex::new(OutputMeter::new(
                 channels,
                 sample_rate,

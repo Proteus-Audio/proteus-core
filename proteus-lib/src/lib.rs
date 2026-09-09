@@ -14,6 +14,8 @@ pub mod container;
 pub mod diagnostics;
 pub mod dsp;
 pub(crate) mod logging;
+#[cfg(feature = "prot-mux")]
+pub mod mux;
 pub mod peaks;
 pub mod playback;
 #[cfg(test)]

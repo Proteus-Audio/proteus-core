@@ -1,16 +1,23 @@
 [
-	{
-		"LowPassFilterSettings": {
-			"enabled": true,
-			"freq_hz": 1200,
-			"q": 0.5
-		}
-	},
-	{
-		"HighPassFilterSettings": {
-			"enabled": true,
-			"freq_hz": 200,
-			"q": 0.5
-		}
-	}
+  {
+    "DistortionSettings": {
+      "enabled": true,
+      "gain": "20db",
+      "threshold": "-5db"
+    }
+  },
+  {
+    "LowPassFilterSettings": {
+      "enabled": true,
+      "freq_hz": 1200,
+      "q": 0.5
+    }
+  },
+  {
+    "HighPassFilterSettings": {
+      "enabled": true,
+      "freq_hz": 200,
+      "q": 0.5
+    }
+  }
 ]

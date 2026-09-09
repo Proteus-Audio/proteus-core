@@ -128,7 +128,8 @@ fn initialize_container_decoders(
             continue;
         };
         let dec_opts: DecoderOptions = Default::default();
-        if let Ok(decoder) = symphonia::default::get_codecs().make(&track.codec_params, &dec_opts) {
+        if let Ok(decoder) = crate::tools::decode::get_codecs().make(&track.codec_params, &dec_opts)
+        {
             decoders.insert(track_id, decoder);
             time_bases.insert(track_id, track.codec_params.time_base);
             sample_rates.insert(track_id, track.codec_params.sample_rate);

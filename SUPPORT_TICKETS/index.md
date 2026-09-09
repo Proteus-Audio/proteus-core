@@ -8,9 +8,14 @@ in-place; larger items get a writeup here.
 
 | Done | ID    | Writeup                                                                    | Summary                                                                                                                         |
 | ---- | ----- | -------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
-| [ ]  | FR-01 | [FR-01-per-effect-level-metering.md](./FR-01-per-effect-level-metering.md) | Per-effect input/output level metering and per-band spectral analysis for GUI visualization, behind `effect-meter` feature flag |
+| [x]  | FR-01 | [FR-01-per-effect-level-metering.md](./FR-01-per-effect-level-metering.md) | Per-effect input/output level metering and per-band spectral analysis for GUI visualization, behind `effect-meter` feature flag |
 | [x]  | FR-02 | [FR-02-inline-effect-parameter-smoothing.md](./FR-02-inline-effect-parameter-smoothing.md) | Per-parameter smoothing (gain ramps, biquad coefficient interpolation, compressor envelope continuity) for click-free DAW-style live editing |
 | [x]  | FR-03 | [FR-03-bounded-live-effect-control-latency.md](./FR-03-bounded-live-effect-control-latency.md) | Bound audible live-edit latency with time-based sink budgeting, latency diagnostics, and smaller sink-facing output slices |
+| [x]  | FR-04 | [FR-04-cli-effect-metering-harness.md](./FR-04-cli-effect-metering-harness.md) | Opt-in CLI effect metering for both offline reports and live per-effect visualization during normal playback |
+| [x]  | FR-05 | [FR-05-audible-time-aligned-effect-metering.md](./FR-05-audible-time-aligned-effect-metering.md) | Align live effect meters to audible playback time instead of mix-thread processing time |
+| [x]  | FR-06 | [FR-06-cli-spectral-graph-for-shaping-effects.md](./FR-06-cli-spectral-graph-for-shaping-effects.md) | Extend the live CLI effect meter pane with compact spectral graphs for lowpass, highpass, and multiband EQ effects |
+| [x]  | FR-07 | [FR-07-feature-gated-prot-muxing-api.md](./FR-07-feature-gated-prot-muxing-api.md) | Add opt-in `proteus-lib` APIs for creating `.prot` files with the published Proteus muxer crate |
+| [x]  | FR-08 | [FR-08-cli-create-prot-from-directory.md](./FR-08-cli-create-prot-from-directory.md) | Add a CLI command that packages folder-backed Proteus projects into `.prot` files with an `indicatif` progress bar |
 
 ## Style Issues
 
@@ -51,3 +56,6 @@ in-place; larger items get a writeup here.
 | [x]  | ST-33 | [ST-33-dead-code-warning-baseline.md](./ST-33-dead-code-warning-baseline.md)                   | Most dead-code removals are done, but the project still lacks a re-established clean warning baseline                                         |
 | [x]  | ST-34 | [ST-34-critical-mutex-poisoning-policy.md](./ST-34-critical-mutex-poisoning-policy.md)         | Critical runtime mutexes still lack an intentional poison-recovery policy beyond descriptive panic messages                                   |
 | [x]  | ST-35 | [ST-35-residual-long-functions.md](./ST-35-residual-long-functions.md)                         | 3 functions still exceed the 80-line hard limit; 4 `too_many_arguments` suppressions remain in `track/`                                       |
+| [x]  | ST-36 | [ST-36-structural-duration-probing.md](./ST-36-structural-duration-probing.md)                 | Duration probing should prefer reliable container/header structure over stale free-form metadata tags across all supported formats             |
+| [ ]  | ST-37 | [ST-37-m4a-alac-support.md](./ST-37-m4a-alac-support.md)                                      | `.m4a` support should explicitly cover ALAC as well as AAC, with direct Symphonia feature flags and decode/duration fixtures                  |
+| [ ]  | ST-38 | [ST-38-effect-tail-aware-duration.md](./ST-38-effect-tail-aware-duration.md)                   | Displayed duration should account for reverb and other effect tails for single files and `.prot` containers                                   |

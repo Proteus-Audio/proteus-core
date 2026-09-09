@@ -22,6 +22,8 @@ use proteus_lib::{
 use ratatui::{backend::CrosstermBackend, Terminal};
 use symphonia::core::errors::Result;
 
+#[cfg(feature = "effect-meter-cli-spectral")]
+use super::spectral_graph;
 use super::{controls, ui};
 use crate::logging::LogLine;
 use crate::{logging, project_files};
@@ -71,6 +73,7 @@ pub(crate) fn run_playback(
             }
         }
     }
+    configure_live_effect_metering(&player);
 
     player.play();
     player.set_volume(session.gain / 100.0);
@@ -80,26 +83,32 @@ pub(crate) fn run_playback(
 fn maybe_print_durations(args: &ArgMatches, file_path: &str) -> Option<i32> {
     if args.get_flag("scan-durations") {
         let start = std::time::Instant::now();
-        let durations = proteus_lib::container::info::get_durations_by_scan(file_path);
+        let durations = proteus_lib::container::info::get_duration_details_by_scan(file_path);
         let elapsed = start.elapsed();
-        let mut items = durations.into_iter().collect::<Vec<_>>();
-        items.sort_by(|a, b| a.0.cmp(&b.0));
-        for (track_id, seconds) in items {
-            println!("track {}: {:.3}s", track_id, seconds);
+        let mut items = durations;
+        items.sort_by(|a, b| a.track_id.cmp(&b.track_id));
+        for detail in items {
+            println!(
+                "track {}: {:.3}s source={} exact={}",
+                detail.track_id, detail.seconds, detail.source, detail.exact
+            );
         }
         println!("scan duration: {:.3}s", elapsed.as_secs_f64());
         return Some(0);
     }
     if args.get_flag("read-durations") {
         let start = std::time::Instant::now();
-        let durations = proteus_lib::container::info::get_durations(file_path);
+        let durations = proteus_lib::container::info::get_duration_details(file_path);
         let elapsed = start.elapsed();
-        let mut items = durations.into_iter().collect::<Vec<_>>();
-        items.sort_by(|a, b| a.0.cmp(&b.0));
-        for (track_id, seconds) in items {
-            println!("track {}: {:.3}s", track_id, seconds);
+        let mut items = durations;
+        items.sort_by(|a, b| a.track_id.cmp(&b.track_id));
+        for detail in items {
+            println!(
+                "track {}: {:.3}s source={} exact={}",
+                detail.track_id, detail.seconds, detail.source, detail.exact
+            );
         }
-        println!("scan duration: {:.3}s", elapsed.as_secs_f64());
+        println!("read duration: {:.3}s", elapsed.as_secs_f64());
         return Some(0);
     }
     None
@@ -195,6 +204,20 @@ fn draw_status_frame(
     let duration = player.get_duration();
     let playing = player.is_playing();
     let effect_names = player.get_effect_names();
+    #[cfg(feature = "effect-meter-cli")]
+    let effect_levels = player.effect_levels_audible();
+    #[cfg(feature = "effect-meter-cli-spectral")]
+    let effect_spectral = {
+        let width = terminal.size().map(|size| size.width).unwrap_or_default();
+        sync_live_spectral_analysis(player, &effect_names, width);
+        if spectral_graph::live_spectral_graph_visible(&effect_names, width) {
+            player.effect_band_levels_audible()
+        } else {
+            None
+        }
+    };
+    #[cfg(not(feature = "effect-meter-cli-spectral"))]
+    let effect_spectral: Option<Vec<Option<proteus_lib::dsp::meter::EffectBandSnapshot>>> = None;
     #[cfg(feature = "output-meter")]
     let levels = player.get_levels();
     #[cfg(not(feature = "output-meter"))]
@@ -216,7 +239,7 @@ fn draw_status_frame(
         time,
         duration,
         playing,
-        effects: effect_names,
+        effects: effect_names.clone(),
         #[cfg(feature = "debug")]
         sample_rate: player.audio_info().sample_rate,
         #[cfg(feature = "debug")]
@@ -266,7 +289,19 @@ fn draw_status_frame(
         #[cfg(feature = "debug")]
         sink_len,
     });
-    ui::draw_status(terminal, &status, &log_lines, &levels, &levels_db);
+    ui::draw_status(
+        terminal,
+        &status,
+        &log_lines,
+        &levels,
+        &levels_db,
+        &effect_names,
+        #[cfg(feature = "effect-meter-cli")]
+        effect_levels.as_deref(),
+        #[cfg(not(feature = "effect-meter-cli"))]
+        None,
+        effect_spectral.as_deref(),
+    );
 }
 
 fn arg_f32(args: &ArgMatches, key: &str) -> f32 {
@@ -292,6 +327,32 @@ fn configure_player(args: &ArgMatches, player: &mut player::Player) {
     player.set_track_eos_ms(arg_f32(args, "track-eos-ms"));
 }
 
+fn configure_live_effect_metering(player: &player::Player) {
+    #[cfg(feature = "effect-meter-cli")]
+    {
+        player.set_effect_level_meter_refresh_hz(20.0);
+        player.set_effect_level_metering_enabled(true);
+    }
+
+    #[cfg(feature = "effect-meter-cli-spectral")]
+    {
+        player.set_spectral_analysis_refresh_hz(12.0);
+        player.set_spectral_analysis_enabled(false);
+    }
+
+    #[cfg(not(feature = "effect-meter-cli"))]
+    let _ = player;
+}
+
+#[cfg(feature = "effect-meter-cli-spectral")]
+fn sync_live_spectral_analysis(player: &player::Player, effect_names: &[String], width: u16) {
+    let should_enable = spectral_graph::live_spectral_graph_visible(effect_names, width)
+        && spectral_graph::live_effect_meter_visible(effect_names, effect_names.len(), width);
+    if player.spectral_analysis_enabled() != should_enable {
+        player.set_spectral_analysis_enabled(should_enable);
+    }
+}
+
 struct RawModeGuard;
 
 impl RawModeGuard {
@@ -309,6 +370,9 @@ impl Drop for RawModeGuard {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(feature = "effect-meter-cli")]
+    use proteus_lib::playback::player::Player;
+
     #[test]
     fn maybe_print_durations_returns_none_without_duration_flags() {
         let args = clap::Command::new("prot")
@@ -337,5 +401,28 @@ mod tests {
 
         let code = super::run_playback(&args, logs).expect("runner should return result");
         assert_eq!(code, -1);
+    }
+
+    #[cfg(feature = "effect-meter-cli")]
+    #[test]
+    fn configure_live_effect_metering_enables_runtime_snapshots() {
+        let player =
+            Player::new_from_file_paths(vec![super::PathsTrack::new_from_file_paths(vec![
+                "/tmp/nonexistent.wav".to_string(),
+            ])]);
+        super::configure_live_effect_metering(&player);
+        assert!(player.effect_levels().is_some());
+    }
+
+    #[cfg(feature = "effect-meter-cli-spectral")]
+    #[test]
+    fn configure_live_effect_metering_keeps_spectral_analysis_disabled_until_needed() {
+        let player =
+            Player::new_from_file_paths(vec![super::PathsTrack::new_from_file_paths(vec![
+                "/tmp/nonexistent.wav".to_string(),
+            ])]);
+        super::configure_live_effect_metering(&player);
+        assert!(!player.spectral_analysis_enabled());
+        assert_eq!(player.effect_band_levels(), None);
     }
 }

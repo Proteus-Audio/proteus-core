@@ -71,7 +71,7 @@ fn bits_from_decode(file_path: &str) -> u32 {
     };
 
     let dec_opts: DecoderOptions = Default::default();
-    let mut decoder = match symphonia::default::get_codecs().make(&codec_params, &dec_opts) {
+    let mut decoder = match crate::tools::decode::get_codecs().make(&codec_params, &dec_opts) {
         Ok(decoder) => decoder,
         Err(_) => return 0,
     };

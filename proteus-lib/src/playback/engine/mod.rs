@@ -12,6 +12,7 @@ use log::warn;
 
 use crate::audio::buffer::{init_buffer_map, TrackBuffer};
 use crate::container::prot::Prot;
+use crate::playback::effect_meter::EffectMeter;
 use crate::playback::mutex_policy::{lock_invariant, lock_recoverable};
 
 mod mix;
@@ -68,6 +69,8 @@ pub struct PlayerEngineConfig {
     pub dsp_metrics: Arc<Mutex<DspChainMetrics>>,
     /// Monotonic counter incremented each time the effect chain should be reset.
     pub effects_reset: Arc<AtomicU64>,
+    /// Shared effect inspection store written by the mix thread.
+    pub effect_meter: Arc<EffectMeter>,
     /// Pending inline effects-chain swap to apply on the next mix cycle.
     pub inline_effects_update: Arc<Mutex<Option<InlineEffectsUpdate>>>,
     /// Pending per-track mix updates to apply on the next mix cycle.
@@ -96,6 +99,7 @@ pub struct PlayerEngine {
     effects: Arc<Mutex<Vec<crate::dsp::effects::AudioEffect>>>,
     dsp_metrics: Arc<Mutex<DspChainMetrics>>,
     effect_settings_commands: Arc<Mutex<Vec<EffectSettingsCommand>>>,
+    effect_meter: Arc<EffectMeter>,
     mix_thread_handle: Option<JoinHandle<()>>,
 }
 
@@ -109,6 +113,7 @@ impl PlayerEngine {
             effects,
             dsp_metrics,
             effects_reset,
+            effect_meter,
             inline_effects_update,
             inline_track_mix_updates,
             effect_settings_commands,
@@ -153,6 +158,7 @@ impl PlayerEngine {
             effects,
             dsp_metrics,
             effect_settings_commands,
+            effect_meter,
             mix_thread_handle: None,
         }
     }
@@ -204,6 +210,7 @@ impl PlayerEngine {
             effects: self.effects.clone(),
             dsp_metrics: self.dsp_metrics.clone(),
             effect_settings_commands: self.effect_settings_commands.clone(),
+            effect_meter: self.effect_meter.clone(),
         });
         self.mix_thread_handle = Some(handle);
         receiver

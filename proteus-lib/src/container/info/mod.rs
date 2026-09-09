@@ -1,6 +1,7 @@
 //! Container metadata helpers and duration probing.
 
 mod aiff;
+mod duration;
 mod track_info;
 
 use std::{collections::HashMap, fs::File, path::Path};
@@ -18,6 +19,8 @@ use symphonia::core::{
 };
 
 use track_info::{gather_track_info, gather_track_info_from_file_paths};
+
+pub use duration::{DurationDetail, DurationSourceKind};
 
 /// Error returned when combining metadata from audio files with incompatible formats.
 #[derive(Debug)]
@@ -123,9 +126,10 @@ fn probe_with_hint(
     symphonia::default::get_probe().format(&hint, mss, &format_opts, &metadata_opts)
 }
 
-/// Best-effort duration mapping per track using metadata or frame counts.
+/// Best-effort duration mapping per track using structural data, frame counts, or metadata.
 ///
-/// For container files, this may be approximate if metadata is inaccurate.
+/// Free-form metadata tags are used only after structural and frame-count
+/// probes fail.
 pub fn get_durations(file_path: &str) -> HashMap<u32, f64> {
     match try_get_durations(file_path) {
         Ok(durations) => durations,
@@ -139,53 +143,86 @@ pub fn get_durations(file_path: &str) -> HashMap<u32, f64> {
     }
 }
 
-/// Strict duration mapping per track using metadata or frame counts.
+/// Detailed best-effort duration mapping with source provenance.
+///
+/// This is useful for diagnostics and CLI output. Call [`get_durations`] when
+/// only the compatibility `HashMap<u32, f64>` is needed.
+pub fn get_duration_details(file_path: &str) -> Vec<DurationDetail> {
+    match try_get_duration_details(file_path) {
+        Ok(details) => details,
+        Err(err) => {
+            warn!(
+                "duration detail probe failed for '{}': {}; using fallback duration mapping",
+                file_path, err
+            );
+            duration::packet_scan_details(aiff::fallback_durations(file_path))
+        }
+    }
+}
+
+/// Strict detailed duration mapping with source provenance.
+///
+/// # Errors
+///
+/// Returns [`InfoError`] when probing fails or no tracks are available.
+pub fn try_get_duration_details(file_path: &str) -> Result<Vec<DurationDetail>, InfoError> {
+    if let Some(details) = duration::probe_standalone_structural(file_path) {
+        return Ok(details);
+    }
+
+    let mut probed = get_probe_result_from_string(file_path)
+        .map_err(|err| InfoError::ProbeFailed(err.to_string()))?;
+
+    let tag_durations = parse_duration_tags(&mut probed);
+    let tracks = probed.format.tracks();
+    if tracks.is_empty() {
+        return Err(InfoError::NoTracksFound);
+    }
+
+    if let Some(details) = duration::choose_track_details(
+        duration::probe_structural(file_path, tracks),
+        duration::probe_frame_counts(tracks),
+        duration::tag_details(&tag_durations, tracks),
+    ) {
+        return Ok(details);
+    }
+
+    Ok(Vec::new())
+}
+
+/// Strict duration mapping per track using structural data, frame counts, or metadata.
 ///
 /// # Errors
 ///
 /// Returns [`InfoError`] when probing fails or no tracks are available.
 pub fn try_get_durations(file_path: &str) -> Result<HashMap<u32, f64>, InfoError> {
-    let mut probed = get_probe_result_from_string(file_path)
-        .map_err(|err| InfoError::ProbeFailed(err.to_string()))?;
+    try_get_duration_details(file_path).map(|details| duration::details_to_map(&details))
+}
 
-    let mut durations: Vec<f64> = Vec::new();
-
+fn parse_duration_tags(probed: &mut ProbeResult) -> Vec<f64> {
+    let mut durations = Vec::new();
     if let Some(metadata_rev) = probed.format.metadata().current() {
         metadata_rev.tags().iter().for_each(|tag| {
             if tag.key == "DURATION" {
-                // Convert duration of type 01:12:37.227000000 to 4337.227
-                let duration = tag.value.to_string().clone();
-                let duration_parts = duration.split(':').collect::<Vec<&str>>();
-                if duration_parts.len() >= 3 {
-                    let hours = duration_parts[0].parse::<f64>().unwrap_or(0.0);
-                    let minutes = duration_parts[1].parse::<f64>().unwrap_or(0.0);
-                    let seconds = duration_parts[2].parse::<f64>().unwrap_or(0.0);
-                    let duration_in_seconds = (hours * 3600.0) + (minutes * 60.0) + seconds;
-                    durations.push(duration_in_seconds);
+                if let Some(seconds) = parse_duration_tag(&tag.value.to_string()) {
+                    durations.push(seconds);
                 }
             }
         });
     }
+    durations
+}
 
-    // Convert durations to HashMap with key as index and value as duration
-    let mut duration_map: HashMap<u32, f64> = HashMap::new();
-
-    if probed.format.tracks().is_empty() {
-        return Err(InfoError::NoTracksFound);
+fn parse_duration_tag(duration: &str) -> Option<f64> {
+    let duration_parts = duration.split(':').collect::<Vec<&str>>();
+    if duration_parts.len() < 3 {
+        return None;
     }
 
-    for (index, track) in probed.format.tracks().iter().enumerate() {
-        if let Some(real_duration) = durations.get(index) {
-            duration_map.insert(track.id, *real_duration);
-            continue;
-        }
-
-        let codec_params = &track.codec_params;
-        let duration = get_time_from_frames(codec_params);
-        duration_map.insert(track.id, duration);
-    }
-
-    Ok(duration_map)
+    let hours = duration_parts[0].parse::<f64>().ok()?;
+    let minutes = duration_parts[1].parse::<f64>().ok()?;
+    let seconds = duration_parts[2].parse::<f64>().ok()?;
+    Some((hours * 3600.0) + (minutes * 60.0) + seconds)
 }
 
 fn get_durations_best_effort(file_path: &str) -> HashMap<u32, f64> {
@@ -208,6 +245,20 @@ pub fn get_durations_by_scan(file_path: &str) -> HashMap<u32, f64> {
                 file_path, err
             );
             aiff::fallback_durations(file_path)
+        }
+    }
+}
+
+/// Detailed packet-scan duration mapping with source provenance.
+pub fn get_duration_details_by_scan(file_path: &str) -> Vec<DurationDetail> {
+    match try_get_durations_by_scan(file_path) {
+        Ok(durations) => duration::packet_scan_details(durations),
+        Err(err) => {
+            warn!(
+                "duration scan detail failed for '{}': {}; using fallback duration mapping",
+                file_path, err
+            );
+            duration::packet_scan_details(aiff::fallback_durations(file_path))
         }
     }
 }
@@ -346,5 +397,68 @@ mod tests {
             ..Default::default()
         };
         assert!((get_time_from_frames(&params) - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn ogg_duration_prefers_page_granule_position_over_stale_duration_tag() {
+        let path = "../test_audio/deep_trouble_000.ogg";
+        let durations = try_get_durations(path).expect("duration probe");
+        let duration = durations.values().copied().next().expect("duration value");
+
+        assert!((duration - 1687.3265).abs() < 0.001);
+    }
+
+    #[test]
+    fn ogg_vorbis_duration_uses_page_granule_position() {
+        let path = "../test_audio/test-32bit.ogg";
+        let durations = try_get_durations(path).expect("duration probe");
+        let duration = durations.values().copied().next().expect("duration value");
+
+        assert!((duration - 40.17632653061224).abs() < 0.001);
+    }
+
+    #[test]
+    fn fixture_structural_duration_sources_are_preferred() {
+        let fixtures = [
+            (
+                "../test_audio/test-24bit.flac",
+                40.17632653061224,
+                DurationSourceKind::Structural,
+            ),
+            (
+                "../test_audio/test-16bit.wav",
+                40.17632653061224,
+                DurationSourceKind::Structural,
+            ),
+            (
+                "../test_audio/test-16bit.aiff",
+                40.17632653061224,
+                DurationSourceKind::Structural,
+            ),
+            (
+                "../test_audio/test-32bit.mp3",
+                40.20244897959184,
+                DurationSourceKind::Structural,
+            ),
+            (
+                "../test_audio/demo_shuffle_points.prot",
+                41.668,
+                DurationSourceKind::Structural,
+            ),
+        ];
+
+        for (path, expected_seconds, expected_source) in fixtures {
+            let details = try_get_duration_details(path).expect("duration details");
+            let detail = details.first().expect("duration detail");
+
+            assert_eq!(detail.source, expected_source, "{}", path);
+            assert!(
+                (detail.seconds - expected_seconds).abs() < 0.01,
+                "{}: {} != {}",
+                path,
+                detail.seconds,
+                expected_seconds
+            );
+        }
     }
 }

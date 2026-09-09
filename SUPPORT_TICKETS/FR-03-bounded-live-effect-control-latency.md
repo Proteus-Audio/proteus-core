@@ -33,7 +33,7 @@ That is the correct behavior for realtime DSP, but it only changes audio that ha
 
 ### The sink queue can still get too far ahead
 
-The playback worker appends mixed chunks into the output sink and only applies backpressure when `max_sink_chunks > 0`. The default remains `0`, which disables that guard entirely.
+The playback worker appends mixed chunks into the output sink and only applies backpressure when `max_sink_chunks > 0`. The current default is `40`, while an explicit value of `0` disables the chunk-count guard entirely.
 
 That means the sink can accumulate an arbitrary amount of already-rendered audio. Any inline effect change must wait for that backlog to play out before the listener can hear it.
 
@@ -75,7 +75,7 @@ Behavior:
 
 - if configured, the playback worker uses tracked queued chunk durations to keep the sink from getting further ahead than the requested time budget
 - this should coexist with the existing chunk-count settings for backward compatibility
-- the two controls are orthogonal: if `max_sink_chunks` is at its default of `0` (disabled), a configured time budget should still apply on its own; if both are active, the stricter effective cap should win
+- the two controls are orthogonal: if `max_sink_chunks` is set to `0` (disabled), a configured time budget should still apply on its own; if both are active, the stricter effective cap should win
 - the setting should remain disabled by default
 - the time-based budget should be the preferred authoring control because it remains meaningful when chunk sizes vary by effect chain
 - the worker already tracks per-chunk durations in a `VecDeque<f64>` for the playback clock; after the played-chunk drain pass, the remaining entries represent queued audio, so computing queued milliseconds is a cheap sum over a typically tiny collection

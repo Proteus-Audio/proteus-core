@@ -139,6 +139,7 @@ pub(in crate::playback::player::runtime) fn run_playback_thread(
             dsp_metrics: ctx.dsp_metrics.clone(),
             effect_settings_commands: ctx.effect_settings_commands.clone(),
             effects_reset: ctx.effects_reset.clone(),
+            effect_meter: ctx.effect_meter.clone(),
             inline_effects_update: ctx.inline_effects_update.clone(),
             inline_track_mix_updates: ctx.inline_track_mix_updates.clone(),
         },

@@ -4,6 +4,10 @@ use serde::{Deserialize, Serialize};
 
 use super::core::biquad::{BiquadKind, BiquadState};
 use super::EffectContext;
+#[cfg(feature = "effect-meter")]
+use crate::dsp::meter::frequency_response::build_log_spaced_curve;
+#[cfg(feature = "effect-meter")]
+use crate::dsp::meter::FilterResponseCurve;
 
 const DEFAULT_FREQ_HZ: u32 = 1000;
 const DEFAULT_Q: f32 = 0.5;
@@ -100,6 +104,25 @@ impl super::core::DspEffect for LowPassFilterEffect {
 }
 
 impl LowPassFilterEffect {
+    #[cfg(feature = "effect-meter")]
+    pub(crate) fn frequency_response_curve(
+        &self,
+        sample_rate: u32,
+        num_points: usize,
+    ) -> FilterResponseCurve {
+        FilterResponseCurve {
+            composite: build_log_spaced_curve(sample_rate, num_points, |freq_hz| {
+                super::core::biquad::low_pass_response_db(
+                    sample_rate,
+                    self.settings.freq_hz,
+                    self.settings.q,
+                    freq_hz,
+                )
+            }),
+            per_band: Vec::new(),
+        }
+    }
+
     fn ensure_state(&mut self, context: &EffectContext) {
         if let Some(state) = self.state.as_mut() {
             if state.matches_structure(
@@ -196,5 +219,28 @@ mod tests {
 
         assert!((second[0] - previous).abs() < 0.2);
         assert!(second.iter().all(|sample| sample.is_finite()));
+    }
+
+    #[cfg(feature = "effect-meter")]
+    #[test]
+    fn low_pass_frequency_response_is_near_minus_three_db_at_cutoff() {
+        let effect = LowPassFilterEffect {
+            enabled: true,
+            settings: LowPassFilterSettings::new(1_000, 1.0 / 2.0_f32.sqrt()),
+            state: None,
+        };
+
+        let curve = effect.frequency_response_curve(48_000, 128);
+        let point = curve
+            .composite
+            .iter()
+            .min_by(|left, right| {
+                (left.freq_hz - 1_000.0)
+                    .abs()
+                    .total_cmp(&(right.freq_hz - 1_000.0).abs())
+            })
+            .expect("cutoff point");
+
+        assert!((point.gain_db + 3.0).abs() < 0.6);
     }
 }

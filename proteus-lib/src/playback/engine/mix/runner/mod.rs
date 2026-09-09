@@ -1,6 +1,7 @@
 //! Core mix-thread runtime loop implementation.
 
 mod decode;
+mod effect_metering;
 mod effects_runtime;
 mod loop_body;
 mod startup;

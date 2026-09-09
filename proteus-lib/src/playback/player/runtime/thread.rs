@@ -60,6 +60,7 @@ impl Player {
             .store(now_ms_value, Ordering::Relaxed);
 
         self.audio_heard.store(false, Ordering::Relaxed);
+        self.effect_meter.reset();
         self.lock_output_meter_recoverable().reset();
 
         let (output_mixer, opened_now) = {
@@ -118,6 +119,7 @@ impl Player {
             inline_track_mix_updates: self.inline_track_mix_updates.clone(),
             dsp_metrics: self.dsp_metrics.clone(),
             effects_reset: self.effects_reset.clone(),
+            effect_meter: self.effect_meter.clone(),
             output_meter: self.output_meter.clone(),
             audio_info: self.info.clone(),
             next_resume_fade_ms: self.next_resume_fade_ms.clone(),

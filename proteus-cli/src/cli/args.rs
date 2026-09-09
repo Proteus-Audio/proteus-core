@@ -66,6 +66,10 @@ fn build_verify_subcommand() -> Command {
             true,
         ))
         .subcommand(with_input_arg(
+            Command::new("supported").about("Check whether the input has decodable audio"),
+            true,
+        ))
+        .subcommand(with_input_arg(
             Command::new("verify")
                 .about("Verify the decoded audio is valid, but do not play the audio"),
             true,
@@ -176,6 +180,101 @@ fn build_create_subcommand() -> Command {
         .subcommand(
             Command::new("effects-json").about("Print a default Vec<AudioEffect> JSON payload"),
         )
+        .subcommand(
+            Command::new("prot")
+                .about("Create a .prot file from a directory project")
+                .arg(
+                    Arg::new("INPUT_DIR")
+                        .help("Directory containing nested audio files and optional project JSON")
+                        .required(true)
+                        .index(1),
+                )
+                .arg(
+                    Arg::new("OUTPUT")
+                        .help("Output .prot file path")
+                        .required(true)
+                        .index(2),
+                )
+                .arg(
+                    Arg::new("title")
+                        .long("title")
+                        .value_name("TITLE")
+                        .help("Optional container title"),
+                )
+                .arg(
+                    Arg::new("force")
+                        .long("force")
+                        .short('f')
+                        .action(ArgAction::SetTrue)
+                        .help("Overwrite the output file if it already exists"),
+                )
+                .arg(
+                    Arg::new("attach")
+                        .long("attach")
+                        .short('a')
+                        .value_name("PATH")
+                        .action(ArgAction::Append)
+                        .help("Extra attachment to embed in the output container"),
+                )
+                .arg(
+                    Arg::new("no-effects")
+                        .long("no-effects")
+                        .action(ArgAction::SetTrue)
+                        .help("Do not embed effects_chain.json even if it exists"),
+                ),
+        )
+}
+
+fn build_meter_subcommand() -> Command {
+    Command::new("meter")
+        .about("Offline DSP metering and effect-chain inspection")
+        .subcommand(with_input_arg(
+            Command::new("effects")
+                .about("Run an input through the effects chain and print before/after metering")
+                .arg(
+                    Arg::new("effects-json")
+                        .long("effects-json")
+                        .short('E')
+                        .alias("effects")
+                        .value_name("PATH")
+                        .help("Path to JSON file containing Vec<AudioEffect>"),
+                )
+                .arg(
+                    Arg::new("seek")
+                        .long("seek")
+                        .short('s')
+                        .value_name("TIME")
+                        .default_value("0")
+                        .help("Seek to the given time in seconds before metering"),
+                )
+                .arg(
+                    Arg::new("duration")
+                        .long("duration")
+                        .value_name("SECONDS")
+                        .help("Only meter this many seconds after the seek point"),
+                )
+                .arg(
+                    Arg::new("format")
+                        .long("format")
+                        .value_name("FORMAT")
+                        .default_value("table")
+                        .help("Output format: table, bars, or json"),
+                )
+                .arg(
+                    Arg::new("summary")
+                        .long("summary")
+                        .value_name("MODE")
+                        .default_value("max")
+                        .help("Summary mode: final or max"),
+                )
+                .arg(
+                    Arg::new("spectral")
+                        .long("spectral")
+                        .action(ArgAction::SetTrue)
+                        .help("Append spectral buckets for supported filter effects"),
+                ),
+            true,
+        ))
 }
 
 /// Build the CLI argument parser and command definitions.
@@ -228,7 +327,7 @@ pub fn build_cli() -> Command {
             Arg::new("max-sink-chunks")
                 .long("max-sink-chunks")
                 .value_name("CHUNKS")
-                .default_value("0")
+                .default_value("40")
                 .help("Maximum sink chunks queued before producer waits (0 disables)"),
         )
         .arg(
@@ -269,7 +368,7 @@ pub fn build_cli() -> Command {
             Arg::new("read-durations")
                 .long("read-durations")
                 .action(ArgAction::SetTrue)
-                .help("Read track durations metadata, then exit"),
+                .help("Read track durations with source details, then exit"),
         )
         .arg(
             Arg::new("scan-durations")
@@ -313,6 +412,7 @@ pub fn build_cli() -> Command {
         .subcommand(build_peaks_subcommand())
         .subcommand(build_init_subcommand())
         .subcommand(build_create_subcommand())
+        .subcommand(build_meter_subcommand())
 }
 
 #[cfg(test)]

@@ -152,6 +152,7 @@ pub(super) fn drop_cleanup(player: &mut Player) {
         let mut output_meter = player.lock_output_meter_recoverable();
         output_meter.reset();
     }
+    player.effect_meter.reset();
 
     debug!("player dropped");
 

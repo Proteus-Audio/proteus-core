@@ -13,6 +13,7 @@ mod controls;
 mod effects;
 mod lifecycle;
 mod locks;
+mod metering;
 mod notify;
 mod runtime;
 mod settings;
@@ -26,6 +27,7 @@ use std::thread::JoinHandle;
 use crate::container::prot::{PathsTrack, Prot, ProtError};
 use crate::diagnostics::reporter::Reporter;
 use crate::dsp::effects::convolution_reverb::ImpulseResponseSpec;
+use crate::playback::effect_meter::EffectMeter;
 use crate::playback::output_meter::OutputMeter;
 use crate::{
     container::info::Info,
@@ -184,6 +186,7 @@ pub struct Player {
     inline_track_mix_updates: Arc<Mutex<Vec<InlineTrackMixUpdate>>>,
     dsp_metrics: Arc<Mutex<DspChainMetrics>>,
     effects_reset: Arc<AtomicU64>,
+    effect_meter: Arc<EffectMeter>,
     output_meter: Arc<Mutex<OutputMeter>>,
     /// Producer-buffering-complete publication flag.
     ///
@@ -233,6 +236,7 @@ impl Clone for Player {
             inline_track_mix_updates: self.inline_track_mix_updates.clone(),
             dsp_metrics: self.dsp_metrics.clone(),
             effects_reset: self.effects_reset.clone(),
+            effect_meter: self.effect_meter.clone(),
             output_meter: self.output_meter.clone(),
             buffering_done: self.buffering_done.clone(),
             last_chunk_ms: self.last_chunk_ms.clone(),

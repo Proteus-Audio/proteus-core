@@ -51,6 +51,7 @@ pub(super) fn update_chunk_lengths(ctx: &ThreadContext, loop_state: &mut LoopSta
     loop_state.last_meter_time = current_audio_time;
     ctx.lock_output_meter_recoverable().advance(delta);
     *ctx.lock_time_passed_recoverable() = current_audio_time;
+    publish_output_latency_metrics(ctx, loop_state, None);
 }
 
 fn advance_playback_clock(
@@ -65,6 +66,28 @@ fn advance_playback_clock(
         if let Some(length) = chunk_lengths.pop_front() {
             *time_chunks_passed += length;
         }
+    }
+}
+
+fn queued_sink_ms_from_lengths(chunk_lengths: &VecDeque<f64>) -> f64 {
+    chunk_lengths.iter().sum::<f64>() * 1000.0
+}
+
+pub(super) fn queued_sink_ms(loop_state: &LoopState) -> f64 {
+    let chunk_lengths = loop_state.lock_chunk_lengths_recoverable();
+    queued_sink_ms_from_lengths(&chunk_lengths)
+}
+
+pub(super) fn publish_output_latency_metrics(
+    ctx: &ThreadContext,
+    loop_state: &LoopState,
+    output_chunk_ms: Option<f64>,
+) {
+    let queued_ms = queued_sink_ms(loop_state);
+    let mut metrics = ctx.lock_dsp_metrics_recoverable();
+    metrics.queued_sink_ms = queued_ms;
+    if let Some(output_chunk_ms) = output_chunk_ms {
+        metrics.output_chunk_ms = output_chunk_ms.max(0.0);
     }
 }
 
@@ -184,8 +207,9 @@ pub(super) fn run_drain_loop(
 
 #[cfg(test)]
 mod tests {
-    use super::update_append_timing;
+    use super::{queued_sink_ms_from_lengths, update_append_timing};
     use crate::playback::player::runtime::worker::runner::LoopState;
+    use std::collections::VecDeque;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
     use std::time::Duration;
@@ -250,5 +274,11 @@ mod tests {
         });
         let seen = handle.join().unwrap();
         assert!(!seen);
+    }
+
+    #[test]
+    fn queued_sink_ms_from_lengths_sums_chunk_durations() {
+        let chunk_lengths = VecDeque::from([0.03, 0.03, 0.015]);
+        assert!((queued_sink_ms_from_lengths(&chunk_lengths) - 75.0).abs() < 1.0e-9);
     }
 }

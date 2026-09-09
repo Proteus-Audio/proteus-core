@@ -8,13 +8,14 @@ use symphonia::core::errors::{Error, Result};
 use symphonia::core::formats::FormatReader;
 
 use proteus_lib::container::info::get_probe_result_from_string;
-use proteus_lib::tools::decode::{get_decoder, get_reader};
+use proteus_lib::tools::decode::{check_audio_file_supported, get_decoder, get_reader};
 
 /// Modes for non-playback verification.
 #[derive(Debug, Clone, Copy)]
 pub enum VerifyMode {
     Decode,
     Probe,
+    Supported,
     Verify,
 }
 
@@ -22,8 +23,30 @@ pub enum VerifyMode {
 pub fn run_verify(file_path: &str, mode: VerifyMode) -> Result<i32> {
     match mode {
         VerifyMode::Probe => run_probe(file_path),
+        VerifyMode::Supported => run_supported(file_path),
         VerifyMode::Decode => run_decode(file_path, false),
         VerifyMode::Verify => run_decode(file_path, true),
+    }
+}
+
+fn run_supported(file_path: &str) -> Result<i32> {
+    let check = check_audio_file_supported(file_path);
+    if check.supported {
+        info!(
+            "Supported audio file (audio_tracks={})",
+            check.audio_track_count
+        );
+        Ok(0)
+    } else {
+        error!(
+            "Unsupported audio file{}",
+            check
+                .reason
+                .as_deref()
+                .map(|reason| format!(": {}", reason))
+                .unwrap_or_default()
+        );
+        Ok(1)
     }
 }
 
@@ -118,5 +141,15 @@ mod tests {
         assert!(run_verify(missing, VerifyMode::Probe).is_err());
         assert!(run_verify(missing, VerifyMode::Decode).is_err());
         assert!(run_verify(missing, VerifyMode::Verify).is_err());
+    }
+
+    #[test]
+    fn supported_mode_accepts_ogg_opus_fixture() {
+        let file_path = format!(
+            "{}/../test_audio/deep_trouble_000.ogg",
+            env!("CARGO_MANIFEST_DIR")
+        );
+        let code = run_verify(&file_path, VerifyMode::Supported).expect("check should run");
+        assert_eq!(code, 0);
     }
 }

@@ -172,7 +172,7 @@ fn open_container_decoders(
             }
             continue;
         };
-        let decoder = match symphonia::default::get_codecs()
+        let decoder = match crate::tools::decode::get_codecs()
             .make(&track.codec_params, &DecoderOptions::default())
         {
             Ok(d) => d,
