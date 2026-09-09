@@ -18,6 +18,23 @@ Command-line player for `.prot` and `.mka` containers powered by `proteus-lib`.
 - `cargo run -p proteus-cli --features debug -- /path/to/file.prot`
 - `RUST_LOG=debug` enables debug logging
 
+**Benchmarking**
+
+Benchmark offline DSP processing for an audio or `.prot` file with:
+
+```text
+cargo run --release -p proteus-cli -- bench /path/to/file.prot
+```
+
+The Markdown report is printed to standard output unless `--output` (or `-o`) is
+provided, for example `prot bench song.wav -o benchmark.md`. Each report compares
+no effects, each available effect, and—when the input is a `.prot`—its embedded
+effects chain. Decode and `.prot` settings-load time are reported separately;
+the timing table measures only DSP work on already-decoded PCM. For multi-track
+`.prot` containers, the first decodable audio stream supplies the representative
+PCM while the embedded project chain is measured in full. Use a release build
+for comparable performance measurements.
+
 **CLI Options**
 ```text
 Usage: proteus-cli [OPTIONS] [INPUT]

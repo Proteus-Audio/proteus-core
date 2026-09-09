@@ -11,6 +11,61 @@ fn with_input_arg(cmd: Command, required: bool) -> Command {
     )
 }
 
+fn build_bench_subcommand() -> Command {
+    Command::new("bench")
+        .about("Benchmark offline processing of an audio or .prot file")
+        .arg(
+            Arg::new("INPUT")
+                .help("Input audio or .prot file to benchmark")
+                .required(false)
+                .index(1),
+        )
+        .arg(
+            Arg::new("output")
+                .long("output")
+                .short('o')
+                .value_name("PATH")
+                .help("Write the Markdown report to PATH instead of stdout"),
+        )
+        .arg(
+            Arg::new("iterations")
+                .long("iterations")
+                .short('n')
+                .value_name("COUNT")
+                .default_value("5")
+                .help("Measured processing iterations per benchmark case"),
+        )
+        .arg(
+            Arg::new("warmup-iterations")
+                .long("warmup-iterations")
+                .value_name("COUNT")
+                .default_value("1")
+                .help("Unmeasured warm-up iterations per benchmark case"),
+        )
+        .arg(
+            Arg::new("chunk-frames")
+                .long("chunk-frames")
+                .value_name("FRAMES")
+                .default_value("1024")
+                .help("Frames per DSP processing chunk"),
+        )
+        // Retained for scripts that use the original synthetic convolution benchmarks.
+        .subcommand(with_bench_common_args(
+            Command::new("dsp")
+                .about("Run a synthetic convolution benchmark and exit")
+                .arg(
+                    Arg::new("bench-fft-size")
+                        .long("bench-fft-size")
+                        .value_name("SIZE")
+                        .default_value("24576")
+                        .help("FFT size for DSP benchmark"),
+                ),
+        ))
+        .subcommand(with_bench_common_args(
+            Command::new("sweep").about("Run a sweep over multiple FFT sizes and exit"),
+        ))
+}
+
 fn with_bench_common_args(cmd: Command) -> Command {
     cmd.arg(
         Arg::new("bench-input-seconds")
@@ -33,25 +88,6 @@ fn with_bench_common_args(cmd: Command) -> Command {
             .default_value("5")
             .help("Number of iterations for DSP benchmark"),
     )
-}
-
-fn build_bench_subcommand() -> Command {
-    Command::new("bench")
-        .about("Run DSP benchmarks without starting playback")
-        .subcommand(with_bench_common_args(
-            Command::new("dsp")
-                .about("Run a synthetic DSP benchmark and exit")
-                .arg(
-                    Arg::new("bench-fft-size")
-                        .long("bench-fft-size")
-                        .value_name("SIZE")
-                        .default_value("24576")
-                        .help("FFT size for DSP benchmark"),
-                ),
-        ))
-        .subcommand(with_bench_common_args(
-            Command::new("sweep").about("Run a sweep over multiple FFT sizes and exit"),
-        ))
 }
 
 fn build_verify_subcommand() -> Command {
@@ -439,5 +475,33 @@ mod tests {
         let result =
             build_cli().try_get_matches_from(["prot", "--seek", "12", "--verify", "song.wav"]);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn parses_audio_benchmark_options() {
+        let matches = build_cli()
+            .try_get_matches_from([
+                "prot",
+                "bench",
+                "song.wav",
+                "--output",
+                "benchmark.md",
+                "--iterations",
+                "10",
+            ])
+            .expect("cli should parse");
+        let (_, bench) = matches.subcommand().expect("bench subcommand");
+        assert_eq!(
+            bench.get_one::<String>("INPUT").map(String::as_str),
+            Some("song.wav")
+        );
+        assert_eq!(
+            bench.get_one::<String>("output").map(String::as_str),
+            Some("benchmark.md")
+        );
+        assert_eq!(
+            bench.get_one::<String>("iterations").map(String::as_str),
+            Some("10")
+        );
     }
 }
