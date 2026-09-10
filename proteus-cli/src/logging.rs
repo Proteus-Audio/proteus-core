@@ -49,12 +49,6 @@ impl Log for SharedLogger {
             eprintln!("{}", line);
         }
 
-        let mut buffer = self.buffer.lock().unwrap_or_else(|_| {
-            panic!("log buffer lock poisoned — a thread panicked while holding it")
-        });
-        if buffer.len() >= LOG_CAPACITY {
-            buffer.pop_front();
-        }
         let kind = match record.level() {
             log::Level::Error => LogKind::Error,
             log::Level::Warn => LogKind::Warn,
@@ -62,7 +56,7 @@ impl Log for SharedLogger {
             log::Level::Debug => LogKind::Debug,
             log::Level::Trace => LogKind::Trace,
         };
-        buffer.push_back(LogLine { kind, text: line });
+        push_line(&self.buffer, LogLine { kind, text: line });
     }
 
     fn flush(&self) {}
@@ -157,6 +151,26 @@ pub fn snapshot_lines(buffer: &Arc<Mutex<VecDeque<LogLine>>>) -> Vec<LogLine> {
         .collect()
 }
 
+fn push_line(buffer: &Arc<Mutex<VecDeque<LogLine>>>, line: LogLine) {
+    let mut buffer = buffer.lock().unwrap_or_else(|_| {
+        panic!("log buffer lock poisoned — a thread panicked while holding it")
+    });
+    if buffer.len() >= LOG_CAPACITY {
+        buffer.pop_front();
+    }
+    buffer.push_back(line);
+}
+
+/// Replay buffered startup output after an interactive session cannot start.
+///
+/// The normal interactive path keeps these lines for the TUI. This fallback
+/// makes a startup failure visible after stderr has been restored.
+pub fn replay_to_stderr(buffer: &Arc<Mutex<VecDeque<LogLine>>>) {
+    for line in snapshot_lines(buffer) {
+        eprintln!("{}", line.text);
+    }
+}
+
 /// Restores stderr on drop for capture sessions.
 pub struct StderrCaptureGuard {
     original_fd: RawFd,
@@ -169,7 +183,6 @@ impl Drop for StderrCaptureGuard {
         unsafe {
             libc::dup2(self.original_fd, self.stderr_fd);
             libc::close(self.original_fd);
-            libc::close(self.stderr_fd);
         }
         if let Some(handle) = self.reader_handle.take() {
             let _ = handle.join();
@@ -221,16 +234,13 @@ pub fn capture_stderr(buffer: Arc<Mutex<VecDeque<LogLine>>>) -> Option<StderrCap
             if trimmed.is_empty() {
                 continue;
             }
-            let mut buffer = buffer.lock().unwrap_or_else(|_| {
-                panic!("log buffer lock poisoned — a thread panicked while holding it")
-            });
-            if buffer.len() >= LOG_CAPACITY {
-                buffer.pop_front();
-            }
-            buffer.push_back(LogLine {
-                kind: LogKind::Stderr,
-                text: format!("[STDERR] {}", trimmed),
-            });
+            push_line(
+                &buffer,
+                LogLine {
+                    kind: LogKind::Stderr,
+                    text: format!("[STDERR] {}", trimmed),
+                },
+            );
         }
     });
 
@@ -247,9 +257,12 @@ pub fn capture_stderr(buffer: Arc<Mutex<VecDeque<LogLine>>>) -> Option<StderrCap
 
 #[cfg(test)]
 mod tests {
-    use super::{snapshot_lines, LogKind, LogLine};
+    use super::{capture_stderr, push_line, snapshot_lines, LogKind, LogLine, LOG_CAPACITY};
     use std::collections::VecDeque;
-    use std::sync::{Arc, Mutex};
+    use std::os::fd::AsRawFd;
+    use std::sync::{Arc, Mutex, OnceLock};
+
+    static STDERR_CAPTURE_TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
     #[test]
     fn snapshot_returns_buffered_lines() {
@@ -261,5 +274,41 @@ mod tests {
         let lines = snapshot_lines(&buffer);
         assert_eq!(lines.len(), 1);
         assert_eq!(lines[0].text, "hello");
+    }
+
+    #[test]
+    fn buffer_discards_oldest_lines_at_capacity() {
+        let buffer = Arc::new(Mutex::new(VecDeque::new()));
+        for index in 0..=LOG_CAPACITY {
+            push_line(
+                &buffer,
+                LogLine {
+                    kind: LogKind::Info,
+                    text: index.to_string(),
+                },
+            );
+        }
+
+        let lines = snapshot_lines(&buffer);
+        assert_eq!(lines.len(), LOG_CAPACITY);
+        assert_eq!(lines.first().unwrap().text, "1");
+        assert_eq!(lines.last().unwrap().text, LOG_CAPACITY.to_string());
+    }
+
+    #[test]
+    fn stderr_capture_restores_stderr_when_dropped() {
+        // Stderr is process-global, so keep this short and serialize this
+        // module's capture lifecycle test.
+        let _lock = STDERR_CAPTURE_TEST_LOCK
+            .get_or_init(|| Mutex::new(()))
+            .lock()
+            .unwrap();
+        let buffer = Arc::new(Mutex::new(VecDeque::new()));
+        let capture = capture_stderr(buffer).expect("stderr capture should initialize");
+
+        drop(capture);
+
+        let stderr_is_open = unsafe { libc::fcntl(std::io::stderr().as_raw_fd(), libc::F_GETFD) };
+        assert_ne!(stderr_is_open, -1, "dropping capture must not close stderr");
     }
 }

@@ -25,7 +25,7 @@ use symphonia::core::errors::Result;
 #[cfg(feature = "effect-meter-cli-spectral")]
 use super::spectral_graph;
 use super::{controls, ui};
-use crate::logging::LogLine;
+use crate::logging::{LogLine, StderrCaptureGuard};
 use crate::{logging, project_files};
 
 struct SessionConfig {
@@ -37,11 +37,13 @@ struct SessionConfig {
 pub(crate) fn run_playback(
     args: &ArgMatches,
     log_buffer: Arc<Mutex<VecDeque<LogLine>>>,
+    startup_stderr_capture: Option<StderrCaptureGuard>,
 ) -> Result<i32> {
     let file_path = match args.get_one::<String>("INPUT") {
         Some(path) => path.clone(),
         None => {
             error!("Missing input file path");
+            restore_startup_output(startup_stderr_capture, &log_buffer);
             return Ok(-1);
         }
     };
@@ -61,7 +63,13 @@ pub(crate) fn run_playback(
     let cli_player_options = PlayerInitOptions {
         end_of_stream_action: EndOfStreamAction::Pause,
     };
-    let mut player = build_player_from_args(args, &file_path, cli_player_options)?;
+    let mut player = match build_player_from_args(args, &file_path, cli_player_options) {
+        Ok(player) => player,
+        Err(err) => {
+            restore_startup_output(startup_stderr_capture, &log_buffer);
+            return Err(err);
+        }
+    };
 
     configure_player(args, &mut player);
     if let Some(path) = args.get_one::<String>("effects-json") {
@@ -69,6 +77,7 @@ pub(crate) fn run_playback(
             Ok(effects) => player.set_effects(effects),
             Err(err) => {
                 error!("Failed to load effects json: {}", err);
+                restore_startup_output(startup_stderr_capture, &log_buffer);
                 return Ok(-1);
             }
         }
@@ -77,7 +86,21 @@ pub(crate) fn run_playback(
 
     player.play();
     player.set_volume(session.gain / 100.0);
-    Ok(run_playback_session(player, session, log_buffer))
+    Ok(run_playback_session(
+        player,
+        session,
+        log_buffer,
+        startup_stderr_capture,
+    ))
+}
+
+fn restore_startup_output(
+    startup_stderr_capture: Option<StderrCaptureGuard>,
+    log_buffer: &Arc<Mutex<VecDeque<LogLine>>>,
+) {
+    drop(startup_stderr_capture);
+    logging::set_echo_stderr(true);
+    logging::replay_to_stderr(log_buffer);
 }
 
 fn maybe_print_durations(args: &ArgMatches, file_path: &str) -> Option<i32> {
@@ -158,6 +181,7 @@ fn run_playback_session(
     mut player: player::Player,
     config: SessionConfig,
     log_buffer: Arc<Mutex<VecDeque<LogLine>>>,
+    mut startup_stderr_capture: Option<StderrCaptureGuard>,
 ) -> i32 {
     let _raw_mode = RawModeGuard::enable().ok();
     let mut terminal = if !config.quiet {
@@ -168,19 +192,20 @@ fn run_playback_session(
     } else {
         None
     };
-    logging::set_echo_stderr(!config.quiet && terminal.is_none());
-    let _stderr_guard = if terminal.is_some() {
-        logging::capture_stderr(log_buffer.clone())
+    if terminal.is_none() {
+        restore_startup_output(startup_stderr_capture.take(), &log_buffer);
+        logging::set_echo_stderr(!config.quiet);
     } else {
-        None
-    };
+        logging::set_echo_stderr(false);
+    }
+    let mut tui_state = ui::TuiState::default();
 
     loop {
         if let Some(term) = terminal.as_mut() {
-            draw_status_frame(term, &mut player, &log_buffer);
+            draw_status_frame(term, &mut tui_state, &mut player, &log_buffer);
         }
 
-        if !controls::handle_key_event(&mut player) {
+        if !controls::handle_key_event(&mut player, &mut tui_state) {
             break;
         }
 
@@ -197,6 +222,7 @@ fn run_playback_session(
 
 fn draw_status_frame(
     terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>,
+    tui_state: &mut ui::TuiState,
     player: &mut player::Player,
     log_buffer: &Arc<Mutex<VecDeque<LogLine>>>,
 ) {
@@ -291,6 +317,7 @@ fn draw_status_frame(
     });
     ui::draw_status(
         terminal,
+        tui_state,
         &status,
         &log_lines,
         &levels,
@@ -399,7 +426,7 @@ mod tests {
             crate::logging::LogLine,
         >::new()));
 
-        let code = super::run_playback(&args, logs).expect("runner should return result");
+        let code = super::run_playback(&args, logs, None).expect("runner should return result");
         assert_eq!(code, -1);
     }
 

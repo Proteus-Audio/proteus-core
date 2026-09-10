@@ -68,4 +68,6 @@ Options:
 ```
 
 **Notes**
-- Logs are captured and shown in the TUI while the interface is active.
+- Logs are captured from playback startup onward without being printed over the TUI.
+- Press `l` to show or hide logs. When visible, use Up/Down, Page Up/Page Down,
+  Home, and End to scroll through the retained output.

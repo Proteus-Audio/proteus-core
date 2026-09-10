@@ -36,6 +36,50 @@ fn levels_widget(text: Text<'static>) -> Paragraph<'static> {
         .block(Block::default().borders(Borders::ALL).title("Levels"))
 }
 
+/// Transient state for the optional log panel.
+///
+/// `log_scroll_from_end` is zero when the newest log lines are in view. This
+/// makes opening the panel behave like a conventional live log viewer while
+/// still allowing the user to move backwards through retained output.
+#[derive(Debug, Default)]
+pub struct TuiState {
+    pub logs_visible: bool,
+    log_scroll_from_end: usize,
+}
+
+impl TuiState {
+    pub fn toggle_logs(&mut self) {
+        self.logs_visible = !self.logs_visible;
+        if !self.logs_visible {
+            self.log_scroll_from_end = 0;
+        }
+    }
+
+    pub fn scroll_logs_up(&mut self, lines: usize) {
+        self.log_scroll_from_end = self.log_scroll_from_end.saturating_add(lines);
+    }
+
+    pub fn scroll_logs_down(&mut self, lines: usize) {
+        self.log_scroll_from_end = self.log_scroll_from_end.saturating_sub(lines);
+    }
+
+    pub fn scroll_logs_to_start(&mut self) {
+        self.log_scroll_from_end = usize::MAX;
+    }
+
+    pub fn scroll_logs_to_end(&mut self) {
+        self.log_scroll_from_end = 0;
+    }
+
+    fn log_scroll_offset(&mut self, log_len: usize, height: usize) -> u16 {
+        let max_scroll = log_len.saturating_sub(height);
+        self.log_scroll_from_end = self.log_scroll_from_end.min(max_scroll);
+        max_scroll
+            .saturating_sub(self.log_scroll_from_end)
+            .min(u16::MAX as usize) as u16
+    }
+}
+
 #[cfg(feature = "effect-meter-cli")]
 fn effect_levels_widget(text: Text<'static>) -> Paragraph<'static> {
     Paragraph::new(text)
@@ -47,15 +91,14 @@ fn effect_levels_widget(text: Text<'static>) -> Paragraph<'static> {
         )
 }
 
-fn log_text(log_lines: &[LogLine], log_height: usize) -> Text<'_> {
-    let start = log_lines.len().saturating_sub(log_height);
+fn log_text(log_lines: &[LogLine]) -> Text<'_> {
     if log_lines.is_empty() {
         Text::from(Line::styled(
             "No logs yet.",
             Style::default().fg(Color::DarkGray),
         ))
     } else {
-        let lines: Vec<Line> = log_lines[start..]
+        let lines: Vec<Line> = log_lines
             .iter()
             .map(|line| {
                 let color = match line.kind {
@@ -72,9 +115,38 @@ fn log_text(log_lines: &[LogLine], log_height: usize) -> Text<'_> {
     }
 }
 
+fn main_layout(
+    area: ratatui::layout::Rect,
+    title_height: u16,
+    status_height: u16,
+    logs_visible: bool,
+) -> Vec<ratatui::layout::Rect> {
+    let constraints = if logs_visible {
+        vec![
+            Constraint::Length(title_height),
+            Constraint::Length(3),
+            Constraint::Length(status_height),
+            Constraint::Min(0),
+        ]
+    } else {
+        vec![
+            Constraint::Length(title_height),
+            Constraint::Length(3),
+            Constraint::Min(status_height),
+        ]
+    };
+    Layout::default()
+        .direction(Direction::Vertical)
+        .margin(1)
+        .constraints(constraints)
+        .split(area)
+        .to_vec()
+}
+
 /// Render the TUI frame (title, controls, status, logs).
 pub fn draw_status(
     terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>,
+    tui_state: &mut TuiState,
     status: &StatusSnapshot,
     log_lines: &[LogLine],
     levels: &[f32],
@@ -111,23 +183,19 @@ pub fn draw_status(
         let title_text = format!("{}\nv{}", title_banner(), env!("CARGO_PKG_VERSION"));
         let title_height = title_text.lines().count().max(1) as u16;
 
-        let chunks = Layout::default()
-            .direction(Direction::Vertical)
-            .margin(1)
-            .constraints([
-                Constraint::Length(title_height),
-                Constraint::Length(3),
-                Constraint::Length(status_height),
-                Constraint::Min(0),
-            ])
-            .split(f.size());
+        let chunks = main_layout(
+            f.size(),
+            title_height,
+            status_height,
+            tui_state.logs_visible,
+        );
 
         let title = Paragraph::new(title_text).style(Style::default().fg(Color::Cyan));
 
         f.render_widget(title, chunks[0]);
 
         let controls = Paragraph::new(
-            "\nspace=play/pause  s=shuffle  ←/→=seek 5s  r=reverb on/off  -/= mix  q=quit",
+            "\nspace=play/pause  s=shuffle  ←/→=seek 5s  r=reverb on/off  -/= mix  l=logs  q=quit",
         )
         .style(Style::default().fg(Color::Blue));
         f.render_widget(controls, chunks[1]);
@@ -137,10 +205,17 @@ pub fn draw_status(
         let (playback_area, effect_meter_area) = if effect_meter_height > 0 {
             let parts = Layout::default()
                 .direction(Direction::Vertical)
-                .constraints([
-                    Constraint::Length(base_status_height),
-                    Constraint::Min(effect_meter_height),
-                ])
+                .constraints(if tui_state.logs_visible {
+                    [
+                        Constraint::Length(base_status_height),
+                        Constraint::Min(effect_meter_height),
+                    ]
+                } else {
+                    [
+                        Constraint::Min(base_status_height),
+                        Constraint::Length(effect_meter_height),
+                    ]
+                })
                 .split(status_area);
             (parts[0], Some(parts[1]))
         } else {
@@ -202,12 +277,18 @@ pub fn draw_status(
             f.render_widget(effect_levels_widget(meter_text), effect_meter_area);
         }
 
-        let log_height = chunks[3].height.saturating_sub(2) as usize;
-        let log_text = log_text(log_lines, log_height);
-
-        let log_widget =
-            Paragraph::new(log_text).block(Block::default().borders(Borders::ALL).title("Logs"));
-        f.render_widget(log_widget, chunks[3]);
+        if tui_state.logs_visible {
+            let log_height = chunks[3].height.saturating_sub(2) as usize;
+            let scroll = tui_state.log_scroll_offset(log_lines.len(), log_height);
+            let log_widget = Paragraph::new(log_text(log_lines))
+                .scroll((scroll, 0))
+                .block(
+                    Block::default()
+                        .borders(Borders::ALL)
+                        .title("Logs (↑/↓ scroll, PgUp/PgDn, Home/End, l close)"),
+                );
+            f.render_widget(log_widget, chunks[3]);
+        }
     });
 }
 
@@ -603,17 +684,54 @@ pub fn draw_info(
 
 #[cfg(test)]
 mod tests {
-    use super::title_banner;
     #[cfg(feature = "effect-meter-cli")]
     use super::{effect_meter_text, EffectLevelSnapshot};
     #[cfg(feature = "output-meter")]
     use super::{format_db, render_bar};
+    use super::{main_layout, title_banner, TuiState};
     #[cfg(feature = "effect-meter-cli-spectral")]
     use proteus_lib::dsp::meter::{BandLevels, EffectBandSnapshot};
+    use ratatui::layout::Rect;
 
     #[test]
     fn title_banner_is_non_empty() {
         assert!(!title_banner().trim().is_empty());
+    }
+
+    #[test]
+    fn logs_are_hidden_initially_and_toggle_visible() {
+        let mut state = TuiState::default();
+        assert!(!state.logs_visible);
+        state.toggle_logs();
+        assert!(state.logs_visible);
+    }
+
+    #[test]
+    fn log_scroll_starts_at_end_and_can_reach_start() {
+        let mut state = TuiState::default();
+        assert_eq!(state.log_scroll_offset(20, 5), 15);
+
+        state.scroll_logs_up(usize::MAX);
+        assert_eq!(state.log_scroll_offset(20, 5), 0);
+
+        state.scroll_logs_to_end();
+        assert_eq!(state.log_scroll_offset(20, 5), 15);
+
+        state.scroll_logs_up(4);
+        state.scroll_logs_down(usize::MAX);
+        assert_eq!(state.log_scroll_offset(20, 5), 15);
+    }
+
+    #[test]
+    fn hidden_logs_give_the_status_panel_remaining_height() {
+        let area = Rect::new(0, 0, 80, 30);
+        let hidden = main_layout(area, 2, 4, false);
+        let visible = main_layout(area, 2, 4, true);
+
+        assert_eq!(hidden.len(), 3);
+        assert_eq!(visible.len(), 4);
+        assert_eq!(hidden[2].height, 23);
+        assert_eq!(visible[2].height, 4);
     }
 
     #[cfg(feature = "output-meter")]

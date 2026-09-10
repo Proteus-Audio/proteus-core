@@ -6,6 +6,8 @@ use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 
 use proteus_lib::playback::player;
 
+use super::ui::TuiState;
+
 /// Render-ready status text for the TUI.
 pub struct StatusSnapshot {
     pub text: String,
@@ -140,7 +142,7 @@ pub fn status_text(args: StatusArgs) -> StatusSnapshot {
 
 /// Handle a single key event and apply it to the player.
 /// Returns `false` if the UI should exit.
-pub fn handle_key_event(player: &mut player::Player) -> bool {
+pub fn handle_key_event(player: &mut player::Player, tui_state: &mut TuiState) -> bool {
     // Handle one input event. Returns false when the user requests exit.
     if event::poll(Duration::from_millis(100)).unwrap_or(false) {
         if let Ok(Event::Key(key)) = event::read() {
@@ -155,6 +157,27 @@ pub fn handle_key_event(player: &mut player::Player) -> bool {
                 KeyCode::Char('q') => {
                     player.stop();
                     return false;
+                }
+                KeyCode::Char('l') | KeyCode::Char('L') => {
+                    tui_state.toggle_logs();
+                }
+                KeyCode::Up if tui_state.logs_visible => {
+                    tui_state.scroll_logs_up(1);
+                }
+                KeyCode::Down if tui_state.logs_visible => {
+                    tui_state.scroll_logs_down(1);
+                }
+                KeyCode::PageUp if tui_state.logs_visible => {
+                    tui_state.scroll_logs_up(10);
+                }
+                KeyCode::PageDown if tui_state.logs_visible => {
+                    tui_state.scroll_logs_down(10);
+                }
+                KeyCode::Home if tui_state.logs_visible => {
+                    tui_state.scroll_logs_to_start();
+                }
+                KeyCode::End if tui_state.logs_visible => {
+                    tui_state.scroll_logs_to_end();
                 }
                 KeyCode::Char(' ') => {
                     if player.is_playing() {
