@@ -297,3 +297,7 @@ not a terminal EQ editor.
 ## Status
 
 Done.
+
+## Verification note
+
+Verified in production code: the feature-gated playback TUI enables spectral analysis only when a visible shaping-effect graph can be rendered, reads audible-time spectral snapshots, preserves level-only rows for other effects, and hides the graph first at narrow widths. The shared compact graph renderer is also used by the offline bars format while JSON remains numeric.

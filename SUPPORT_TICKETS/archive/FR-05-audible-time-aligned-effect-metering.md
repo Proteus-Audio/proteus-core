@@ -309,3 +309,7 @@ semantics.
 ## Status
 
 Done.
+
+## Verification note
+
+Verified in production code: `EffectMeter` maintains bounded timestamped level and spectral rings, the mix path publishes with non-blocking `try_lock` semantics, and `Player` exposes distinct processing-time and audible-time meter accessors. The CLI reads the audible-time accessors for live playback.

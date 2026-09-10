@@ -39,3 +39,7 @@ single shared args struct can serve all of them.
 
 Remove the `#[allow(clippy::too_many_arguments)]` suppressions once the
 parameters are bundled.
+
+## Verification note
+
+Verified in production code: a repository sweep finds no `#[allow(clippy::too_many_arguments)]` suppressions in `proteus-lib/src` or `proteus-cli/src`; the listed long-parameter interfaces have been refactored away or replaced with grouped arguments.

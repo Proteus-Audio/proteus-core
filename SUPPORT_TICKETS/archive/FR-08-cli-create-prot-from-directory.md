@@ -191,3 +191,6 @@ success.
 
 This ticket depends on `FR-07` exposing a feature-gated library muxing API.
 
+## Verification note
+
+Verified in production code: `prot create prot INPUT_DIR OUTPUT` loads the existing directory project configuration, preserves group settings and optional effects in `play_settings.json`, supplies `indicatif` progress, supports attachments and `--force`, and validates created output with `Prot::try_new`. Unit coverage verifies settings/ID preservation and overwrite refusal.

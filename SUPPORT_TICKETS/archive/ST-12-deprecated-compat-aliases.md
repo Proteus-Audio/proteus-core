@@ -54,3 +54,7 @@ variant to the canonical `DelayReverb` variant at runtime via
 
 After this change, the only trace of the old name will be the serde rename string
 `"BasicReverbSettings"` inside the macro — which is the right place for it.
+
+## Verification note
+
+Verified in production code: the deprecated aliases, legacy accessors, and deprecated-use suppressions are gone. `BasicReverbSettings` remains only as the serde compatibility alias on the canonical `DelayReverb` variant and in its compatibility test.

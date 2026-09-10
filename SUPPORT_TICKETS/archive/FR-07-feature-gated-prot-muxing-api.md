@@ -205,3 +205,6 @@ Recommended approach:
 - Supporting every possible Symphonia codec in the first pass beyond the
   project’s already supported source-audio expectations.
 
+## Verification note
+
+Verified in production code: the `prot-mux` feature gates the public `mux` module and optional encoding dependencies. Its typed `ProtMuxInput`/`MuxError` API creates deterministic track IDs, embeds `play_settings.json`, and reports domain-level progress without CLI dependencies; the CLI then opens the output through `Prot::try_new` as a sanity check.
