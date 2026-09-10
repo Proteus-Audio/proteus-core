@@ -380,6 +380,32 @@ pub use real_fft::Convolver;
 mod tests {
     use super::Convolver;
 
+    fn direct_convolution_prefix(input: &[f32], impulse_response: &[f32]) -> Vec<f32> {
+        (0..input.len())
+            .map(|output_index| {
+                impulse_response
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(ir_index, ir_sample)| {
+                        output_index
+                            .checked_sub(ir_index)
+                            .map(|input_index| input[input_index] * ir_sample)
+                    })
+                    .sum()
+            })
+            .collect()
+    }
+
+    fn assert_approximately_eq(actual: &[f32], expected: &[f32]) {
+        assert_eq!(actual.len(), expected.len());
+        for (index, (actual, expected)) in actual.iter().zip(expected).enumerate() {
+            assert!(
+                (actual - expected).abs() < 1e-4,
+                "sample {index}: expected {expected}, got {actual}"
+            );
+        }
+    }
+
     #[test]
     fn convolver_process_length_matches_input() {
         let mut convolver = Convolver::new(&[1.0, 0.5, 0.25], 64);
@@ -397,5 +423,28 @@ mod tests {
             .previous_tail
             .iter()
             .all(|sample| sample.abs() < 1e-9));
+    }
+
+    #[test]
+    fn convolver_matches_direct_convolution_across_ir_partitions() {
+        // The IR crosses several overlap-add partitions. This guards the
+        // frequency-domain history order as well as the overlap tail.
+        let mut impulse_response = vec![0.0; 75];
+        impulse_response[0] = 1.0;
+        impulse_response[3] = -0.25;
+        impulse_response[31] = 0.5;
+        impulse_response[32] = 0.125;
+        impulse_response[65] = -0.375;
+        let mut input = vec![0.0; 192];
+        input[0] = 1.0;
+        input[7] = -0.5;
+        input[45] = 0.25;
+        input[93] = 0.75;
+
+        let expected = direct_convolution_prefix(&input, &impulse_response);
+        let mut convolver = Convolver::new(&impulse_response, 64);
+        let actual = convolver.process(&input);
+
+        assert_approximately_eq(&actual, &expected);
     }
 }

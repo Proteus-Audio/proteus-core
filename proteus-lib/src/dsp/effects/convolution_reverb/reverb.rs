@@ -13,8 +13,10 @@ use crate::dsp::effects::core::smoother::ParamSmoother;
 
 const IDENTITY_IMPULSE_RESPONSE: &[f32] = &[1.0];
 
-// Power-of-two FFT size; increasing improves frequency resolution at the cost of latency.
-const FFT_SIZE: usize = 8192;
+// Match the engine's usual 1,024-frame processing quantum.  Overlap-add uses
+// half of this size per transform, so this avoids zero-padding each regular
+// engine call up to an 8,192-point FFT while retaining immediate output.
+const FFT_SIZE: usize = 2048;
 
 /// Preferred processing batch size in interleaved samples.
 pub fn preferred_batch_samples(channels: usize) -> usize {
@@ -286,5 +288,57 @@ mod tests {
         let mut out = Vec::new();
         reverb.process_into(&input, &mut out);
         assert_eq!(out.len(), input.len());
+    }
+
+    #[test]
+    fn reverb_preserves_an_ir_tap_across_the_1024_frame_partition_boundary() {
+        let mut ir = vec![0.0_f32; 1_025];
+        ir[1_024] = 1.0;
+        let impulse_response = ImpulseResponse {
+            sample_rate: 48_000,
+            channels: vec![ir],
+        };
+        let mut reverb = Reverb::new_with_impulse_response(1, 1.0, &impulse_response);
+
+        let mut first = vec![0.0_f32; 1_024];
+        first[0] = 1.0;
+        let mut first_output = Vec::new();
+        reverb.process_into(&first, &mut first_output);
+        assert_eq!(first_output.len(), first.len());
+        assert!(first_output.iter().all(|sample| sample.abs() < 1e-4));
+
+        let mut second_output = Vec::new();
+        reverb.process_into(&[0.0], &mut second_output);
+        assert_eq!(second_output, vec![1.0]);
+    }
+
+    #[test]
+    fn reverb_uses_each_ir_channel_and_applies_dry_wet_mix() {
+        let ir = ImpulseResponse {
+            sample_rate: 48_000,
+            channels: vec![vec![1.0_f32, 0.5], vec![0.25_f32, -0.5]],
+        };
+        let mut reverb = Reverb::new_with_impulse_response(2, 0.75, &ir);
+        // Two deliberately different lanes catch accidental deinterleave,
+        // channel reuse, or reinterleave changes in the hot path.
+        let input = vec![1.0_f32, 4.0, 2.0, 8.0, 0.0, 0.0];
+        let mut out = vec![123.0];
+        reverb.process_into(&input, &mut out);
+
+        let expected = [
+            1.0,   // 0.25 * 1.0 dry + 0.75 * (1.0 * 1.0) wet
+            1.75,  // 0.25 * 4.0 dry + 0.75 * (4.0 * 0.25) wet
+            2.375, // 0.25 * 2.0 + 0.75 * (2.0 + 0.5)
+            2.0,   // 0.25 * 8.0 + 0.75 * (2.0 - 2.0)
+            0.75,  // delayed left-channel IR tap
+            -3.0,  // delayed right-channel IR tap
+        ];
+        assert_eq!(out.len(), expected.len());
+        for (actual, expected) in out.iter().zip(expected) {
+            assert!(
+                (actual - expected).abs() < 1e-4,
+                "expected {expected}, got {actual}"
+            );
+        }
     }
 }
