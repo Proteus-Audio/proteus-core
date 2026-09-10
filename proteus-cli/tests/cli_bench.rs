@@ -1,4 +1,4 @@
-//! Black-box coverage for the processing benchmark report.
+//! Black-box coverage for the processing benchmark report and terminal progress.
 //!
 //! These tests deliberately avoid asserting any duration or throughput values:
 //! those are expected to vary across development and CI machines.  They verify
@@ -49,7 +49,7 @@ fn assert_common_scenarios(report: &str) {
 }
 
 #[test]
-fn bench_audio_writes_complete_markdown_report_to_stdout_by_default() {
+fn bench_audio_writes_readable_terminal_report_and_progress_by_default() {
     let input = fixture_path("test-16bit.wav");
     let output = run_cli(&[
         "bench",
@@ -66,11 +66,28 @@ fn bench_audio_writes_complete_markdown_report_to_stdout_by_default() {
     );
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("#"), "report should be Markdown:\n{stdout}");
+    assert!(
+        stdout.contains("Case") && stdout.contains("Average"),
+        "stdout should include a labelled terminal table:\n{stdout}"
+    );
+    assert!(
+        !stdout.contains("# Proteus audio benchmark") && !stdout.contains("| ---"),
+        "stdout must not use the Markdown report format:\n{stdout}"
+    );
     assert_common_scenarios(&stdout);
     assert!(
         !stdout.contains("Project chain"),
         "ordinary audio must not claim a project chain:\n{stdout}"
+    );
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("Benchmarking") && stderr.contains("No effects"),
+        "stderr should show benchmark-case progress:\n{stderr}"
+    );
+    assert!(
+        !stderr.contains("[INFO]"),
+        "benchmark progress must replace implementation-info logging:\n{stderr}"
     );
 }
 
@@ -126,6 +143,19 @@ fn bench_writes_markdown_to_requested_output_file_instead_of_stdout() {
     assert!(
         !stdout.contains("No effects"),
         "report should be redirected to the output file:\n{stdout}"
+    );
+    assert!(
+        !stdout.contains("# Proteus audio benchmark"),
+        "Markdown must only be written to the requested output file:\n{stdout}"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("Benchmarking") && stderr.contains("No effects"),
+        "saving a report should still show benchmark-case progress:\n{stderr}"
+    );
+    assert!(
+        !stderr.contains("[INFO]"),
+        "benchmark progress must replace implementation-info logging:\n{stderr}"
     );
     let report = std::fs::read_to_string(&report_path).expect("benchmark output file");
     assert!(report.contains("#"), "report should be Markdown:\n{report}");

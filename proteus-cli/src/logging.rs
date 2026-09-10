@@ -31,7 +31,7 @@ pub struct LogLine {
 struct SharedLogger {
     level: LevelFilter,
     buffer: Arc<Mutex<VecDeque<LogLine>>>,
-    echo_stderr: AtomicBool,
+    stderr_max_level: std::sync::atomic::AtomicU8,
 }
 
 impl Log for SharedLogger {
@@ -45,7 +45,7 @@ impl Log for SharedLogger {
         }
 
         let line = format!("[{}] {}", record.level(), record.args());
-        if self.echo_stderr.load(Ordering::Relaxed) {
+        if level_rank(record.level()) <= self.stderr_max_level.load(Ordering::Relaxed) {
             eprintln!("{}", line);
         }
 
@@ -60,6 +60,33 @@ impl Log for SharedLogger {
     }
 
     fn flush(&self) {}
+}
+
+const STDERR_DISABLED: u8 = 0;
+
+fn level_rank(level: log::Level) -> u8 {
+    match level {
+        log::Level::Error => 1,
+        log::Level::Warn => 2,
+        log::Level::Info => 3,
+        log::Level::Debug => 4,
+        log::Level::Trace => 5,
+    }
+}
+
+/// Restores stderr log routing when dropped.
+pub struct StderrLogLevelGuard {
+    previous_max_level: u8,
+}
+
+impl Drop for StderrLogLevelGuard {
+    fn drop(&mut self) {
+        if let Some(logger) = LOGGER.get() {
+            logger
+                .stderr_max_level
+                .store(self.previous_max_level, Ordering::Relaxed);
+        }
+    }
 }
 
 static LOG_BUFFER: OnceLock<Arc<Mutex<VecDeque<LogLine>>>> = OnceLock::new();
@@ -115,7 +142,11 @@ pub fn install_global_logger(
     let logger = SharedLogger {
         level,
         buffer,
-        echo_stderr: AtomicBool::new(echo_stderr),
+        stderr_max_level: std::sync::atomic::AtomicU8::new(if echo_stderr {
+            level_rank(log::Level::Trace)
+        } else {
+            STDERR_DISABLED
+        }),
     };
     let logger_ref = LOGGER.get_or_init(|| logger);
 
@@ -137,8 +168,27 @@ pub fn install_global_logger(
 /// Enable or disable stderr echoing for log lines.
 pub fn set_echo_stderr(enabled: bool) {
     if let Some(logger) = LOGGER.get() {
-        logger.echo_stderr.store(enabled, Ordering::Relaxed);
+        logger.stderr_max_level.store(
+            if enabled {
+                level_rank(log::Level::Trace)
+            } else {
+                STDERR_DISABLED
+            },
+            Ordering::Relaxed,
+        );
     }
+}
+
+/// Hide informational diagnostics from stderr while keeping warnings and errors visible.
+///
+/// This is intended for commands that provide their own human-oriented status
+/// updates, such as offline benchmarks.
+pub fn suppress_info_stderr() -> Option<StderrLogLevelGuard> {
+    let logger = LOGGER.get()?;
+    let previous_max_level = logger
+        .stderr_max_level
+        .swap(level_rank(log::Level::Warn), Ordering::Relaxed);
+    Some(StderrLogLevelGuard { previous_max_level })
 }
 
 /// Snapshot the current log buffer for rendering.

@@ -202,6 +202,33 @@ pub fn benchmark_audio(
     impulse_response_tail_db: f32,
     project_effects: Option<Vec<AudioEffect>>,
 ) -> Result<AudioBenchmarkReport, AudioBenchmarkError> {
+    benchmark_audio_with_progress(
+        samples,
+        config,
+        container_path,
+        project_impulse_response,
+        impulse_response_tail_db,
+        project_effects,
+        |_, _, _| {},
+    )
+}
+
+/// Benchmark audio while reporting each case just before it begins.
+///
+/// The callback runs outside the timed region and receives a one-based case
+/// index, the total number of cases, and the display name of the case.
+pub fn benchmark_audio_with_progress<F>(
+    samples: &[f32],
+    config: AudioBenchmarkConfig,
+    container_path: Option<String>,
+    project_impulse_response: Option<crate::dsp::effects::convolution_reverb::ImpulseResponseSpec>,
+    impulse_response_tail_db: f32,
+    project_effects: Option<Vec<AudioEffect>>,
+    mut on_case_started: F,
+) -> Result<AudioBenchmarkReport, AudioBenchmarkError>
+where
+    F: FnMut(usize, usize, &str),
+{
     if config.chunk_frames == 0 {
         return Err(AudioBenchmarkError::ZeroChunkFrames);
     }
@@ -236,14 +263,16 @@ pub fn benchmark_audio(
         definitions.push(("Project chain".to_owned(), effects));
     }
 
-    let cases = definitions
-        .into_iter()
-        .map(|(name, effects)| AudioBenchmarkCase {
-            name,
+    let total_cases = definitions.len();
+    let mut cases = Vec::with_capacity(total_cases);
+    for (index, (name, effects)) in definitions.into_iter().enumerate() {
+        on_case_started(index + 1, total_cases, &name);
+        cases.push(AudioBenchmarkCase {
             effect_count: effects.len(),
             timing: benchmark_case(samples, &context, config, &effects),
-        })
-        .collect();
+            name,
+        });
+    }
     let frames = samples.len() / config.channels;
     Ok(AudioBenchmarkReport {
         config,

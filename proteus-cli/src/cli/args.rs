@@ -25,7 +25,7 @@ fn build_bench_subcommand() -> Command {
                 .long("output")
                 .short('o')
                 .value_name("PATH")
-                .help("Write the Markdown report to PATH instead of stdout"),
+                .help("Write the Markdown report to PATH instead of the formatted terminal report"),
         )
         .arg(
             Arg::new("iterations")

@@ -1,7 +1,7 @@
 //! Benchmark entry points for CLI DSP tests.
 
 use std::{
-    io,
+    io::{self, IsTerminal},
     path::Path,
     time::{Duration, Instant},
 };
@@ -15,10 +15,14 @@ use symphonia::core::{
 
 use proteus_lib::{
     container::prot::Prot,
-    diagnostics::audio_bench::{benchmark_audio, AudioBenchmarkConfig},
+    diagnostics::audio_bench::{
+        benchmark_audio_with_progress, AudioBenchmarkConfig, AudioBenchmarkReport,
+    },
     dsp::effects::{convolution_reverb::ImpulseResponseSpec, AudioEffect},
     tools::decode::{get_decoder, get_reader},
 };
+
+use crate::logging;
 
 /// Run the bench subcommand.
 pub fn run_bench_subcommand(args: &ArgMatches) -> Result<i32> {
@@ -47,6 +51,10 @@ fn run_audio_benchmark(args: &ArgMatches) -> Result<i32> {
         }
     };
 
+    // Bench owns stderr with concise status updates. Library diagnostics remain
+    // available as warnings/errors, but routine setup logs do not obscure them.
+    let _log_guard = logging::suppress_info_stderr();
+    eprintln!("Preparing benchmark input…");
     let prepared_at = Instant::now();
     let input = load_benchmark_input(input_path)?;
     let preparation_time = prepared_at.elapsed();
@@ -55,30 +63,172 @@ fn run_audio_benchmark(args: &ArgMatches) -> Result<i32> {
         channels: input.channels,
         ..config
     };
-    let report = benchmark_audio(
+    let report = benchmark_audio_with_progress(
         &input.samples,
         config,
         input.container_path,
         input.impulse_response_spec,
         input.impulse_response_tail_db,
         input.project_effects,
+        |case, total, name| eprintln!("Benchmarking ({case}/{total}) with {name}…"),
     )
     .map_err(|error| Error::IoError(io::Error::other(error)))?;
 
-    let markdown = format!(
+    if let Some(output_path) = args.get_one::<String>("output") {
+        let markdown = markdown_report(&report, input_path, preparation_time);
+        std::fs::write(output_path, markdown).map_err(Error::IoError)?;
+        eprintln!("Saved Markdown report to {output_path}");
+    } else {
+        print!("{}", terminal_report(&report, input_path, preparation_time));
+    }
+    Ok(0)
+}
+
+fn markdown_report(
+    report: &AudioBenchmarkReport,
+    input_path: &str,
+    preparation_time: Duration,
+) -> String {
+    format!(
         "# Input preparation\n\n\
          - Decoding and `.prot` settings load: {:.3} ms\n\
          - Audio source: first supported audio track\n\
          - The timing table below measures DSP processing of already-decoded PCM only.\n\n{}",
         milliseconds(preparation_time),
         report.to_markdown(input_path),
-    );
-    if let Some(output_path) = args.get_one::<String>("output") {
-        std::fs::write(output_path, markdown).map_err(Error::IoError)?;
-    } else {
-        print!("{markdown}");
+    )
+}
+
+fn terminal_report(
+    report: &AudioBenchmarkReport,
+    input_path: &str,
+    preparation_time: Duration,
+) -> String {
+    render_terminal_report(
+        report,
+        input_path,
+        preparation_time,
+        io::stdout().is_terminal(),
+    )
+}
+
+fn render_terminal_report(
+    report: &AudioBenchmarkReport,
+    input_path: &str,
+    preparation_time: Duration,
+    color: bool,
+) -> String {
+    let headers = [
+        "Case",
+        "Effects",
+        "Total ms",
+        "Average ms",
+        "Min ms",
+        "Max ms",
+        "Real-time",
+    ];
+    let rows = report
+        .cases
+        .iter()
+        .map(|case| {
+            (
+                vec![
+                    case.name.clone(),
+                    case.effect_count.to_string(),
+                    format!("{:.3}", milliseconds(case.timing.total)),
+                    format!("{:.3}", milliseconds(case.timing.average)),
+                    format!("{:.3}", milliseconds(case.timing.minimum)),
+                    format!("{:.3}", milliseconds(case.timing.maximum)),
+                    format!("{:.3}x", case.timing.real_time_factor),
+                ],
+                case.timing.real_time_factor,
+            )
+        })
+        .collect::<Vec<_>>();
+    let mut widths = headers.map(str::len);
+    for (row, _) in &rows {
+        for (index, value) in row.iter().enumerate() {
+            widths[index] = widths[index].max(value.len());
+        }
     }
-    Ok(0)
+    let separator = format!(
+        "+-{}-+\n",
+        widths
+            .iter()
+            .map(|width| "-".repeat(*width))
+            .collect::<Vec<_>>()
+            .join("-+-")
+    );
+    let mut output = format!(
+        "{}\n\
+         Input: {}\n\
+         PCM: {} frames, {} channels, {} Hz ({:.3} s)\n\
+         Input preparation: {:.3} ms\n\
+         Timed iterations: {}  •  Warm-up iterations: {}  •  Chunk: {} frames\n\n",
+        style("Proteus audio benchmark", "1;36", color),
+        input_path,
+        report.frames,
+        report.config.channels,
+        report.config.sample_rate,
+        report.audio_duration.as_secs_f64(),
+        milliseconds(preparation_time),
+        report.config.iterations.max(1),
+        report.config.warmup_iterations,
+        report.config.chunk_frames,
+    );
+    output.push_str(&separator);
+    output.push_str("| ");
+    for (index, header) in headers.iter().enumerate() {
+        output.push_str(&style(header, "1;36", color));
+        output.push_str(&format!(
+            "{:width$} | ",
+            "",
+            width = widths[index] - header.len()
+        ));
+    }
+    output.push('\n');
+    output.push_str(&separator);
+    for (row, real_time_factor) in rows {
+        output.push_str("| ");
+        for (index, value) in row.iter().enumerate() {
+            let rendered = if index == 6 {
+                style(
+                    value,
+                    if real_time_factor <= 1.0 { "32" } else { "33" },
+                    color,
+                )
+            } else {
+                value.clone()
+            };
+            if index == 0 {
+                output.push_str(value);
+                output.push_str(&format!(
+                    "{:width$}",
+                    "",
+                    width = widths[index] - value.len()
+                ));
+            } else {
+                output.push_str(&format!(
+                    "{:>width$}",
+                    "",
+                    width = widths[index] - value.len()
+                ));
+                output.push_str(&rendered);
+            }
+            output.push_str(" | ");
+        }
+        output.push('\n');
+    }
+    output.push_str(&separator);
+    output
+}
+
+fn style(value: &str, code: &str, enabled: bool) -> String {
+    if enabled {
+        format!("\x1b[{code}m{value}\x1b[0m")
+    } else {
+        value.to_owned()
+    }
 }
 
 fn benchmark_config(args: &ArgMatches) -> std::result::Result<AudioBenchmarkConfig, String> {

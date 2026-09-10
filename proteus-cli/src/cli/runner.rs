@@ -18,7 +18,11 @@ use super::{create_cmd, info_cmd, meter_cmd, peaks_cmd, playback_runner};
 /// Main CLI execution path: parse args, run subcommands, or start playback.
 pub fn run(args: &ArgMatches, log_buffer: Arc<Mutex<VecDeque<LogLine>>>) -> Result<i32> {
     let startup_stderr_capture = start_tui_log_capture(args, &log_buffer);
-    info!("Starting Proteus CLI");
+    // The offline benchmark supplies concise, case-specific progress on stderr.
+    // Avoid emitting an unrelated startup diagnostic before it can take over.
+    if !matches!(args.subcommand(), Some(("bench", _))) {
+        info!("Starting Proteus CLI");
+    }
 
     if let Some((subcommand, sub_args)) = args.subcommand() {
         return Ok(match subcommand {

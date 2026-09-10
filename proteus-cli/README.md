@@ -26,8 +26,9 @@ Benchmark offline DSP processing for an audio or `.prot` file with:
 cargo run --release -p proteus-cli -- bench /path/to/file.prot
 ```
 
-The Markdown report is printed to standard output unless `--output` (or `-o`) is
-provided, for example `prot bench song.wav -o benchmark.md`. Each report compares
+Without `--output`, the report is printed as a readable terminal table (with
+colour when stdout is a terminal). Provide `--output` (or `-o`) to write the
+portable Markdown report instead, for example `prot bench song.wav -o benchmark.md`. Each report compares
 no effects, each available effect, and—when the input is a `.prot`—its embedded
 effects chain. Decode and `.prot` settings-load time are reported separately;
 the timing table measures only DSP work on already-decoded PCM. For multi-track
