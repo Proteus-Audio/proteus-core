@@ -286,15 +286,7 @@ mod tests {
         assert!(matches!(container_key, SourceKey::TrackId(_)));
 
         // Verify the shared function symbol is linked (compile-time parity check).
-        let _shared_fn: fn(
-            &mut Box<dyn Decoder>,
-            &Packet,
-            u8,
-            &SourceKey,
-            &ForwardInfra<'_>,
-            &mut StartupLog,
-            f64,
-        ) -> bool = decode_and_forward_packet;
+        let _shared_fn = decode_and_forward_packet;
     }
 
     #[test]

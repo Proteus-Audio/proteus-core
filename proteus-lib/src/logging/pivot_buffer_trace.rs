@@ -14,6 +14,8 @@ struct TypeData {
     seg_width: usize,
 }
 
+type ParsedBufferLog = (Vec<String>, HashMap<String, TypeData>);
+
 fn is_type_line(s: &str) -> bool {
     let s = s.trim();
     if s.len() < 2 {
@@ -67,9 +69,7 @@ pub fn pivot_buffer() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-fn parse_buffer_log(
-    lines: &[String],
-) -> Result<(Vec<String>, HashMap<String, TypeData>), Box<dyn std::error::Error>> {
+fn parse_buffer_log(lines: &[String]) -> Result<ParsedBufferLog, Box<dyn std::error::Error>> {
     let mut type_order: Vec<String> = Vec::new();
     let mut types: HashMap<String, TypeData> = HashMap::new();
 

@@ -468,8 +468,10 @@ mod tests {
 
     #[test]
     fn convolution_effect_passthrough_when_disabled() {
-        let mut effect = ConvolutionReverbEffect::default();
-        effect.enabled = false;
+        let mut effect = ConvolutionReverbEffect {
+            enabled: false,
+            ..Default::default()
+        };
         let input = vec![0.2_f32, -0.2, 0.1, -0.1];
         let context = EffectContext::new(48_000, 2, None, None, -60.0).unwrap();
         let output = effect.process(&input, &context, false);

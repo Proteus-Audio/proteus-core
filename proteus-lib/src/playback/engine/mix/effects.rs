@@ -77,6 +77,18 @@ impl EffectEnableFade {
     }
 }
 
+/// Inputs and scratch state for one effect-chain run.
+pub(super) struct EffectChainRun<'a> {
+    pub(super) effects: &'a mut [AudioEffect],
+    pub(super) input: &'a [f32],
+    pub(super) context: &'a EffectContext,
+    pub(super) drain: bool,
+    pub(super) scratch_a: &'a mut Vec<f32>,
+    pub(super) scratch_b: &'a mut Vec<f32>,
+    pub(super) observer: Option<&'a mut dyn EffectChainObserver>,
+    pub(super) enable_fades: Option<&'a mut [Option<EffectEnableFade>]>,
+}
+
 /// Run the current effect chain over a chunk of audio using pre-allocated scratch buffers.
 ///
 /// Processes `input` through each effect in order, ping-ponging between `scratch_a`
@@ -87,24 +99,18 @@ impl EffectEnableFade {
 /// them once (sized to the expected chunk length) to achieve zero-allocation
 /// steady-state processing.
 ///
-/// # Arguments
-///
-/// * `effects` - Mutable ordered list of effects.
-/// * `input` - Interleaved PCM input samples.
-/// * `context` - Runtime effect context (sample rate/channels/container).
-/// * `drain` - Whether effects should emit any remaining tail state.
-/// * `scratch_a` - First scratch buffer (holds result after the call).
-/// * `scratch_b` - Second scratch buffer (used internally for ping-pong).
-pub(super) fn run_effect_chain(
-    effects: &mut [AudioEffect],
-    input: &[f32],
-    context: &EffectContext,
-    drain: bool,
-    scratch_a: &mut Vec<f32>,
-    scratch_b: &mut Vec<f32>,
-    observer: Option<&mut dyn EffectChainObserver>,
-    enable_fades: Option<&mut [Option<EffectEnableFade>]>,
-) {
+/// The processed output resides in `run.scratch_a` after this call.
+pub(super) fn run_effect_chain(run: EffectChainRun<'_>) {
+    let EffectChainRun {
+        effects,
+        input,
+        context,
+        drain,
+        scratch_a,
+        scratch_b,
+        observer,
+        enable_fades,
+    } = run;
     scratch_a.clear();
     scratch_a.extend_from_slice(input);
 
@@ -159,14 +165,16 @@ fn crossfade_enabled_output(
         let wet_mix = fade.next_mix();
         let dry_mix = 1.0 - wet_mix;
         let frame_end = (frame_start + channels).min(total_len);
-        for sample_index in frame_start..frame_end {
-            let dry_sample = if sample_index < original_dry_len {
-                dry[sample_index]
+        for (sample_index, dry_sample) in
+            dry.iter_mut().enumerate().take(frame_end).skip(frame_start)
+        {
+            let dry_value = if sample_index < original_dry_len {
+                *dry_sample
             } else {
                 0.0
             };
             let wet_sample = wet.get(sample_index).copied().unwrap_or(0.0);
-            dry[sample_index] = (dry_sample * dry_mix) + (wet_sample * wet_mix);
+            *dry_sample = (dry_value * dry_mix) + (wet_sample * wet_mix);
         }
     }
 }
@@ -217,16 +225,16 @@ mod tests {
         let input = vec![0.25_f32, -0.25];
         let mut scratch_a = Vec::new();
         let mut scratch_b = Vec::new();
-        run_effect_chain(
-            &mut effects,
-            &input,
-            &context(),
-            false,
-            &mut scratch_a,
-            &mut scratch_b,
-            None,
-            None,
-        );
+        run_effect_chain(EffectChainRun {
+            effects: &mut effects,
+            input: &input,
+            context: &context(),
+            drain: false,
+            scratch_a: &mut scratch_a,
+            scratch_b: &mut scratch_b,
+            observer: None,
+            enable_fades: None,
+        });
         assert_eq!(scratch_a, input);
     }
 
@@ -240,16 +248,16 @@ mod tests {
         let input = vec![0.5_f32, -0.5];
         let mut scratch_a = Vec::new();
         let mut scratch_b = Vec::new();
-        run_effect_chain(
-            &mut effects,
-            &input,
-            &context(),
-            false,
-            &mut scratch_a,
-            &mut scratch_b,
-            None,
-            None,
-        );
+        run_effect_chain(EffectChainRun {
+            effects: &mut effects,
+            input: &input,
+            context: &context(),
+            drain: false,
+            scratch_a: &mut scratch_a,
+            scratch_b: &mut scratch_b,
+            observer: None,
+            enable_fades: None,
+        });
         assert_eq!(scratch_a, vec![1.0_f32, -1.0]);
     }
 
@@ -260,16 +268,16 @@ mod tests {
         let context = EffectContext::new(48_000, 2, None, None, -60.0).unwrap();
         let mut scratch_a = Vec::new();
         let mut scratch_b = Vec::new();
-        run_effect_chain(
-            &mut effects,
-            &input,
-            &context,
-            false,
-            &mut scratch_a,
-            &mut scratch_b,
-            None,
-            None,
-        );
+        run_effect_chain(EffectChainRun {
+            effects: &mut effects,
+            input: &input,
+            context: &context,
+            drain: false,
+            scratch_a: &mut scratch_a,
+            scratch_b: &mut scratch_b,
+            observer: None,
+            enable_fades: None,
+        });
         assert_eq!(scratch_a, input);
     }
 
@@ -286,26 +294,26 @@ mod tests {
         let mut scratch_b = Vec::new();
         let mut enable_fades = vec![Some(EffectEnableFade::new(1.0, false, 240))];
 
-        run_effect_chain(
-            &mut effects,
-            &input,
-            &context(),
-            false,
-            &mut scratch_a,
-            &mut scratch_b,
-            None,
-            Some(&mut enable_fades),
-        );
+        run_effect_chain(EffectChainRun {
+            effects: &mut effects,
+            input: &input,
+            context: &context(),
+            drain: false,
+            scratch_a: &mut scratch_a,
+            scratch_b: &mut scratch_b,
+            observer: None,
+            enable_fades: Some(&mut enable_fades),
+        });
 
         let mut max_step = 0.0_f32;
-        for frame in scratch_a.chunks_exact(2) {
+        for frame in scratch_a.as_chunks::<2>().0 {
             max_step = max_step.max((frame[0] - frame[1]).abs());
         }
         assert!(max_step <= 1.0e-6);
 
         let mut prev = scratch_a[0];
         let mut largest_delta = 0.0_f32;
-        for frame in scratch_a.chunks_exact(2).skip(1) {
+        for frame in scratch_a.as_chunks::<2>().0.iter().skip(1) {
             largest_delta = largest_delta.max((frame[0] - prev).abs());
             prev = frame[0];
         }
@@ -356,26 +364,26 @@ mod tests {
         let mut observed_b = Vec::new();
         let mut observer = RecordingObserver { visits: 0 };
 
-        run_effect_chain(
-            &mut without_observer,
-            &input,
-            &context(),
-            false,
-            &mut expected_a,
-            &mut expected_b,
-            None,
-            None,
-        );
-        run_effect_chain(
-            &mut with_observer,
-            &input,
-            &context(),
-            false,
-            &mut observed_a,
-            &mut observed_b,
-            Some(&mut observer),
-            None,
-        );
+        run_effect_chain(EffectChainRun {
+            effects: &mut without_observer,
+            input: &input,
+            context: &context(),
+            drain: false,
+            scratch_a: &mut expected_a,
+            scratch_b: &mut expected_b,
+            observer: None,
+            enable_fades: None,
+        });
+        run_effect_chain(EffectChainRun {
+            effects: &mut with_observer,
+            input: &input,
+            context: &context(),
+            drain: false,
+            scratch_a: &mut observed_a,
+            scratch_b: &mut observed_b,
+            observer: Some(&mut observer),
+            enable_fades: None,
+        });
 
         assert_eq!(expected_a, observed_a);
         assert_eq!(observer.visits, 2);

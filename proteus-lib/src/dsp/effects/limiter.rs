@@ -315,8 +315,10 @@ mod tests {
 
     #[test]
     fn limiter_reduces_hot_signal() {
-        let mut effect = LimiterEffect::default();
-        effect.enabled = true;
+        let mut effect = LimiterEffect {
+            enabled: true,
+            ..Default::default()
+        };
         effect.settings.threshold_db = -12.0;
         effect.settings.knee_width_db = 0.5;
         effect.settings.attack_ms = 0.0;
@@ -331,8 +333,10 @@ mod tests {
 
     #[test]
     fn limiter_split_matches_single_pass() {
-        let mut settings = LimiterEffect::default();
-        settings.enabled = true;
+        let mut settings = LimiterEffect {
+            enabled: true,
+            ..Default::default()
+        };
         settings.settings.threshold_db = -6.0;
         settings.settings.knee_width_db = 1.0;
         settings.settings.attack_ms = 0.0;

@@ -157,6 +157,16 @@ impl DistortionEffect {
     }
 }
 
+fn sanitize_threshold(threshold: f32) -> f32 {
+    let value = sanitize_finite(threshold, DEFAULT_THRESHOLD);
+    let t = value.abs();
+    if t <= f32::EPSILON {
+        DEFAULT_THRESHOLD
+    } else {
+        t
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::core::DspEffect;
@@ -176,8 +186,10 @@ mod tests {
 
     #[test]
     fn distortion_clamps_output() {
-        let mut effect = DistortionEffect::default();
-        effect.enabled = true;
+        let mut effect = DistortionEffect {
+            enabled: true,
+            ..Default::default()
+        };
         effect.settings.gain = 2.0;
         effect.settings.threshold = 0.5;
         let samples = vec![0.4_f32, -0.4, 0.6, -0.6];
@@ -195,15 +207,5 @@ mod tests {
         let effect: DistortionEffect = serde_json::from_str(json).expect("deserialize distortion");
         assert!(effect.settings.gain > 1.0);
         assert!(effect.settings.threshold > 0.0);
-    }
-}
-
-fn sanitize_threshold(threshold: f32) -> f32 {
-    let value = sanitize_finite(threshold, DEFAULT_THRESHOLD);
-    let t = value.abs();
-    if t <= f32::EPSILON {
-        DEFAULT_THRESHOLD
-    } else {
-        t
     }
 }

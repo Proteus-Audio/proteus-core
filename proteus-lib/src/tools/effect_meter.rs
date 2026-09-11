@@ -286,18 +286,18 @@ impl<'a> OfflineMeterRuntime<'a> {
         state.frames_processed = state
             .frames_processed
             .saturating_add(samples.len() / channels.max(1));
-        process_effect_chunk(
-            &mut self.effects,
-            &samples,
-            &state.context,
-            false,
-            &mut state.scratch_a,
-            &mut state.scratch_b,
-            &mut state.levels,
+        process_effect_chunk(EffectMeterChunk {
+            effects: &mut self.effects,
+            input: &samples,
+            context: &state.context,
+            drain: false,
+            scratch_a: &mut state.scratch_a,
+            scratch_b: &mut state.scratch_b,
+            summary_levels: &mut state.levels,
             #[cfg(feature = "effect-meter-spectral")]
-            &mut state.analyzers,
-            self.config.summary_mode,
-        );
+            analyzers: &mut state.analyzers,
+            summary_mode: self.config.summary_mode,
+        });
 
         Ok(capture_end.map(|end| packet_end < end).unwrap_or(true))
     }
@@ -357,18 +357,18 @@ impl<'a> OfflineMeterRuntime<'a> {
         }
 
         let mut drain_levels = zeroed_snapshots(self.effects.len(), state.channels);
-        process_effect_chunk(
-            &mut self.effects,
-            &[],
-            &state.context,
-            true,
-            &mut state.scratch_a,
-            &mut state.scratch_b,
-            &mut drain_levels,
+        process_effect_chunk(EffectMeterChunk {
+            effects: &mut self.effects,
+            input: &[],
+            context: &state.context,
+            drain: true,
+            scratch_a: &mut state.scratch_a,
+            scratch_b: &mut state.scratch_b,
+            summary_levels: &mut drain_levels,
             #[cfg(feature = "effect-meter-spectral")]
-            &mut state.analyzers,
-            self.config.summary_mode,
-        );
+            analyzers: &mut state.analyzers,
+            summary_mode: self.config.summary_mode,
+        });
         if !state.scratch_a.is_empty() {
             state.levels = merge_summary(&state.levels, &drain_levels, self.config.summary_mode);
         }
@@ -428,10 +428,13 @@ fn interleaved_samples(decoded: AudioBufferRef<'_>, channels: usize) -> Vec<f32>
     }
     let frames = per_channel.first().map(Vec::len).unwrap_or(0);
     let mut interleaved = Vec::with_capacity(frames.saturating_mul(channels));
-    for frame_index in 0..frames {
-        for channel in 0..channels {
-            interleaved.push(per_channel[channel][frame_index]);
-        }
+    for frame_samples in (0..frames).map(|frame_index| {
+        per_channel
+            .iter()
+            .take(channels)
+            .map(move |channel_samples| channel_samples[frame_index])
+    }) {
+        interleaved.extend(frame_samples);
     }
     interleaved
 }
@@ -479,19 +482,32 @@ fn trim_packet_samples(
     samples.extend_from_slice(&trimmed);
 }
 
-fn process_effect_chunk(
-    effects: &mut [AudioEffect],
-    input: &[f32],
-    context: &EffectContext,
+struct EffectMeterChunk<'a> {
+    effects: &'a mut [AudioEffect],
+    input: &'a [f32],
+    context: &'a EffectContext,
     drain: bool,
-    scratch_a: &mut Vec<f32>,
-    scratch_b: &mut Vec<f32>,
-    summary_levels: &mut Vec<EffectLevelSnapshot>,
-    #[cfg(feature = "effect-meter-spectral")] analyzers: &mut [Option<
-        crate::dsp::meter::spectral::EffectSpectralAnalyzer,
-    >],
+    scratch_a: &'a mut Vec<f32>,
+    scratch_b: &'a mut Vec<f32>,
+    summary_levels: &'a mut Vec<EffectLevelSnapshot>,
+    #[cfg(feature = "effect-meter-spectral")]
+    analyzers: &'a mut [Option<crate::dsp::meter::spectral::EffectSpectralAnalyzer>],
     summary_mode: EffectMeterSummaryMode,
-) {
+}
+
+fn process_effect_chunk(chunk: EffectMeterChunk<'_>) {
+    let EffectMeterChunk {
+        effects,
+        input,
+        context,
+        drain,
+        scratch_a,
+        scratch_b,
+        summary_levels,
+        #[cfg(feature = "effect-meter-spectral")]
+        analyzers,
+        summary_mode,
+    } = chunk;
     scratch_a.clear();
     scratch_a.extend_from_slice(input);
 

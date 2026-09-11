@@ -374,8 +374,10 @@ mod tests {
 
     #[test]
     fn multiband_eq_points_and_edges_change_signal() {
-        let mut effect = MultibandEqEffect::default();
-        effect.enabled = true;
+        let mut effect = MultibandEqEffect {
+            enabled: true,
+            ..Default::default()
+        };
         effect.settings.points = vec![
             EqPointSettings::new(120, 0.8, 6.0),
             EqPointSettings::new(1_000, 1.2, -4.0),
@@ -430,8 +432,10 @@ mod tests {
 
     #[test]
     fn multiband_eq_band_change_stays_continuous() {
-        let mut effect = MultibandEqEffect::default();
-        effect.enabled = true;
+        let mut effect = MultibandEqEffect {
+            enabled: true,
+            ..Default::default()
+        };
 
         let mut context = context();
         context.set_parameter_ramp_ms(5.0);
@@ -455,8 +459,10 @@ mod tests {
 
     #[test]
     fn multiband_eq_fast_adjustments_remain_stable() {
-        let mut effect = MultibandEqEffect::default();
-        effect.enabled = true;
+        let mut effect = MultibandEqEffect {
+            enabled: true,
+            ..Default::default()
+        };
 
         let mut context = context();
         context.set_parameter_ramp_ms(0.5);

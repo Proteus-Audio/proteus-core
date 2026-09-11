@@ -143,18 +143,32 @@ fn main_layout(
         .to_vec()
 }
 
+/// Inputs for rendering one TUI frame.
+pub(crate) struct StatusDrawArgs<'a> {
+    pub(crate) status: &'a StatusSnapshot,
+    pub(crate) log_lines: &'a [LogLine],
+    pub(crate) levels: &'a [f32],
+    pub(crate) levels_db: &'a [f32],
+    pub(crate) effect_names: &'a [String],
+    pub(crate) effect_levels: Option<&'a [EffectLevelSnapshot]>,
+    pub(crate) effect_spectral: Option<&'a [Option<EffectBandSnapshot>]>,
+}
+
 /// Render the TUI frame (title, controls, status, logs).
 pub fn draw_status(
     terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>,
     tui_state: &mut TuiState,
-    status: &StatusSnapshot,
-    log_lines: &[LogLine],
-    levels: &[f32],
-    levels_db: &[f32],
-    effect_names: &[String],
-    effect_levels: Option<&[EffectLevelSnapshot]>,
-    effect_spectral: Option<&[Option<EffectBandSnapshot>]>,
+    args: StatusDrawArgs<'_>,
 ) {
+    let StatusDrawArgs {
+        status,
+        log_lines,
+        levels,
+        levels_db,
+        effect_names,
+        effect_levels,
+        effect_spectral,
+    } = args;
     #[cfg(not(feature = "effect-meter-cli"))]
     {
         let _ = effect_names;

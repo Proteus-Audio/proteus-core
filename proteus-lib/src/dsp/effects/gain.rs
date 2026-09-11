@@ -151,8 +151,10 @@ mod tests {
 
     #[test]
     fn gain_scales_samples() {
-        let mut effect = GainEffect::default();
-        effect.enabled = true;
+        let mut effect = GainEffect {
+            enabled: true,
+            ..Default::default()
+        };
         effect.settings.gain = 2.0;
         let samples = vec![0.25_f32, -0.25, 0.5, -0.5];
         let output = effect.process(&samples, &context(), false);
@@ -177,8 +179,10 @@ mod tests {
 
     #[test]
     fn gain_sweep_stays_continuous_on_sine_wave() {
-        let mut effect = GainEffect::default();
-        effect.enabled = true;
+        let mut effect = GainEffect {
+            enabled: true,
+            ..Default::default()
+        };
         effect.settings.gain = 0.8;
 
         let mut context = EffectContext::new(48_000, 1, None, None, -60.0).unwrap();

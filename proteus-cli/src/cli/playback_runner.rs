@@ -320,16 +320,18 @@ fn draw_status_frame(
     ui::draw_status(
         terminal,
         tui_state,
-        &status,
-        &log_lines,
-        &levels,
-        &levels_db,
-        &effect_names,
-        #[cfg(feature = "effect-meter-cli")]
-        effect_levels.as_deref(),
-        #[cfg(not(feature = "effect-meter-cli"))]
-        None,
-        effect_spectral.as_deref(),
+        ui::StatusDrawArgs {
+            status: &status,
+            log_lines: &log_lines,
+            levels: &levels,
+            levels_db: &levels_db,
+            effect_names: &effect_names,
+            #[cfg(feature = "effect-meter-cli")]
+            effect_levels: effect_levels.as_deref(),
+            #[cfg(not(feature = "effect-meter-cli"))]
+            effect_levels: None,
+            effect_spectral: effect_spectral.as_deref(),
+        },
     );
 }
 

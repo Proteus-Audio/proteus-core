@@ -168,8 +168,10 @@ mod tests {
 
     #[test]
     fn high_pass_enabled_changes_signal() {
-        let mut effect = HighPassFilterEffect::default();
-        effect.enabled = true;
+        let mut effect = HighPassFilterEffect {
+            enabled: true,
+            ..Default::default()
+        };
         effect.settings.freq_hz = 2000;
         let samples = vec![1.0_f32, -1.0, 1.0, -1.0, 1.0, -1.0];
         let output = effect.process(&samples, &context(), false);
@@ -180,8 +182,10 @@ mod tests {
 
     #[test]
     fn high_pass_q_change_stays_continuous() {
-        let mut effect = HighPassFilterEffect::default();
-        effect.enabled = true;
+        let mut effect = HighPassFilterEffect {
+            enabled: true,
+            ..Default::default()
+        };
         effect.settings.freq_hz = 1_200;
         effect.settings.q = 0.6;
 

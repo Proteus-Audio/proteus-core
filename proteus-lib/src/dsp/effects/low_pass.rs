@@ -171,8 +171,10 @@ mod tests {
 
     #[test]
     fn low_pass_enabled_changes_signal() {
-        let mut effect = LowPassFilterEffect::default();
-        effect.enabled = true;
+        let mut effect = LowPassFilterEffect {
+            enabled: true,
+            ..Default::default()
+        };
         effect.settings.freq_hz = 200;
         let samples = vec![1.0_f32, -1.0, 1.0, -1.0, 1.0, -1.0];
         let output = effect.process(&samples, &context(), false);
@@ -183,8 +185,10 @@ mod tests {
 
     #[test]
     fn low_pass_reset_restores_passthrough_when_disabled() {
-        let mut effect = LowPassFilterEffect::default();
-        effect.enabled = true;
+        let mut effect = LowPassFilterEffect {
+            enabled: true,
+            ..Default::default()
+        };
         effect.settings.freq_hz = 350;
         let samples = vec![0.3_f32, -0.4, 0.9, -0.8];
         let _ = effect.process(&samples, &context(), false);
@@ -197,8 +201,10 @@ mod tests {
 
     #[test]
     fn low_pass_cutoff_change_stays_continuous() {
-        let mut effect = LowPassFilterEffect::default();
-        effect.enabled = true;
+        let mut effect = LowPassFilterEffect {
+            enabled: true,
+            ..Default::default()
+        };
         effect.settings.freq_hz = 300;
 
         let mut context = context();

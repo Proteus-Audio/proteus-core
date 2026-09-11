@@ -157,11 +157,7 @@ impl Reverb {
             return;
         }
 
-        let frames = if self.channels > 0 {
-            input_buffer.len() / self.channels
-        } else {
-            0
-        };
+        let frames = input_buffer.len().checked_div(self.channels).unwrap_or(0);
 
         if self.scratch_dry.len() != self.channels {
             self.scratch_dry = vec![Vec::new(); self.channels];

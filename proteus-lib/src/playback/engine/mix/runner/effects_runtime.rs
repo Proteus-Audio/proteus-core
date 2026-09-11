@@ -14,7 +14,9 @@ use crate::dsp::effects::EffectContext;
 #[cfg(feature = "debug")]
 use crate::logging::pivot_buffer_trace::pivot_buffer;
 
-use super::super::effects::{audio_effect_enabled, run_effect_chain, EffectEnableFade};
+use super::super::effects::{
+    audio_effect_enabled, run_effect_chain, EffectChainRun, EffectEnableFade,
+};
 use super::super::output_stage;
 use super::super::types::{EffectParameter, EffectSettingsCommand};
 use super::loop_body::{
@@ -98,32 +100,32 @@ pub(super) fn process_and_send_samples(
 fn process_effects(samples: &[f32], state: &mut MixLoopState) {
     if let Some(transition) = state.active_inline_transition.as_mut() {
         // Run old effects chain; result ends up in scratch_a.
-        run_effect_chain(
-            &mut transition.old_effects,
-            samples,
-            &state.effect_context,
-            false,
-            &mut state.effect_scratch_a,
-            &mut state.effect_scratch_b,
-            None,
-            None,
-        );
+        run_effect_chain(EffectChainRun {
+            effects: &mut transition.old_effects,
+            input: samples,
+            context: &state.effect_context,
+            drain: false,
+            scratch_a: &mut state.effect_scratch_a,
+            scratch_b: &mut state.effect_scratch_b,
+            observer: None,
+            enable_fades: None,
+        });
         // During a transition we need both outputs simultaneously, so we save
         // old_out in a temporary Vec. Transitions are non-steady-state so this
         // single allocation per chunk is acceptable.
         let old_out: Vec<f32> = state.effect_scratch_a.clone();
 
         // Run new effects chain; result ends up in scratch_a.
-        run_effect_chain(
-            &mut transition.new_effects,
-            samples,
-            &state.effect_context,
-            false,
-            &mut state.effect_scratch_a,
-            &mut state.effect_scratch_b,
-            None,
-            None,
-        );
+        run_effect_chain(EffectChainRun {
+            effects: &mut transition.new_effects,
+            input: samples,
+            context: &state.effect_context,
+            drain: false,
+            scratch_a: &mut state.effect_scratch_a,
+            scratch_b: &mut state.effect_scratch_b,
+            observer: None,
+            enable_fades: None,
+        });
 
         let len = old_out.len().max(state.effect_scratch_a.len());
         state.effect_scratch_b.clear();
@@ -157,16 +159,16 @@ fn process_effects(samples: &[f32], state: &mut MixLoopState) {
             .as_mut()
             .map(|metering| metering as &mut dyn super::super::effects::EffectChainObserver);
         // DSP runs on the mix-thread-owned local chain — no mutex held.
-        run_effect_chain(
-            &mut state.local_effects,
-            samples,
-            &state.effect_context,
-            false,
-            &mut state.effect_scratch_a,
-            &mut state.effect_scratch_b,
+        run_effect_chain(EffectChainRun {
+            effects: &mut state.local_effects,
+            input: samples,
+            context: &state.effect_context,
+            drain: false,
+            scratch_a: &mut state.effect_scratch_a,
+            scratch_b: &mut state.effect_scratch_b,
             observer,
-            Some(&mut state.effect_enable_fades),
-        );
+            enable_fades: Some(&mut state.effect_enable_fades),
+        });
         if let Some(metering) = metering {
             metering.finish(&state.local_effects);
         }
@@ -367,28 +369,28 @@ pub(super) fn apply_effect_runtime_updates(state: &mut MixLoopState) {
 
 fn drain_effect_chains(state: &mut MixLoopState) {
     if let Some(transition) = state.active_inline_transition.as_mut() {
-        run_effect_chain(
-            &mut transition.old_effects,
-            &[],
-            &state.effect_context,
-            true,
-            &mut state.effect_scratch_a,
-            &mut state.effect_scratch_b,
-            None,
-            None,
-        );
+        run_effect_chain(EffectChainRun {
+            effects: &mut transition.old_effects,
+            input: &[],
+            context: &state.effect_context,
+            drain: true,
+            scratch_a: &mut state.effect_scratch_a,
+            scratch_b: &mut state.effect_scratch_b,
+            observer: None,
+            enable_fades: None,
+        });
         let old_out: Vec<f32> = state.effect_scratch_a.clone();
 
-        run_effect_chain(
-            &mut transition.new_effects,
-            &[],
-            &state.effect_context,
-            true,
-            &mut state.effect_scratch_a,
-            &mut state.effect_scratch_b,
-            None,
-            None,
-        );
+        run_effect_chain(EffectChainRun {
+            effects: &mut transition.new_effects,
+            input: &[],
+            context: &state.effect_context,
+            drain: true,
+            scratch_a: &mut state.effect_scratch_a,
+            scratch_b: &mut state.effect_scratch_b,
+            observer: None,
+            enable_fades: None,
+        });
 
         let len = old_out.len().max(state.effect_scratch_a.len());
         state.effect_scratch_b.clear();
@@ -402,16 +404,16 @@ fn drain_effect_chains(state: &mut MixLoopState) {
         std::mem::swap(&mut state.effect_scratch_a, &mut state.effect_scratch_b);
     } else {
         // Drain runs on the local chain — no mutex held.
-        run_effect_chain(
-            &mut state.local_effects,
-            &[],
-            &state.effect_context,
-            true,
-            &mut state.effect_scratch_a,
-            &mut state.effect_scratch_b,
-            None,
-            Some(&mut state.effect_enable_fades),
-        );
+        run_effect_chain(EffectChainRun {
+            effects: &mut state.local_effects,
+            input: &[],
+            context: &state.effect_context,
+            drain: true,
+            scratch_a: &mut state.effect_scratch_a,
+            scratch_b: &mut state.effect_scratch_b,
+            observer: None,
+            enable_fades: Some(&mut state.effect_enable_fades),
+        });
     }
 }
 

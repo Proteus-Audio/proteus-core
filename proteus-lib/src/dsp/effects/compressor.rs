@@ -311,8 +311,10 @@ mod tests {
 
     #[test]
     fn compressor_applies_gain_reduction() {
-        let mut effect = CompressorEffect::default();
-        effect.enabled = true;
+        let mut effect = CompressorEffect {
+            enabled: true,
+            ..Default::default()
+        };
         effect.settings.threshold_db = -6.0;
         effect.settings.ratio = 2.0;
         effect.settings.attack_ms = 0.0;
@@ -366,8 +368,10 @@ mod tests {
 
     #[test]
     fn threshold_change_preserves_gain_envelope() {
-        let mut effect = CompressorEffect::default();
-        effect.enabled = true;
+        let mut effect = CompressorEffect {
+            enabled: true,
+            ..Default::default()
+        };
         effect.settings.threshold_db = -24.0;
         effect.settings.ratio = 4.0;
         effect.settings.attack_ms = 0.0;
@@ -402,8 +406,10 @@ mod tests {
 
     #[test]
     fn attack_and_release_changes_recompute_coefficients_without_gain_jump() {
-        let mut effect = CompressorEffect::default();
-        effect.enabled = true;
+        let mut effect = CompressorEffect {
+            enabled: true,
+            ..Default::default()
+        };
         effect.settings.threshold_db = -18.0;
         effect.settings.ratio = 4.0;
         effect.settings.attack_ms = 10.0;

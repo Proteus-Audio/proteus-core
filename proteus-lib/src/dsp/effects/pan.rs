@@ -74,20 +74,20 @@ impl super::core::DspEffect for PanEffect {
         let mut out = Vec::with_capacity(samples.len());
         if smoother.is_settled() {
             let (left_gain, right_gain) = pan_gains(smoother.current());
-            let mut chunks = samples.chunks_exact(2);
-            for frame in &mut chunks {
+            let (frames, remainder) = samples.as_chunks::<2>();
+            for frame in frames {
                 out.push(frame[0] * left_gain);
                 out.push(frame[1] * right_gain);
             }
-            out.extend_from_slice(chunks.remainder());
+            out.extend_from_slice(remainder);
         } else {
-            let mut chunks = samples.chunks_exact(2);
-            for frame in &mut chunks {
+            let (frames, remainder) = samples.as_chunks::<2>();
+            for frame in frames {
                 let (lg, rg) = pan_gains(smoother.next());
                 out.push(frame[0] * lg);
                 out.push(frame[1] * rg);
             }
-            out.extend_from_slice(chunks.remainder());
+            out.extend_from_slice(remainder);
         }
         out
     }
@@ -109,20 +109,20 @@ impl super::core::DspEffect for PanEffect {
 
         if smoother.is_settled() {
             let (left_gain, right_gain) = pan_gains(smoother.current());
-            let mut chunks = input.chunks_exact(2);
-            for frame in &mut chunks {
+            let (frames, remainder) = input.as_chunks::<2>();
+            for frame in frames {
                 output.push(frame[0] * left_gain);
                 output.push(frame[1] * right_gain);
             }
-            output.extend_from_slice(chunks.remainder());
+            output.extend_from_slice(remainder);
         } else {
-            let mut chunks = input.chunks_exact(2);
-            for frame in &mut chunks {
+            let (frames, remainder) = input.as_chunks::<2>();
+            for frame in frames {
                 let (lg, rg) = pan_gains(smoother.next());
                 output.push(frame[0] * lg);
                 output.push(frame[1] * rg);
             }
-            output.extend_from_slice(chunks.remainder());
+            output.extend_from_slice(remainder);
         }
     }
 
@@ -171,8 +171,10 @@ mod tests {
 
     #[test]
     fn pan_hard_left_mutes_right_lane() {
-        let mut effect = PanEffect::default();
-        effect.enabled = true;
+        let mut effect = PanEffect {
+            enabled: true,
+            ..Default::default()
+        };
         effect.settings.pan = -1.0;
         let samples = vec![1.0_f32, 1.0, 0.5, 0.5];
         let output = effect.process(&samples, &stereo_context(), false);
@@ -181,8 +183,10 @@ mod tests {
 
     #[test]
     fn pan_hard_right_mutes_left_lane() {
-        let mut effect = PanEffect::default();
-        effect.enabled = true;
+        let mut effect = PanEffect {
+            enabled: true,
+            ..Default::default()
+        };
         effect.settings.pan = 1.0;
         let samples = vec![1.0_f32, 1.0, 0.5, 0.5];
         let output = effect.process(&samples, &stereo_context(), false);
@@ -195,8 +199,10 @@ mod tests {
 
     #[test]
     fn pan_non_stereo_passthrough() {
-        let mut effect = PanEffect::default();
-        effect.enabled = true;
+        let mut effect = PanEffect {
+            enabled: true,
+            ..Default::default()
+        };
         effect.settings.pan = 0.75;
         let samples = vec![0.1_f32, -0.2, 0.3, -0.4];
         let output = effect.process(&samples, &mono_context(), false);
@@ -205,8 +211,10 @@ mod tests {
 
     #[test]
     fn pan_changes_ramp_over_multiple_frames() {
-        let mut effect = PanEffect::default();
-        effect.enabled = true;
+        let mut effect = PanEffect {
+            enabled: true,
+            ..Default::default()
+        };
 
         let mut context = stereo_context();
         context.set_parameter_ramp_ms(0.5);

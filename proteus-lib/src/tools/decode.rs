@@ -220,14 +220,18 @@ mod tests {
     };
 
     fn null_track(id: u32) -> Track {
-        let mut params = CodecParameters::default();
-        params.codec = CODEC_TYPE_NULL;
+        let params = CodecParameters {
+            codec: CODEC_TYPE_NULL,
+            ..Default::default()
+        };
         Track::new(id, params)
     }
 
     fn audio_track(id: u32) -> Track {
-        let mut params = CodecParameters::default();
-        params.codec = CODEC_TYPE_VORBIS;
+        let params = CodecParameters {
+            codec: CODEC_TYPE_VORBIS,
+            ..Default::default()
+        };
         Track::new(id, params)
     }
 
