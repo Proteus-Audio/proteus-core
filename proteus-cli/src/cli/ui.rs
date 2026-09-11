@@ -663,7 +663,7 @@ pub fn draw_info(
 
         let mut track_items: Vec<(u32, f64)> =
             info.duration_map.iter().map(|(k, v)| (*k, *v)).collect();
-        track_items.sort_by(|a, b| a.0.cmp(&b.0));
+        track_items.sort_by_key(|a| a.0);
         let track_lines: Vec<Line> = if track_items.is_empty() {
             vec![Line::from("No track durations available.")]
         } else {

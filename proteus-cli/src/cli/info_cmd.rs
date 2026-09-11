@@ -24,7 +24,7 @@ pub(crate) fn run_info(file_path: &str, print: bool) -> i32 {
 
         let mut track_items: Vec<(u32, f64)> =
             info.duration_map.iter().map(|(k, v)| (*k, *v)).collect();
-        track_items.sort_by(|a, b| a.0.cmp(&b.0));
+        track_items.sort_by_key(|a| a.0);
         if track_items.is_empty() {
             println!("No track durations available.");
         } else {

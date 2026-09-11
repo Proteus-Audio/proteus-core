@@ -109,7 +109,7 @@ fn maybe_print_durations(args: &ArgMatches, file_path: &str) -> Option<i32> {
         let durations = proteus_lib::container::info::get_duration_details_by_scan(file_path);
         let elapsed = start.elapsed();
         let mut items = durations;
-        items.sort_by(|a, b| a.track_id.cmp(&b.track_id));
+        items.sort_by_key(|a| a.track_id);
         for detail in items {
             println!(
                 "track {}: {:.3}s source={} exact={}",
@@ -124,7 +124,7 @@ fn maybe_print_durations(args: &ArgMatches, file_path: &str) -> Option<i32> {
         let durations = proteus_lib::container::info::get_duration_details(file_path);
         let elapsed = start.elapsed();
         let mut items = durations;
-        items.sort_by(|a, b| a.track_id.cmp(&b.track_id));
+        items.sort_by_key(|a| a.track_id);
         for detail in items {
             println!(
                 "track {}: {:.3}s source={} exact={}",
