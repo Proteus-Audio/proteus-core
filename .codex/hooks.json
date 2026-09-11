@@ -16,6 +16,11 @@
           },
           {
             "type": "command",
+            "command": "cargo clippy --all-features",
+            "statusMessage": "Checking for linting for all features…"
+          },
+          {
+            "type": "command",
             "command": "cargo fmt",
             "statusMessage": "Formatting codebase…"
           }
