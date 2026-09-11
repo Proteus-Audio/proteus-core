@@ -4,12 +4,12 @@
 //! state struct that owns the lane collection, and the `delay_samples` helper.
 
 use crate::dsp::effects::core::smoother::ParamSmoother;
+use crate::dsp::effects::tail::DRAIN_SILENCE_EPSILON;
 use crate::dsp::guardrails::sanitize_channels;
 
 // Upper bound for synthetic silence-fed tail flushing.
-const DRAIN_MAX_TAIL_MULTIPLIER: usize = 64;
+pub(super) const DRAIN_MAX_TAIL_MULTIPLIER: usize = 64;
 // Treat frames below this absolute amplitude as silence for tail termination.
-const DRAIN_SILENCE_EPSILON: f32 = 1.0e-6;
 // Require a short run of silent frames before declaring the tail finished.
 const DRAIN_SILENT_FRAMES_TO_STOP: usize = 128;
 

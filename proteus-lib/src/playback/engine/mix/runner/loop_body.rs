@@ -7,14 +7,14 @@ use std::time::{Duration, Instant};
 
 use log::{info, warn};
 
+pub(super) use crate::dsp::effects::tail::{
+    DRAIN_SILENCE_EPSILON, DRAIN_SILENT_PASSES_TO_STOP, MAX_EFFECT_DRAIN_PASSES,
+};
+
 use super::super::buffer_mixer::BufferMixer;
 use super::super::decoder_events::DecodeWorkerEvent;
 use super::effects_runtime;
 use super::state::MixLoopState;
-
-pub(super) const MAX_EFFECT_DRAIN_PASSES: usize = 1024;
-pub(super) const DRAIN_SILENCE_EPSILON: f32 = 1.0e-6;
-pub(super) const DRAIN_SILENT_PASSES_TO_STOP: usize = 2;
 
 pub(super) fn run_mix_loop(state: &mut MixLoopState, startup_trace: Instant) {
     loop {

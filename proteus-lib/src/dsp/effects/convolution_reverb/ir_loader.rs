@@ -66,7 +66,7 @@ pub(super) fn build_reverb_with_impulse_response(
     impulse_spec: Option<ImpulseResponseSpec>,
     container_path: Option<&str>,
     tail_db: f32,
-) -> Option<reverb::Reverb> {
+) -> Option<(reverb::Reverb, usize)> {
     let impulse_spec = impulse_spec?;
 
     use self::impulse_response::{
@@ -172,11 +172,15 @@ pub(super) fn build_reverb_with_impulse_response(
                 channels,
                 impulse_response: impulse_response_cache_key,
             };
-            Some(build_cached_reverb(
-                kernel_cache_key,
-                channels,
-                dry_wet,
-                &impulse_response,
+            let tail_frames = impulse_response
+                .channels
+                .iter()
+                .map(Vec::len)
+                .max()
+                .unwrap_or(0);
+            Some((
+                build_cached_reverb(kernel_cache_key, channels, dry_wet, &impulse_response),
+                tail_frames,
             ))
         }
         Err(err) => {

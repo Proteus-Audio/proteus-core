@@ -14,6 +14,7 @@ use super::ui;
 /// Handle `info` command.
 pub(crate) fn run_info(file_path: &str, print: bool) -> i32 {
     let info = proteus_lib::container::info::Info::new(file_path.to_string());
+    let audible_duration = adjusted_duration(file_path);
     if print {
         println!("File: {}", file_path);
         println!("Tracks: {}", info.duration_map.len());
@@ -28,7 +29,11 @@ pub(crate) fn run_info(file_path: &str, print: bool) -> i32 {
             println!("No track durations available.");
         } else {
             for (track_id, seconds) in track_items {
-                println!("Track {}: {:.3}s", track_id, seconds);
+                println!("Track {} media duration: {:.3}s", track_id, seconds);
+            }
+
+            if let Some(seconds) = audible_duration {
+                println!("Audible duration (effects-adjusted): {:.3}s", seconds);
             }
         }
 
@@ -50,7 +55,7 @@ pub(crate) fn run_info(file_path: &str, print: bool) -> i32 {
     };
 
     loop {
-        ui::draw_info(&mut terminal, &info, file_path);
+        ui::draw_info(&mut terminal, &info, file_path, audible_duration);
         if let Ok(true) = event::poll(Duration::from_millis(200)) {
             if let Ok(event::Event::Key(key)) = event::read() {
                 match key.code {
@@ -69,6 +74,15 @@ pub(crate) fn run_info(file_path: &str, print: bool) -> i32 {
     let _ = crossterm::execute!(stdout, LeaveAlternateScreen, cursor::Show);
 
     0
+}
+
+fn adjusted_duration(file_path: &str) -> Option<f64> {
+    if !(file_path.ends_with(".prot") || file_path.ends_with(".mka")) {
+        return None;
+    }
+    proteus_lib::container::prot::Prot::try_new(file_path)
+        .ok()
+        .map(|mut prot| prot.audible_duration())
 }
 
 struct RawModeGuard;

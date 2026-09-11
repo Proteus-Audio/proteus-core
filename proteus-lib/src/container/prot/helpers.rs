@@ -211,9 +211,8 @@ pub(super) fn sources_to_track_paths(sources: &[ShuffleSource]) -> Vec<String> {
 pub(super) fn collect_legacy_tracks(
     settings: &PlaySettingsLegacy,
     track_index_array: &mut Vec<u32>,
-    longest_duration: &mut f64,
     info: &Info,
-    total_duration: &mut f64,
+    media_duration: &mut f64,
 ) {
     for track in &settings.tracks {
         let (Some(starting_index), Some(length)) = (track.starting_index, track.length) else {
@@ -222,9 +221,8 @@ pub(super) fn collect_legacy_tracks(
         let starting_index = starting_index + 1;
         let index = rand::thread_rng().gen_range(starting_index..(starting_index + length));
         if let Some(track_duration) = info.get_duration(index) {
-            if track_duration > *longest_duration {
-                *longest_duration = track_duration;
-                *total_duration = *longest_duration;
+            if track_duration > *media_duration {
+                *media_duration = track_duration;
             }
         }
         track_index_array.push(index);

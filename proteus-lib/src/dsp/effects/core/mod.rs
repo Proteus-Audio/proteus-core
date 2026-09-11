@@ -43,6 +43,14 @@ pub(crate) trait DspEffect {
     /// Reset any internal state maintained by the effect.
     fn reset_state(&mut self);
 
+    /// Estimate the audible output extension without changing runtime state.
+    ///
+    /// Effects with no tail return `Some(0.0)`. Effects whose tail depends on
+    /// an unavailable external asset return `None`.
+    fn tail_duration_seconds(&self, _context: &EffectContext) -> Option<f64> {
+        Some(0.0)
+    }
+
     /// Ensure any internal state (e.g. convolution IR) is initialized.
     ///
     /// The default implementation is a no-op. Override for effects that

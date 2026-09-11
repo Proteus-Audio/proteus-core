@@ -623,6 +623,7 @@ pub fn draw_info(
     terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>,
     info: &Info,
     file_path: &str,
+    audible_duration: Option<f64>,
 ) {
     let _ = terminal.draw(|f| {
         let title_text = format!("{}\nv{}", title_banner(), env!("CARGO_PKG_VERSION"));
@@ -642,13 +643,19 @@ pub fn draw_info(
         let title = Paragraph::new(title_text).style(Style::default().fg(Color::Cyan));
         f.render_widget(title, chunks[0]);
 
-        let summary_lines = vec![
+        let mut summary_lines = vec![
             Line::from(format!("File: {}", file_path)),
             Line::from(format!("Tracks: {}", info.duration_map.len())),
             Line::from(format!("Channels: {}", info.channels)),
             Line::from(format!("Sample rate: {} Hz", info.sample_rate)),
             Line::from(format!("Bits per sample: {}", info.bits_per_sample)),
         ];
+        if let Some(seconds) = audible_duration {
+            summary_lines.push(Line::from(format!(
+                "Audible duration (effects-adjusted): {:.3}s",
+                seconds
+            )));
+        }
         let summary = Paragraph::new(Text::from(summary_lines))
             .style(Style::default().fg(Color::Green))
             .block(Block::default().borders(Borders::ALL).title("Summary"));
@@ -663,7 +670,10 @@ pub fn draw_info(
             track_items
                 .into_iter()
                 .map(|(track_id, seconds)| {
-                    Line::from(format!("Track {}: {:.3}s", track_id, seconds))
+                    Line::from(format!(
+                        "Track {} media duration: {:.3}s",
+                        track_id, seconds
+                    ))
                 })
                 .collect()
         };
@@ -672,7 +682,7 @@ pub fn draw_info(
             .block(
                 Block::default()
                     .borders(Borders::ALL)
-                    .title("Track Durations"),
+                    .title("Raw Media Durations"),
             );
         f.render_widget(tracks, chunks[2]);
 

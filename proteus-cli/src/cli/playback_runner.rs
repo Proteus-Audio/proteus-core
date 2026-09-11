@@ -227,6 +227,7 @@ fn draw_status_frame(
     log_buffer: &Arc<Mutex<VecDeque<LogLine>>>,
 ) {
     let time = player.get_time();
+    let media_duration = player.media_duration();
     let duration = player.get_duration();
     let playing = player.is_playing();
     let effect_names = player.get_effect_names();
@@ -263,6 +264,7 @@ fn draw_status_frame(
     let log_lines = logging::snapshot_lines(log_buffer);
     let status = controls::status_text(controls::StatusArgs {
         time,
+        media_duration,
         duration,
         playing,
         effects: effect_names.clone(),

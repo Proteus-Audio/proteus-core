@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::dsp::effects::convolution_reverb::ImpulseResponseSpec;
 use crate::dsp::effects::core::smoother;
+use crate::dsp::effects::core::DspEffect;
 use crate::dsp::meter::FilterResponseCurve;
 
 pub mod basic_reverb;
@@ -26,6 +27,7 @@ pub mod limiter;
 pub mod low_pass;
 pub mod multiband_eq;
 pub mod pan;
+pub(crate) mod tail;
 
 pub use basic_reverb::{DelayReverbEffect, DelayReverbSettings};
 pub use compressor::{CompressorEffect, CompressorSettings};
@@ -41,6 +43,7 @@ pub use multiband_eq::{
     MultibandEqSettings,
 };
 pub use pan::{PanEffect, PanSettings};
+pub use tail::{EffectChainTailEstimate, EffectTailEstimate};
 
 /// Error returned when constructing an [`EffectContext`] with invalid parameters.
 #[derive(Debug, Clone)]
@@ -194,6 +197,16 @@ macro_rules! define_audio_effects {
                 }
             }
 
+            /// Estimate the effect's audible output extension in seconds.
+            ///
+            /// `None` means the estimate requires unavailable assets or
+            /// rendering state. The method does not mutate effect state.
+            pub fn tail_duration_seconds(&self, context: &EffectContext) -> Option<f64> {
+                match self {
+                    $( AudioEffect::$variant(effect) => effect.tail_duration_seconds(context), )*
+                }
+            }
+
             /// Process the provided samples through the effect.
             ///
             /// # Arguments
@@ -241,6 +254,36 @@ macro_rules! define_audio_effects {
             }
         }
     };
+}
+
+/// Estimate the audible-duration extension of a serial effect chain.
+///
+/// Estimates are summed conservatively because every later effect receives
+/// the preceding effect's output tail. Returns `None` when an active effect
+/// cannot provide a finite estimate, avoiding a misleading shortened total.
+pub fn estimate_effect_chain_tail(
+    effects: &[AudioEffect],
+    context: &EffectContext,
+) -> Option<EffectChainTailEstimate> {
+    let mut per_effect = Vec::new();
+    let mut total_seconds = 0.0;
+    for effect in effects {
+        let seconds = effect.tail_duration_seconds(context)?;
+        if !seconds.is_finite() || seconds < 0.0 {
+            return None;
+        }
+        if seconds > 0.0 {
+            per_effect.push(EffectTailEstimate {
+                effect_name: effect.display_name(),
+                seconds,
+            });
+            total_seconds += seconds;
+        }
+    }
+    Some(EffectChainTailEstimate {
+        per_effect,
+        total_seconds,
+    })
 }
 
 define_audio_effects! {
@@ -463,5 +506,26 @@ mod tests {
         let cloned = ctx.clone();
         assert_eq!(cloned.sample_rate(), 48_000);
         assert_eq!(cloned.channels(), 2);
+    }
+
+    #[test]
+    fn chain_tail_estimate_sums_serial_effects_and_skips_dry_effects() {
+        let mut delay = DelayReverbEffect::default();
+        delay.mix = 0.5;
+        delay.settings.duration_ms = 10;
+        delay.settings.amplitude = 0.0;
+        let dry = DiffusionReverbEffect::default();
+        let estimate = estimate_effect_chain_tail(
+            &[
+                AudioEffect::DelayReverb(delay),
+                AudioEffect::DiffusionReverb(dry),
+            ],
+            &EffectContext::new(48_000, 2, None, None, -60.0).unwrap(),
+        )
+        .expect("deterministic estimate");
+
+        assert_eq!(estimate.per_effect.len(), 1);
+        assert_eq!(estimate.per_effect[0].effect_name, "DelayReverb");
+        assert!((estimate.total_seconds - 0.01).abs() < f64::EPSILON);
     }
 }

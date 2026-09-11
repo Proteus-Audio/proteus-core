@@ -16,7 +16,7 @@ use crate::container::prot_settings::{
     derive_runtime_settings, try_load_play_settings_from_container, PlaySettingsLoadError,
 };
 use crate::dsp::effects::convolution_reverb::ImpulseResponseSpec;
-use crate::dsp::effects::AudioEffect;
+use crate::dsp::effects::{estimate_effect_chain_tail, AudioEffect, EffectContext};
 
 pub use types::PathsTrack;
 pub(crate) use types::{
@@ -34,7 +34,8 @@ pub struct Prot {
     pub(crate) source: ProtSource,
     pub(crate) track_ids: Option<Vec<u32>>,
     pub(crate) track_paths: Option<Vec<String>>,
-    pub(crate) duration: f64,
+    /// Raw decoded-media duration of the selected schedule, before effects.
+    pub(crate) media_duration: f64,
     pub(crate) shuffle_schedule: Vec<ShuffleScheduleEntry>,
     pub(crate) play_settings: Option<PlaySettingsFile>,
     pub(crate) impulse_response_spec: Option<ImpulseResponseSpec>,
@@ -104,7 +105,7 @@ impl Prot {
             },
             track_ids: None,
             track_paths: None,
-            duration: 0.0,
+            media_duration: 0.0,
             shuffle_schedule: Vec::new(),
             play_settings: None,
             impulse_response_spec: None,
@@ -139,7 +140,7 @@ impl Prot {
             },
             track_ids: None,
             track_paths: None,
-            duration: 0.0,
+            media_duration: 0.0,
             shuffle_schedule: Vec::new(),
             play_settings: None,
             impulse_response_spec: None,
@@ -166,7 +167,7 @@ impl Prot {
         self.track_ids = None;
         self.track_paths = None;
         self.shuffle_schedule.clear();
-        self.duration = 0.0;
+        self.media_duration = 0.0;
 
         if let ProtSource::Paths {
             file_paths,
@@ -176,7 +177,7 @@ impl Prot {
             let (schedule, longest_duration) =
                 build_paths_shuffle_schedule(file_paths, &self.info, file_paths_dictionary);
             self.shuffle_schedule = schedule;
-            self.duration = longest_duration;
+            self.media_duration = longest_duration;
 
             if let Some(entry) = self.shuffle_schedule.first() {
                 self.track_paths = Some(sources_to_track_paths(&entry.sources));
@@ -188,15 +189,15 @@ impl Prot {
         match self.play_settings.as_ref() {
             Some(play_settings) => match play_settings {
                 PlaySettingsFile::Legacy(file) => {
-                    let mut longest_duration = 0.0;
+                    let mut media_duration = 0.0;
                     let mut track_index_array: Vec<u32> = Vec::new();
                     collect_legacy_tracks(
                         file.settings.inner(),
                         &mut track_index_array,
-                        &mut longest_duration,
                         &self.info,
-                        &mut self.duration,
+                        &mut media_duration,
                     );
+                    self.media_duration = media_duration;
                     self.track_ids = Some(track_index_array.clone());
                     self.shuffle_schedule = vec![ShuffleScheduleEntry {
                         at_ms: 0,
@@ -214,7 +215,7 @@ impl Prot {
                         let (schedule, longest_duration) =
                             build_id_shuffle_schedule(tracks, &self.info);
                         self.shuffle_schedule = schedule;
-                        self.duration = longest_duration;
+                        self.media_duration = longest_duration;
                     }
                 }
             },
@@ -226,6 +227,27 @@ impl Prot {
         if let Some(entry) = self.shuffle_schedule.first() {
             self.track_ids = Some(sources_to_track_ids(&entry.sources));
         }
+    }
+
+    pub(crate) fn duration_effect_context(&self) -> Option<EffectContext> {
+        EffectContext::new(
+            self.info.sample_rate,
+            self.info.channels as usize,
+            self.get_container_path(),
+            self.impulse_response_spec.clone(),
+            self.impulse_response_tail_db.unwrap_or(-60.0),
+        )
+        .ok()
+    }
+
+    pub(crate) fn audible_duration_for_effects(&self, effects: &[AudioEffect]) -> f64 {
+        let extension = self
+            .duration_effect_context()
+            .and_then(|context| estimate_effect_chain_tail(effects, &context))
+            .map(|estimate| estimate.total_seconds)
+            .filter(|seconds| seconds.is_finite() && *seconds >= 0.0)
+            .unwrap_or(0.0);
+        self.media_duration + extension
     }
 
     fn load_play_settings(&mut self) {

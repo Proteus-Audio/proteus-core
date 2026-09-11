@@ -8,6 +8,7 @@ use log::info;
 use serde::{Deserialize, Serialize};
 
 use super::core::smoother::ParamSmoother;
+use super::tail::DRAIN_SILENCE_EPSILON;
 use super::EffectContext;
 
 pub mod convolution;
@@ -23,7 +24,6 @@ pub(crate) const DEFAULT_DRY_WET: f32 = 0.000001;
 const DEFAULT_TAIL_DB: f32 = -60.0;
 pub(crate) const REVERB_BATCH_BLOCKS: usize = 2;
 const DRAIN_MAX_BLOCKS: usize = 128;
-const DRAIN_SILENCE_EPSILON: f32 = 1.0e-6;
 const DRAIN_SILENT_BLOCKS_TO_STOP: usize = 2;
 
 /// Preferred processing batch size in interleaved samples for the reverb.
@@ -162,6 +162,17 @@ impl crate::dsp::effects::core::DspEffect for ConvolutionReverbEffect {
     fn warm_up(&mut self, context: &EffectContext) {
         let _ = self.process(&[], context, false);
     }
+
+    fn tail_duration_seconds(&self, context: &EffectContext) -> Option<f64> {
+        if !self.enabled || self.dry_wet.clamp(0.0, 1.0) <= 0.0 {
+            return Some(0.0);
+        }
+        self.state.as_ref().map(|state| {
+            let block_frames = state.block_samples / context.channels().max(1);
+            let runtime_tail_frames = block_frames.saturating_mul(DRAIN_MAX_BLOCKS);
+            state.tail_frames.min(runtime_tail_frames) as f64 / context.sample_rate().max(1) as f64
+        })
+    }
 }
 
 impl ConvolutionReverbEffect {
@@ -215,7 +226,8 @@ impl ConvolutionReverbEffect {
             config.channels
         );
 
-        self.state = reverb.map(ConvolutionReverbState::new);
+        self.state =
+            reverb.map(|(reverb, tail_frames)| ConvolutionReverbState::new(reverb, tail_frames));
         self.resolved_config = Some(config);
     }
 
@@ -270,11 +282,12 @@ struct ConvolutionReverbState {
     block_in: Vec<f32>,
     block_out: Vec<f32>,
     block_samples: usize,
+    tail_frames: usize,
     tail_drained: bool,
 }
 
 impl ConvolutionReverbState {
-    fn new(mut reverb: reverb::Reverb) -> Self {
+    fn new(mut reverb: reverb::Reverb, tail_frames: usize) -> Self {
         info!("using convolution reverb");
         let block_samples = reverb.block_size_samples();
         reverb.set_dry_wet(DEFAULT_DRY_WET);
@@ -285,6 +298,7 @@ impl ConvolutionReverbState {
             block_in: Vec::new(),
             block_out: Vec::new(),
             block_samples,
+            tail_frames,
             tail_drained: false,
         }
     }
@@ -466,7 +480,7 @@ mod tests {
     fn convolution_reverb_mix_uses_smoother() {
         let mut effect = ConvolutionReverbEffect::new(0.2);
         effect.enabled = true;
-        effect.state = Some(ConvolutionReverbState::new(Reverb::new(1, 0.2)));
+        effect.state = Some(ConvolutionReverbState::new(Reverb::new(1, 0.2), 1));
         effect.resolved_config = Some(ResolvedConfig {
             channels: 1,
             container_path: None,
@@ -487,5 +501,27 @@ mod tests {
             .expect("convolution reverb smoother should exist");
         assert!(smoother.current() > 0.2);
         assert!(smoother.current() < 0.8);
+    }
+
+    #[test]
+    fn convolution_tail_estimate_uses_loaded_impulse_response_length() {
+        let mut effect = ConvolutionReverbEffect::new(0.5);
+        effect.state = Some(ConvolutionReverbState::new(Reverb::new(1, 0.5), 480));
+        let effect_context = EffectContext::new(48_000, 1, None, None, -60.0).unwrap();
+        assert_eq!(effect.tail_duration_seconds(&effect_context), Some(0.01));
+    }
+
+    #[test]
+    fn convolution_tail_estimate_respects_runtime_drain_cap() {
+        let mut effect = ConvolutionReverbEffect::new(0.5);
+        let state = ConvolutionReverbState::new(Reverb::new(2, 0.5), usize::MAX);
+        let expected = (state.block_samples / 2 * super::DRAIN_MAX_BLOCKS) as f64 / 48_000.0;
+        effect.state = Some(state);
+        let effect_context = EffectContext::new(48_000, 2, None, None, -60.0).unwrap();
+
+        assert_eq!(
+            effect.tail_duration_seconds(&effect_context),
+            Some(expected)
+        );
     }
 }

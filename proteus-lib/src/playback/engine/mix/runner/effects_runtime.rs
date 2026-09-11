@@ -285,7 +285,12 @@ pub(super) fn drain_effect_tail(state: &mut MixLoopState) -> bool {
         &state.effect_scratch_a,
         slice_samples,
     ) {
-        output_stage::SendStatus::Sent => true,
+        output_stage::SendStatus::Sent => {
+            state
+                .lock_dsp_metrics_recoverable()
+                .effect_drained_tail_secs += drain_secs;
+            true
+        }
         output_stage::SendStatus::Empty => false,
         output_stage::SendStatus::Disconnected => {
             state.abort.store(true, Ordering::SeqCst);

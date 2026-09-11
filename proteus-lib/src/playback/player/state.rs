@@ -67,6 +67,11 @@ impl Player {
         *self.lock_duration_recoverable()
     }
 
+    /// Get the raw decoded-media duration (seconds) used as the decoder seek limit.
+    pub fn media_duration(&self) -> f64 {
+        self.lock_prot_invariant().media_duration()
+    }
+
     /// Get the track identifiers used for display.
     pub fn get_ids(&self) -> Vec<String> {
         self.lock_prot_invariant().get_ids()

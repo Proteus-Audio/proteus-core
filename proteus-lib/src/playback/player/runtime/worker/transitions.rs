@@ -142,13 +142,32 @@ pub(super) fn apply_end_of_stream_action(ctx: &ThreadContext, loop_state: &LoopS
                 let sink = ctx.lock_sink_recoverable();
                 sink.pause();
             }
-            let target_end = match final_duration {
-                Some(value) if value.is_finite() && value >= 0.0 => value,
-                _ => duration.max(0.0),
-            };
+            let target_end = end_of_stream_target_duration(final_duration, duration);
             *ctx.lock_time_passed_recoverable() = target_end;
         }
     }
 
     ctx.last_time_update_ms.store(now_ms(), Ordering::Relaxed);
+}
+
+fn end_of_stream_target_duration(final_duration: Option<f64>, predicted_duration: f64) -> f64 {
+    match final_duration {
+        Some(value) if value.is_finite() && value >= 0.0 => value,
+        _ => predicted_duration.max(0.0),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::end_of_stream_target_duration;
+
+    #[test]
+    fn end_of_stream_uses_actual_tail_drain_duration_over_prediction() {
+        assert_eq!(end_of_stream_target_duration(Some(12.5), 10.0), 12.5);
+    }
+
+    #[test]
+    fn end_of_stream_falls_back_to_audible_duration_without_measurement() {
+        assert_eq!(end_of_stream_target_duration(None, 10.0), 10.0);
+    }
 }

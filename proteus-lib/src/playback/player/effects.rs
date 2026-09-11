@@ -25,6 +25,8 @@ impl Player {
         self.impulse_response_override = Some(spec.clone());
         let mut prot = self.lock_prot_invariant();
         prot.set_impulse_response_spec(spec);
+        drop(prot);
+        self.refresh_audible_duration();
         self.request_effects_reset();
     }
 
@@ -46,6 +48,8 @@ impl Player {
         self.impulse_response_tail_override = Some(tail_db);
         let mut prot = self.lock_prot_invariant();
         prot.set_impulse_response_tail_db(tail_db);
+        drop(prot);
+        self.refresh_audible_duration();
         self.request_effects_reset();
     }
 
@@ -69,6 +73,8 @@ impl Player {
         {
             effect.enabled = enabled;
         }
+        drop(effects);
+        self.refresh_audible_duration();
     }
 
     /// Set the reverb wet/dry mix (clamped to `[0.0, 1.0]`).
@@ -97,6 +103,8 @@ impl Player {
         {
             effect.mix = dry_wet.clamp(0.0, 1.0);
         }
+        drop(effects);
+        self.refresh_audible_duration();
     }
 
     /// Retrieve the current reverb settings snapshot.
@@ -157,6 +165,7 @@ impl Player {
     pub fn set_effects(&mut self, effects: Vec<AudioEffect>) {
         self.clear_inline_effects_update();
         self.replace_effects_chain(effects);
+        self.refresh_audible_duration();
         self.request_effects_reset();
 
         // Seeking to the current timestamp refreshes the sink so that
@@ -177,7 +186,8 @@ impl Player {
     /// # Arguments
     ///
     /// * `effects` - New ordered list of effects to apply.
-    pub fn set_effects_inline(&self, effects: Vec<AudioEffect>) {
+    pub fn set_effects_inline(&self, mut effects: Vec<AudioEffect>) {
+        self.refresh_audible_duration_for(&mut effects);
         if self.thread_finished() {
             self.replace_effects_chain(effects);
             return;
@@ -227,6 +237,25 @@ impl Player {
     /// Bump the effects reset generation consumed by the runtime engine.
     pub(super) fn request_effects_reset(&self) {
         self.effects_reset.fetch_add(1, Ordering::SeqCst);
+    }
+
+    /// Recompute the predictive progress total after an effect configuration change.
+    fn refresh_audible_duration(&self) {
+        let mut effects = self.lock_effects_recoverable();
+        self.refresh_audible_duration_for(&mut effects);
+    }
+
+    /// Set the predictive total for an effect chain that is about to become active.
+    fn refresh_audible_duration_for(&self, effects: &mut [AudioEffect]) {
+        let prot = self.lock_prot_invariant();
+        if let Some(context) = prot.duration_effect_context() {
+            for effect in effects.iter_mut() {
+                effect.warm_up(&context);
+            }
+        }
+        let duration = prot.audible_duration_for_effects(effects);
+        drop(prot);
+        *self.lock_duration_recoverable() = duration;
     }
 
     /// Enqueue an incremental effect settings command for the mix thread.
@@ -511,6 +540,35 @@ mod tests {
         assert!(!player.set_effect_parameter(3, EffectParameter::Gain(2.0)));
     }
 
+    #[test]
+    fn standalone_player_effect_change_refreshes_audible_duration() {
+        let mut player = test_player(Vec::new());
+        player.lock_prot_invariant().media_duration = 10.0;
+        *player.lock_duration_recoverable() = 10.0;
+        let mut reverb = DelayReverbEffect::default();
+        reverb.mix = 0.5;
+
+        player.set_effects(vec![AudioEffect::DelayReverb(reverb)]);
+
+        assert!(player.get_duration() > player.media_duration());
+    }
+
+    #[test]
+    fn inline_effect_change_refreshes_audible_duration_before_runtime_applies_it() {
+        let player = test_player(Vec::new());
+        player.lock_prot_invariant().media_duration = 10.0;
+        *player.lock_duration_recoverable() = 10.0;
+        player.playback_thread_exists.store(true, Ordering::SeqCst);
+        let mut reverb = DelayReverbEffect::default();
+        reverb.mix = 0.5;
+
+        player.set_effects_inline(vec![AudioEffect::DelayReverb(reverb)]);
+
+        assert!(player.get_duration() > player.media_duration());
+        assert!(player.lock_inline_effects_update_recoverable().is_some());
+        player.playback_thread_exists.store(false, Ordering::SeqCst);
+    }
+
     fn test_player(effects: Vec<AudioEffect>) -> Player {
         let player = Player::new_from_file_paths(vec![PathsTrack::new_from_file_paths(vec![
             "/tmp/nonexistent.wav".to_string(),
@@ -519,6 +577,11 @@ mod tests {
         player.abort.store(true, Ordering::SeqCst);
         *player.lock_playback_thread_handle_invariant() = None;
         *player.lock_state_invariant() = PlayerState::Stopped;
+        {
+            let mut prot = player.lock_prot_invariant();
+            prot.info.sample_rate = 48_000;
+            prot.info.channels = 2;
+        }
         *player.lock_effects_recoverable() = effects;
         player.lock_effect_settings_commands_recoverable().clear();
         player

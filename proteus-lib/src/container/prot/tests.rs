@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use super::*;
 use crate::container::info::Info;
 use crate::container::play_settings::SettingsTrack;
+use crate::dsp::effects::{AudioEffect, DelayReverbEffect};
 
 fn test_info() -> Info {
     Info {
@@ -22,13 +23,40 @@ fn prot_from_container(file_path: &str) -> Prot {
         },
         track_ids: None,
         track_paths: None,
-        duration: 0.0,
+        media_duration: 0.0,
         shuffle_schedule: Vec::new(),
         play_settings: None,
         impulse_response_spec: None,
         impulse_response_tail_db: None,
         effects: None,
     }
+}
+
+#[test]
+fn audible_duration_adds_global_tail_once_without_changing_media_duration() {
+    let mut prot = prot_from_container("demo.prot");
+    prot.media_duration = 10.0;
+    let mut reverb = DelayReverbEffect::default();
+    reverb.mix = 0.5;
+    prot.effects = Some(vec![AudioEffect::DelayReverb(reverb)]);
+
+    assert_eq!(prot.media_duration(), 10.0);
+    let context = prot.duration_effect_context().expect("duration context");
+    let tail = prot.effects.as_ref().unwrap()[0]
+        .tail_duration_seconds(&context)
+        .expect("deterministic delay tail");
+    assert_eq!(prot.audible_duration(), prot.media_duration() + tail);
+}
+
+#[test]
+fn dry_global_reverb_does_not_extend_audible_duration() {
+    let mut prot = prot_from_container("demo.prot");
+    prot.media_duration = 10.0;
+    let reverb = DelayReverbEffect::default();
+    assert_eq!(reverb.mix, 0.0);
+    prot.effects = Some(vec![AudioEffect::DelayReverb(reverb)]);
+
+    assert_eq!(prot.audible_duration(), prot.media_duration());
 }
 
 #[test]

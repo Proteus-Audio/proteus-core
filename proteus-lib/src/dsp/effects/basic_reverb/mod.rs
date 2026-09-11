@@ -4,6 +4,7 @@ use log::info;
 use serde::{Deserialize, Serialize};
 
 use super::core::smoother::ParamSmoother;
+use super::tail::{DRAIN_SILENCE_EPSILON, MAX_EFFECT_DRAIN_PASSES};
 use super::EffectContext;
 
 const DEFAULT_DURATION_MS: u64 = 100;
@@ -182,6 +183,31 @@ impl crate::dsp::effects::core::DspEffect for DelayReverbEffect {
         self.state = None;
         self.mix_smoother = None;
     }
+
+    fn tail_duration_seconds(&self, _context: &EffectContext) -> Option<f64> {
+        if !self.enabled {
+            return Some(0.0);
+        }
+        let delay_seconds = self.settings.duration_ms as f64 / 1000.0;
+        let mix = self.mix_target() as f64;
+        let feedback = self.settings.amplitude() as f64;
+        if delay_seconds <= 0.0 || mix <= 0.0 {
+            return Some(0.0);
+        }
+
+        let periods = if feedback <= 0.0 {
+            1
+        } else {
+            let threshold = DRAIN_SILENCE_EPSILON as f64 / mix;
+            let decay_periods = if threshold >= 1.0 {
+                1
+            } else {
+                (threshold.ln() / feedback.ln()).ceil().max(1.0) as usize
+            };
+            decay_periods.min(MAX_EFFECT_DRAIN_PASSES)
+        };
+        Some(delay_seconds * periods as f64)
+    }
 }
 
 impl DelayReverbEffect {
@@ -199,12 +225,7 @@ impl DelayReverbEffect {
     }
 
     fn mix_target(&self) -> f32 {
-        let target = if self.mix > 0.0 {
-            self.mix.clamp(0.0, MAX_AMPLITUDE)
-        } else {
-            self.settings.amplitude()
-        };
-        target
+        self.mix.clamp(0.0, 1.0)
     }
 
     fn update_mix_smoother(&mut self, context: &EffectContext) {
@@ -352,6 +373,14 @@ mod tests {
     #[test]
     fn delay_samples_handles_zero_duration() {
         assert_eq!(delay_samples(48_000, 2, 0), 0);
+    }
+
+    #[test]
+    fn tail_estimate_matches_one_delay_period_without_feedback() {
+        let mut effect = DelayReverbEffect::new(0.5);
+        effect.settings.duration_ms = 25;
+        effect.settings.amplitude = 0.0;
+        assert_eq!(effect.tail_duration_seconds(&context()), Some(0.025));
     }
 
     #[test]

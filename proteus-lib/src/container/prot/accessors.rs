@@ -117,9 +117,38 @@ impl Prot {
         Some((file_path.clone(), entries))
     }
 
-    /// Get the longest selected duration (seconds).
+    /// Get the raw decoded-media duration of the active selection (seconds).
+    ///
+    /// This legacy accessor deliberately excludes all effect tails.
     pub fn get_duration(&self) -> &f64 {
-        &self.duration
+        &self.media_duration
+    }
+
+    /// Get the raw decoded-media duration of the active selection (seconds).
+    pub fn media_duration(&self) -> f64 {
+        self.media_duration
+    }
+
+    /// Get the predicted audible duration with the container's global effects.
+    ///
+    /// Track selection duration remains raw until per-track effects are applied
+    /// by the runtime; global post-mix effects are added once here.
+    pub fn audible_duration(&mut self) -> f64 {
+        let media_duration = self.media_duration;
+        let Some(context) = self.duration_effect_context() else {
+            return media_duration;
+        };
+        let Some(effects) = self.effects.as_mut() else {
+            return media_duration;
+        };
+        for effect in effects.iter_mut() {
+            effect.warm_up(&context);
+        }
+        let extension = crate::dsp::effects::estimate_effect_chain_tail(effects, &context)
+            .map(|estimate| estimate.total_seconds)
+            .filter(|seconds| seconds.is_finite() && *seconds >= 0.0)
+            .unwrap_or(0.0);
+        media_duration + extension
     }
 
     /// Return the number of selected tracks.

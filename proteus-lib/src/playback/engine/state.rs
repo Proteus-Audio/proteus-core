@@ -140,6 +140,8 @@ pub struct DspChainMetrics {
     pub queued_sink_ms: f64,
     /// Duration of the most recently appended output chunk, in milliseconds.
     pub output_chunk_ms: f64,
+    /// Actual duration emitted while draining effect state after source end.
+    pub effect_drained_tail_secs: f64,
 }
 
 #[cfg(test)]
@@ -198,5 +200,6 @@ mod tests {
         assert!(!metrics.late_append_active);
         assert_eq!(metrics.queued_sink_ms, 0.0);
         assert_eq!(metrics.output_chunk_ms, 0.0);
+        assert_eq!(metrics.effect_drained_tail_secs, 0.0);
     }
 }

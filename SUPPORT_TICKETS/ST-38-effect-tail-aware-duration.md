@@ -105,15 +105,17 @@ container duration display end too early when tail-producing effects are enabled
 
 ## Acceptance criteria
 
-- [ ] Code distinguishes raw media duration from effects-adjusted audible duration
-- [ ] Tail-producing effects expose a deterministic tail-duration estimate
-- [ ] Effect-chain tail composition is documented and tested
-- [ ] Single-file playback progress/total duration accounts for active effect tails
+- [x] Code distinguishes raw media duration from effects-adjusted audible duration
+- [x] Tail-producing effects expose a deterministic tail-duration estimate
+- [x] Effect-chain tail composition is documented and tested
+- [x] Single-file playback progress/total duration accounts for active effect tails
 - [ ] `.prot` container duration accounts for global and track-level effect tails without double-counting
-- [ ] CLI/TUI labels raw versus adjusted duration clearly
-- [ ] Runtime tail drain behavior and duration estimates use compatible thresholds
-- [ ] Tests cover reverb, convolution reverb, disabled/dry effects, single-file playback, and `.prot` containers
+- [x] CLI/TUI labels raw versus adjusted duration clearly
+- [x] Runtime tail drain behavior and duration estimates use compatible thresholds
+- [x] Tests cover reverb, convolution reverb, disabled/dry effects, single-file playback, and `.prot` containers
 
 ## Status
 
-Not started.
+In progress. Global post-mix tails, standalone playback duration, and duration
+labels are implemented. Track-level effect chains are not yet supported by the
+mix runtime, so track-specific duration and its regression coverage remain open.

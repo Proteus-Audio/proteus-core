@@ -112,6 +112,7 @@ impl Player {
     ///
     /// * `ts` - New playback position in seconds.
     pub fn seek(&mut self, ts: f64) {
+        let ts = clamp_seek_to_media_duration(ts, self.media_duration());
         let mut timestamp = self.lock_ts_recoverable();
         *timestamp = ts;
         drop(timestamp);
@@ -256,9 +257,20 @@ fn seek_should_resume(state: PlayerState) -> bool {
     matches!(state, PlayerState::Playing | PlayerState::Resuming)
 }
 
+fn clamp_seek_to_media_duration(ts: f64, media_duration: f64) -> f64 {
+    let ts = ts.max(0.0);
+    if media_duration.is_finite() && media_duration >= 0.0 {
+        ts.min(media_duration)
+    } else {
+        ts
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{seek_should_resume, EndOfStreamAction, Player, PlayerState};
+    use super::{
+        clamp_seek_to_media_duration, seek_should_resume, EndOfStreamAction, Player, PlayerState,
+    };
     use crate::container::prot::PathsTrack;
     use crate::playback::player::lifecycle::current_ms;
     use std::sync::atomic::Ordering;
@@ -276,6 +288,12 @@ mod tests {
         assert!(!seek_should_resume(PlayerState::Stopped));
         assert!(!seek_should_resume(PlayerState::Stopping));
         assert!(!seek_should_resume(PlayerState::Pausing));
+    }
+
+    #[test]
+    fn seek_clamps_audible_tail_positions_to_media_end() {
+        assert_eq!(clamp_seek_to_media_duration(12.0, 10.0), 10.0);
+        assert_eq!(clamp_seek_to_media_duration(-2.0, 10.0), 0.0);
     }
 
     #[test]

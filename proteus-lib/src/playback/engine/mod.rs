@@ -216,10 +216,25 @@ impl PlayerEngine {
         receiver
     }
 
-    /// Get the total duration (seconds) of the active selection.
+    /// Get the effects-adjusted audible duration (seconds) of the active selection.
     pub fn get_duration(&self) -> f64 {
+        let mut effects = lock_recoverable(
+            &self.effects,
+            "player engine effects",
+            "effect settings are a recoverable runtime snapshot",
+        );
         let prot = self.lock_prot_invariant();
-        *prot.get_duration()
+        if let Some(context) = prot.duration_effect_context() {
+            for effect in effects.iter_mut() {
+                effect.warm_up(&context);
+            }
+        }
+        prot.audible_duration_for_effects(&effects)
+    }
+
+    /// Get the raw decoded-media duration (seconds) of the active selection.
+    pub fn media_duration(&self) -> f64 {
+        self.lock_prot_invariant().media_duration()
     }
 
     /// Get finished engine track keys as a detached snapshot.

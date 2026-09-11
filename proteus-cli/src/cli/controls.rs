@@ -16,6 +16,9 @@ pub struct StatusSnapshot {
 /// Inputs used to build the status text block.
 pub struct StatusArgs {
     pub time: f64,
+    /// Raw decoded-media duration. This remains the decoder seek limit.
+    pub media_duration: f64,
+    /// Effects-adjusted audible duration used for progress.
     pub duration: f64,
     pub playing: bool,
     pub effects: Vec<String>,
@@ -79,11 +82,7 @@ pub fn status_text(args: StatusArgs) -> StatusSnapshot {
     };
     let current = format_millis_hhmmss(args.time * 1000.0);
     let total = format_millis_hhmmss(args.duration * 1000.0);
-    let percent = if args.duration > 0.0 {
-        (args.time / args.duration * 100.0).min(100.0)
-    } else {
-        0.0
-    };
+    let percent = playback_percent(args.time, args.duration);
     let effects_label = if args.effects.is_empty() {
         "none".to_string()
     } else {
@@ -92,8 +91,15 @@ pub fn status_text(args: StatusArgs) -> StatusSnapshot {
 
     #[cfg(feature = "debug")]
     let text = format!(
-        "{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n",
-        format!("{}   {} / {}   ({:>5.1}%)", state, current, total, percent),
+        "{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n",
+        format!(
+            "{}   Audible: {} / {}   ({:>5.1}%)",
+            state, current, total, percent
+        ),
+        format!(
+            "Media duration: {}",
+            format_millis_hhmmss(args.media_duration * 1000.0)
+        ),
         format!("Effects: {}", effects_label),
         format!("Sample Rate: {:>4.1} hHz", args.sample_rate as f32 / 1000.0),
         format!(
@@ -133,8 +139,13 @@ pub fn status_text(args: StatusArgs) -> StatusSnapshot {
 
     #[cfg(not(feature = "debug"))]
     let text = format!(
-        "{}   {} / {}   ({:>5.1}%)\nEffects: {}",
-        state, current, total, percent, effects_label
+        "{}   Audible: {} / {}   ({:>5.1}%)\nMedia duration: {}\nEffects: {}",
+        state,
+        current,
+        total,
+        percent,
+        format_millis_hhmmss(args.media_duration * 1000.0),
+        effects_label
     );
 
     StatusSnapshot { text }
@@ -234,14 +245,23 @@ fn format_millis_hhmmss(time: f64) -> String {
     format!("{:02}:{:02}:{:02}", hours, minutes, seconds)
 }
 
+fn playback_percent(time: f64, audible_duration: f64) -> f64 {
+    if audible_duration > 0.0 {
+        (time / audible_duration * 100.0).min(100.0)
+    } else {
+        0.0
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{format_millis_hhmmss, status_text, StatusArgs};
+    use super::{format_millis_hhmmss, playback_percent, status_text, StatusArgs};
 
     #[test]
     fn status_text_includes_effects() {
         let snapshot = status_text(StatusArgs {
             time: 5.0,
+            media_duration: 20.0,
             duration: 20.0,
             playing: true,
             effects: vec!["gain".to_string(), "reverb".to_string()],
@@ -295,6 +315,8 @@ mod tests {
             sink_len: 0,
         });
         assert!(snapshot.text.contains("Effects:"));
+        assert!(snapshot.text.contains("Audible:"));
+        assert!(snapshot.text.contains("Media duration:"));
     }
 
     #[test]
@@ -302,5 +324,10 @@ mod tests {
         assert_eq!(format_millis_hhmmss(0.0), "00:00:00");
         assert_eq!(format_millis_hhmmss(1_000.0), "00:00:01");
         assert_eq!(format_millis_hhmmss(3_661_000.0), "01:01:01");
+    }
+
+    #[test]
+    fn progress_uses_audible_duration_before_reaching_completion() {
+        assert_eq!(playback_percent(10.0, 12.5), 80.0);
     }
 }

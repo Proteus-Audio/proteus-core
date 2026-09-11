@@ -318,6 +318,18 @@ impl crate::dsp::effects::core::DspEffect for DiffusionReverbEffect {
         self.tail_drained = false;
         self.mix_smoother = None;
     }
+
+    fn tail_duration_seconds(&self, context: &EffectContext) -> Option<f64> {
+        if !self.enabled || self.mix.clamp(0.0, 1.0) <= 0.0 {
+            return Some(0.0);
+        }
+        let pre_delay = delay_samples(context.sample_rate(), self.settings.pre_delay_ms);
+        let room_size = delay_samples(context.sample_rate(), self.settings.room_size_ms);
+        let max_frames = Tuning::new(pre_delay, room_size)
+            .max_delay
+            .saturating_mul(primitives::DRAIN_MAX_TAIL_MULTIPLIER);
+        Some(max_frames as f64 / context.sample_rate() as f64)
+    }
 }
 
 impl DiffusionReverbEffect {
@@ -472,6 +484,12 @@ mod tests {
     #[test]
     fn delay_samples_returns_zero_for_zero_duration() {
         assert_eq!(delay_samples(48_000, 0), 0);
+    }
+
+    #[test]
+    fn dry_diffusion_reverb_has_no_tail_estimate() {
+        let effect = DiffusionReverbEffect::default();
+        assert_eq!(effect.tail_duration_seconds(&context()), Some(0.0));
     }
 
     #[test]
