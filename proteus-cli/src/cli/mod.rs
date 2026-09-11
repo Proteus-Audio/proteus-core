@@ -9,6 +9,7 @@ mod meter_cmd;
 mod peaks_cmd;
 mod playback_runner;
 pub mod runner;
+#[cfg(feature = "effect-meter-cli")]
 mod spectral_graph;
 pub mod ui;
 pub mod verify;
