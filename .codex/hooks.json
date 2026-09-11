@@ -1,0 +1,26 @@
+{
+  "description": "Testing and linting hooks",
+  "hooks": {
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cargo check",
+            "statusMessage": "Checking for compile errors…"
+          },
+          {
+            "type": "command",
+            "command": "cargo clippy",
+            "statusMessage": "Checking for linting errors…"
+          },
+          {
+            "type": "command",
+            "command": "cargo fmt",
+            "statusMessage": "Formatting codebase…"
+          }
+        ]
+      }
+    ]
+  }
+}
