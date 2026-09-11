@@ -329,7 +329,7 @@ impl ConvolutionReverbState {
             }
 
             if !self.output_buffer.is_empty() {
-                out.extend(self.output_buffer.drain(..));
+                out.append(&mut self.output_buffer);
             }
             out.extend(self.drain_tail_blocks());
             self.tail_drained = true;
@@ -400,7 +400,7 @@ impl ConvolutionReverbState {
         let chunk_len = samples.len();
         if self.output_buffer.len() < chunk_len {
             let out_len = self.output_buffer.len();
-            out.extend(self.output_buffer.drain(..));
+            out.append(&mut self.output_buffer);
             if out_len < chunk_len {
                 out.extend_from_slice(&samples[out_len..chunk_len]);
             }

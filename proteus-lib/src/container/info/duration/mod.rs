@@ -199,7 +199,7 @@ fn map_to_details(
         .filter(|(_, seconds)| *seconds > 0.0)
         .map(|(track_id, seconds)| DurationDetail::new(track_id, seconds, source, exact))
         .collect::<Vec<_>>();
-    details.sort_by(|a, b| a.track_id.cmp(&b.track_id));
+    details.sort_by_key(|a| a.track_id);
     details
 }
 

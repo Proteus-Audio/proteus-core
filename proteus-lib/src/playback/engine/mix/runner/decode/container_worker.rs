@@ -209,7 +209,7 @@ fn decode_container_packets(
             }
             Err(err) => {
                 warn!("container decode packet-read error: err={}", err);
-                for (track_id, _) in decoders.iter() {
+                for track_id in decoders.keys() {
                     let _ = infra.sender.send(DecodeWorkerEvent::SourceError {
                         source_key: SourceKey::TrackId(*track_id),
                         recoverable: false,

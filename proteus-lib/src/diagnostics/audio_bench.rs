@@ -241,7 +241,7 @@ where
         impulse_response_tail_db,
     )
     .map_err(AudioBenchmarkError::InvalidContext)?;
-    if samples.len() % config.channels != 0 {
+    if !samples.len().is_multiple_of(config.channels) {
         return Err(AudioBenchmarkError::PartialFrame {
             samples: samples.len(),
             channels: config.channels,
